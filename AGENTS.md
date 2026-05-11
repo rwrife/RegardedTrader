@@ -172,6 +172,57 @@ npm run lint             # tsc --noEmit + prettier --check
   `regard` subcommand and update `docs/surface-parity.md`.
 - Before finishing: `npm run lint && npm test && npm run build`.
 
+## Milestones
+
+### M1 — Ticker intake & validation (FIRST GOAL) 🎯
+
+Before anything else, the app must let a user enter one or more stock ticker
+symbols and confirm they are real, tradable US equities, with a basic profile
+attached. Everything downstream (briefings, options plans, watchlists) depends
+on this.
+
+**Acceptance criteria**
+
+- `regard add <SYM> [<SYM> ...]` and a web input field both accept tickers.
+- Each ticker is validated via a **web search tool** (not just a price-API
+  ping) so we can disambiguate (e.g. `META` the company vs. unrelated noise)
+  and surface a short profile.
+- For each ticker we extract and persist:
+  - canonical symbol, company name, exchange (NYSE/NASDAQ/etc.)
+  - sector, industry
+  - 1-2 sentence company description
+  - source URLs used for validation
+- Invalid / ambiguous tickers return a clear error with suggested matches.
+- Validated tickers land in a local watchlist (SQLite or JSON under
+  `~/.regardedtrader/`).
+- Both surfaces show the same validated list and the same profile fields
+  (parity rule applies).
+- Results are cached so we don't re-search on every command. Default TTL 7 days,
+  refreshable with `--refresh` / a web "refresh" button.
+
+**Implementation notes**
+
+- New module: `core/src/agents/ticker-validator.ts` — takes a candidate symbol,
+  runs a web search via an injected `WebSearch` client, asks the LLM to extract
+  a structured `TickerProfile` (Zod schema in `core/src/schemas/`), and returns
+  `{ ok, profile, sources, alternatives }`.
+- New schema: `TickerProfile { symbol, name, exchange, sector, industry,
+  description, sources: string[], validatedAt }`.
+- New server endpoints: `POST /tickers/validate` (body: `{ symbols: string[] }`),
+  `GET /tickers`, `DELETE /tickers/:sym`.
+- New CLI: `regard add <SYM>...`, `regard ls`, `regard rm <SYM>`.
+- New web view: a home-screen ticker-input bar + validated-list panel.
+- Cross-check the symbol against the market-data client (Yahoo) as a secondary
+  sanity check; treat web-search as the canonical extractor for the profile.
+
+Until M1 ships, `briefing` / `plan` should refuse unknown symbols and direct
+the user to `regard add` first.
+
+### M2+
+
+Later: `Technician`, `NewsScout`, richer options strategist, charts, SQLite
+caching layer, WebSocket streaming, etc. Tracked as GitHub issues.
+
 ## Out of Scope (for now)
 
 - Mobile apps.
