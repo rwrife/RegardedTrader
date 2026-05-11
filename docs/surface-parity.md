@@ -1,0 +1,35 @@
+# Surface Parity
+
+RegardedTrader has two surfaces — the **`regard` CLI** (Ink) and the **web
+dashboard** (React). They are peers. Every feature on one side must exist on
+the other.
+
+This file is the source of truth for that mapping. **Update it in the same PR
+that adds or changes a feature on either surface.** A PR that breaks parity
+without filing a tracking issue should be rejected in review.
+
+## Pairing table
+
+| Capability                    | CLI (`regard ...`)         | Web route             | Status |
+| ----------------------------- | -------------------------- | --------------------- | ------ |
+| Quick quote                   | `regard quote <SYM>`       | `/quote/:sym`         | ✅     |
+| Full AI briefing              | `regard briefing <SYM>`    | `/` (home)            | ✅     |
+| Options trade-plan wizard     | `regard plan <SYM>`        | `/plan/:sym`          | 🚧 web pending |
+| Options chain explorer        | `regard options <SYM>`     | `/options/:sym`       | 🚧 both pending |
+| Watchlist                     | `regard watch [add\|ls\|rm]` | `/watchlist`        | 🚧 both pending |
+| Open the other surface        | `regard dashboard`         | "Open CLI help" link  | ✅ / 🚧 |
+
+Legend: ✅ implemented · 🚧 planned · ❌ explicitly out of scope.
+
+## Rules
+
+1. **No exclusives.** If a feature lands on one surface, the matching item must
+   be in the backlog before the PR merges, and the parity table row must show
+   the gap (🚧 ...) until both sides ship.
+2. **Logic lives in `core`/`server`.** Both surfaces are thin clients. If the
+   CLI and web implementations of the same feature diverge in behavior, that's
+   a bug in the surface, not a feature.
+3. **Same data, same names.** Use the same Zod schemas, the same field names,
+   and the same disclaimers on both surfaces.
+4. **Same safety rails.** Risk caps, paper-trading flags, and "not financial
+   advice" disclaimers apply identically to both.

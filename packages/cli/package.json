@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "bin": {
-    "regardedtrader": "./dist/index.js"
+    "regard": "./dist/index.js"
   },
   "scripts": {
     "start": "tsx src/index.tsx",

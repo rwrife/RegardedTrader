@@ -15,7 +15,7 @@ export function PlanScreen({ symbol, serverUrl }: { symbol: string; serverUrl: s
   const [thesis, setThesis] = useState('');
   const [budgetStr, setBudgetStr] = useState('500');
   const [results, setResults] = useState<PlanResult[]>([]);
-  const [err, setErr] = useState<string | null>(symbol ? null : 'Missing symbol. Usage: regardedtrader plan NVDA');
+  const [err, setErr] = useState<string | null>(symbol ? null : 'Missing symbol. Usage: regard plan NVDA');
 
   useEffect(() => {
     if (stage === 'done' || stage === 'err') {

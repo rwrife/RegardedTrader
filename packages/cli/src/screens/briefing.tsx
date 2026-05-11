@@ -11,7 +11,7 @@ export function BriefingScreen({ symbol, serverUrl }: { symbol: string; serverUr
 
   useEffect(() => {
     if (!symbol) {
-      setErr('Missing symbol. Usage: regardedtrader briefing NVDA');
+      setErr('Missing symbol. Usage: regard briefing NVDA');
       return;
     }
     api<Briefing>(serverUrl, `/briefing/${encodeURIComponent(symbol.toUpperCase())}`)

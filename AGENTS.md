@@ -14,12 +14,30 @@ public market data, and uses OpenAI (or another LLM) to reason about it.
 Two front-ends share one local backend:
 
 1. **Ink CLI** — fast terminal UI built with [`ink`](https://github.com/vadimdemedes/ink),
-   inspired by tools like OpenClaw / Claude Code. Primary daily-driver surface.
+   inspired by tools like OpenClaw / Claude Code. The CLI binary is **`regard`**.
+   Primary daily-driver surface.
 2. **React Web Dashboard** — Vite + React + Tailwind, served from the same local
    Node server. For charts, watchlists, options chains, and richer visualizations.
 
 Both talk to the same in-process **core** library, so analysis logic lives in one
 place and never diverges between surfaces.
+
+### Surface parity (hard requirement)
+
+**Everything the dashboard can do, the CLI must also do — and vice versa.**
+
+- Every web view has an equivalent `regard <subcommand>`.
+- Every `regard <subcommand>` has an equivalent web route.
+- Neither surface gets a feature first as a permanent exclusive. If a feature
+  lands on one side, an issue/PR for the other side must follow in the same
+  release.
+- The pairing table lives in `docs/surface-parity.md` and must be updated in the
+  same PR that adds or removes a feature on either surface. CI/PR review should
+  reject changes that break parity without an accompanying tracking issue.
+- Both surfaces are thin clients over the same `server` endpoints and the same
+  `core` functions. If you find yourself implementing logic in one surface that
+  doesn't exist on the other, stop and move the logic into `core`/`server` and
+  expose it to both.
 
 ## Architecture
 
@@ -130,7 +148,8 @@ npm install              # installs all workspaces
 npm run dev              # starts server + web (concurrent)
 npm run dev:server       # server only
 npm run dev:web          # web only (Vite)
-npm run cli -- briefing NVDA   # run the Ink CLI
+regard briefing NVDA     # run the Ink CLI (after `npm link` or `npm install -g`)
+npm run cli -- briefing NVDA   # same thing, without a global install
 npm run build            # builds all packages
 npm test                 # runs vitest across workspaces
 npm run lint             # tsc --noEmit + prettier --check
@@ -146,9 +165,11 @@ npm run lint             # tsc --noEmit + prettier --check
 - New LLM prompt? Put it in `core/src/prompts/` as a named exported template.
   Never inline a multi-paragraph prompt in a route file.
 - Adding a CLI screen? Add a route in `cli/src/router.tsx` and a component under
-  `cli/src/screens/`.
+  `cli/src/screens/`. **Also** add (or open a tracking issue for) the matching
+  web view and update `docs/surface-parity.md`.
 - Adding a web view? Add a route under `web/src/routes/` and a matching server
-  endpoint if needed.
+  endpoint if needed. **Also** add (or open a tracking issue for) the matching
+  `regard` subcommand and update `docs/surface-parity.md`.
 - Before finishing: `npm run lint && npm test && npm run build`.
 
 ## Out of Scope (for now)

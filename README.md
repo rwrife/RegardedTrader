@@ -3,8 +3,11 @@
 A **local-only** AI-powered portal for company stock analysis and day-trading
 options research. Runs entirely on your machine. Choose your surface:
 
-- 🖥️ **Ink CLI** — fast terminal UI (`npm run cli -- briefing NVDA`)
+- 🖥️ **Ink CLI** — fast terminal UI (`regard briefing NVDA`)
 - 🌐 **Web dashboard** — React + Vite, served from the same local server
+
+**Every feature is available on both surfaces** — the CLI and dashboard are
+peers, not a primary + companion. See [`docs/surface-parity.md`](./docs/surface-parity.md).
 
 > ⚠️ **Not financial advice.** Educational/research tool. No live order
 > placement. You are responsible for your own trades.
@@ -18,7 +21,7 @@ npm install
 cp .env.example .env       # add your OPENAI_API_KEY
 npm run dev                # server + web dashboard at http://127.0.0.1:5173
 # in another terminal:
-npm run cli -- briefing NVDA
+npm run cli -- briefing NVDA   # or, after `npm link`: `regard briefing NVDA`
 ```
 
 Node **>= 20** required.
@@ -52,7 +55,7 @@ guidance for AI coding agents working on this repo.
 | `npm run dev`          | server + web concurrently                       |
 | `npm run dev:server`   | local API at `http://127.0.0.1:4317`            |
 | `npm run dev:web`      | Vite dashboard at `http://127.0.0.1:5173`       |
-| `npm run cli -- ...`   | run the Ink CLI                                 |
+| `npm run cli -- ...`   | run the Ink CLI (installed globally as `regard`)|
 | `npm run build`        | build all workspaces                            |
 | `npm test`             | vitest across workspaces                        |
 | `npm run lint`         | tsc + prettier check                            |
