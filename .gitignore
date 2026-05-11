@@ -1,0 +1,41 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# builds
+dist/
+build/
+*.tsbuildinfo
+
+# env
+.env
+.env.local
+.env.*.local
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# local data
+.regardedtrader/
+~/.regardedtrader/
+data/
+*.sqlite
+*.sqlite-journal
+*.db
+
+# coverage
+coverage/
+.nyc_output/
+
+# vite
+.vite/

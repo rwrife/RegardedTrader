@@ -1,0 +1,31 @@
+{
+  "name": "regardedtrader",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-only AI portal for stock analysis and day-trading options research.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "packages/core",
+    "packages/server",
+    "packages/cli",
+    "packages/web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm --workspace @regardedtrader/server run dev",
+    "dev:web": "npm --workspace @regardedtrader/web run dev",
+    "cli": "npm --workspace @regardedtrader/cli run start --",
+    "build": "npm --workspaces --if-present run build",
+    "test": "npm --workspaces --if-present run test",
+    "lint": "npm --workspaces --if-present run lint"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1",
+    "prettier": "^3.3.3",
+    "typescript": "^5.6.3"
+  }
+}
