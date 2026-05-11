@@ -182,6 +182,50 @@ prose, charts where data is sequential, AI output in its own card with the
 accent stripe + disclaimer. If your view doesn't fit that pattern, write down
 why in the PR.
 
+## Configuration & AI Providers
+
+Users configure RegardedTrader through a single, file-backed config persisted
+at `$REGARDEDTRADER_HOME/config.json` (default `~/.regardedtrader/config.json`,
+`chmod 600`). Both surfaces edit the same file via the local server's
+`/config` endpoints; they never edit the file directly. See
+[`docs/configuration.md`](./docs/configuration.md) for the full reference.
+
+**AI provider model.** The user can register one or more providers and pick
+an active one. Two kinds are supported:
+
+1. **OpenAI-compatible HTTP endpoint** — a base URL + API key + default model.
+   Works with OpenAI, Azure OpenAI, OpenRouter, Groq, Together, Fireworks,
+   local Ollama / vLLM / LM Studio, and anything else that speaks the
+   `/v1/chat/completions` shape.
+2. **Local AI CLI backends** — RegardedTrader spawns an installed coding CLI
+   per turn and parses its output. Same idea OpenClaw uses. Supported:
+   - `codex-cli` — OpenAI Codex CLI (`codex exec --json ...`)
+   - `claude-cli` — Claude Code (`claude -p --output-format stream-json`)
+   - `copilot-cli` — GitHub Copilot CLI (`gh copilot ...`)
+
+   The user is responsible for installing and authenticating each CLI on their
+   own machine (`codex auth login`, `claude auth login`, `gh auth login`,
+   etc.). RegardedTrader never stores those credentials and never invokes auth
+   flows itself.
+
+**Hard rules for provider code:**
+
+- API keys live ONLY in the local config file. Never in the repo, never in
+  logs, never returned over the network. The `/config` GET endpoint must
+  return a `redactConfig`-masked view (`sk-1234••••9abc`).
+- Adding/changing providers must be possible from BOTH surfaces (parity rule).
+  The CLI uses `regard config`; the web uses a Settings view. Both call the
+  same `/config` endpoints.
+- Switching the active provider must hot-swap the orchestrator without
+  restarting the server.
+- A provider "smoke test" (`POST /config/test`) sends one tiny prompt and
+  reports success/failure; both surfaces expose it as a "Test connection"
+  button/command.
+- Failure to configure a provider must produce a clear, actionable error
+  pointing at `regard config`, never a stack trace.
+- Risk caps and server bind also live in this config; only `127.0.0.1` /
+  `localhost` are accepted for `server.host`.
+
 ## Commands
 
 From the repo root:

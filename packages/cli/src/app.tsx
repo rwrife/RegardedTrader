@@ -4,6 +4,7 @@ import { BriefingScreen } from './screens/briefing.js';
 import { QuoteScreen } from './screens/quote.js';
 import { PlanScreen } from './screens/plan.js';
 import { DashboardScreen } from './screens/dashboard.js';
+import { ConfigScreen } from './screens/config.js';
 
 export interface AppProps {
   command: string;
@@ -21,6 +22,8 @@ export function App({ command, args, serverUrl }: AppProps) {
       return <PlanScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
     case 'dashboard':
       return <DashboardScreen serverUrl={serverUrl} />;
+    case 'config':
+      return <ConfigScreen sub={args[0]} />;
     default:
       return (
         <Box flexDirection="column">

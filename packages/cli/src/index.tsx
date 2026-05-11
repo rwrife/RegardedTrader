@@ -13,12 +13,14 @@ const cli = meow(
     briefing <SYMBOL>          Generate an AI briefing for a ticker
     quote <SYMBOL>             Quick quote
     plan <SYMBOL>              Interactive options trade-plan wizard
+    config [show]              Configure AI providers, risk caps, server
     dashboard                  Open the local web dashboard
 
   Options
     --server <url>             Override server URL (default http://127.0.0.1:4317)
 
   Examples
+    $ regard config
     $ regard briefing NVDA
     $ regard plan TSLA
 `,
