@@ -139,6 +139,49 @@ All agents implement a small `Agent` interface and are composed by a top-level
 `Orchestrator` so the CLI and web can both invoke "Give me a full briefing on
 TICKER" with one call.
 
+## Design Language (web dashboard)
+
+The web dashboard should feel like a **modern Bloomberg/Reuters terminal** —
+clean, dense, professional, dark — but with the warmth and clarity of a 2026
+product, not a 1995 one. It also has to do something old terminals never did:
+make **AI-generated insights feel approachable**, not buried in walls of text.
+
+See [`docs/design.md`](./docs/design.md) for the full spec. Highlights:
+
+- **Dark by default, always.** Background `#0A0F14` (near-black with a hint of
+  blue/green), surfaces in steps of `#0F1620` / `#141C28`. No pure black, no
+  pure white. Light theme is out of scope for v1.
+- **Color is data, not decoration.** Reserve green/red for P/L and price
+  change, amber for warnings/risk caps, cyan/teal for AI output, neutral grays
+  for chrome. Don't use those colors for branding accents.
+- **Typography:** monospace tabular numerics for prices, P/L, strikes, greeks
+  (e.g. JetBrains Mono / IBM Plex Mono). Sans-serif (Inter) for prose, labels,
+  and AI summaries. Numbers always right-aligned in tables.
+- **Density over whitespace** in data regions (chains, watchlists, tape).
+  Generous whitespace in AI/prose regions. The two modes live side-by-side and
+  shouldn't fight each other.
+- **Charts are first-class.** Use a single charting library across the app
+  (lightweight-charts or visx). Candles + volume + overlayable indicators
+  (SMA/EMA/RSI/MACD). Crosshair, scrubbable, keyboard-navigable.
+- **AI surfaces** get their own visual treatment: a left-edge accent stripe in
+  the AI accent color, a small "AI" badge, and a per-section
+  "sources used" disclosure. Bull/bear/risks/catalysts render as scannable
+  cards, not paragraphs. Always include the disclaimer at the bottom.
+- **Status & realtime:** a thin top status bar shows market open/closed,
+  connection state, and last-refresh time. Live values pulse subtly when they
+  update; never flash aggressively.
+- **Keyboard-first.** Global ⌘K / Ctrl-K command palette for ticker jump,
+  view switching, and AI actions. `/` focuses the ticker bar. Same keymap as
+  the CLI where it makes sense.
+- **Accessibility:** WCAG AA contrast for all text on dark surfaces; never
+  rely on color alone to convey state (use icons or text too); respect
+  `prefers-reduced-motion`.
+
+When building a new web view, default to: dark surface, mono numbers, sans
+prose, charts where data is sequential, AI output in its own card with the
+accent stripe + disclaimer. If your view doesn't fit that pattern, write down
+why in the PR.
+
 ## Commands
 
 From the repo root:
