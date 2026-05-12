@@ -1,9 +1,10 @@
 export * from './schemas/index.js';
 export * from './schemas/config.js';
+export * from './schemas/ticker.js';
+export * from './tickers/index.js';
 export * from './agents/index.js';
 export * from './indicators/index.js';
 export * from './clients/index.js';
 export * from './config/index.js';
 export * from './storage/watchlist.js';
 export { Orchestrator } from './orchestrator.js';
-export * from './tickers/index.js';
