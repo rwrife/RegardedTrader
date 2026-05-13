@@ -5,14 +5,17 @@ import { QuoteScreen } from './screens/quote.js';
 import { PlanScreen } from './screens/plan.js';
 import { DashboardScreen } from './screens/dashboard.js';
 import { ConfigScreen } from './screens/config.js';
+import { AddScreen } from './screens/add.js';
+import { ListScreen, RemoveScreen } from './screens/watchlist.js';
 
 export interface AppProps {
   command: string;
   args: string[];
   serverUrl: string;
+  flags?: { refresh?: boolean };
 }
 
-export function App({ command, args, serverUrl }: AppProps) {
+export function App({ command, args, serverUrl, flags }: AppProps) {
   switch (command) {
     case 'briefing':
       return <BriefingScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
@@ -24,6 +27,18 @@ export function App({ command, args, serverUrl }: AppProps) {
       return <DashboardScreen serverUrl={serverUrl} />;
     case 'config':
       return <ConfigScreen sub={args[0]} />;
+    case 'add':
+      return (
+        <AddScreen
+          symbols={args.map((a) => a.toUpperCase())}
+          refresh={!!flags?.refresh}
+          serverUrl={serverUrl}
+        />
+      );
+    case 'ls':
+      return <ListScreen serverUrl={serverUrl} />;
+    case 'rm':
+      return <RemoveScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
     default:
       return (
         <Box flexDirection="column">

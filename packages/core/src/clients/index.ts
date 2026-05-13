@@ -1,6 +1,8 @@
 import yahooFinance from 'yahoo-finance2';
 import type { OHLCV, Quote, NewsItem, OptionContract } from '../schemas/index.js';
 
+export * from './web-search.js';
+
 export interface MarketDataClient {
   quote(symbol: string): Promise<Quote>;
   history(symbol: string, days: number): Promise<OHLCV[]>;

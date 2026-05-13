@@ -4,4 +4,5 @@ export * from './agents/index.js';
 export * from './indicators/index.js';
 export * from './clients/index.js';
 export * from './config/index.js';
+export * from './storage/watchlist.js';
 export { Orchestrator } from './orchestrator.js';

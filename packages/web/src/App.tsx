@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   SAMPLE_TICKERS,
   SAMPLE_CALENDAR,
@@ -10,6 +10,26 @@ import {
 
 const DISCLAIMER =
   'Not financial advice. AI-generated analysis based on public data. Verify everything before trading.';
+
+// ---- M1: ticker intake & validation surface ------------------------------
+
+interface TickerProfile {
+  symbol: string;
+  name: string;
+  exchange: string;
+  sector: string;
+  industry: string;
+  description: string;
+  sources: string[];
+  validatedAt: string;
+}
+interface WatchlistEntry {
+  profile: TickerProfile;
+  addedAt: string;
+}
+type ValidationResult =
+  | { ok: true; profile: TickerProfile; cached?: boolean }
+  | { ok: false; symbol: string; error: string; suggestions?: { symbol: string; name?: string; reason?: string }[] };
 
 type Tab = 'briefing' | 'sentiment' | 'news' | 'recommendation' | 'calendar';
 
@@ -40,8 +60,9 @@ export function App() {
       <TopBar demo={demo} />
 
       <div className="max-w-7xl mx-auto px-6 py-4 grid grid-cols-12 gap-6">
-        {/* Sidebar: watchlist + calendar strip */}
+        {/* Sidebar: validated watchlist + filter + calendar strip */}
         <aside className="col-span-12 md:col-span-3 space-y-4">
+          <TickerIntake demo={demo} />
           <Watchlist
             active={active}
             onPick={setActive}
@@ -577,6 +598,184 @@ function CalendarTab({ t }: { t: SampleTicker }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+// ---- M1: Ticker intake & validated list ----------------------------------
+
+function TickerIntake({ demo }: { demo: boolean }) {
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [entries, setEntries] = useState<WatchlistEntry[]>([]);
+  const [results, setResults] = useState<ValidationResult[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+
+  const refreshList = useCallback(async () => {
+    if (demo) return;
+    try {
+      const r = await fetch('/api/tickers');
+      if (!r.ok) throw new Error(`${r.status}`);
+      const j = (await r.json()) as { entries: WatchlistEntry[] };
+      setEntries(j.entries);
+    } catch (e) {
+      setErr(`Could not load watchlist: ${(e as Error).message}`);
+    }
+  }, [demo]);
+
+  useEffect(() => {
+    refreshList();
+  }, [refreshList]);
+
+  async function validate(refresh: boolean) {
+    const symbols = input
+      .split(/[\s,]+/)
+      .map((s) => s.trim().toUpperCase())
+      .filter(Boolean);
+    if (symbols.length === 0) return;
+    setBusy(true);
+    setErr(null);
+    setResults([]);
+    try {
+      const r = await fetch('/api/tickers/validate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ symbols, refresh }),
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        throw new Error(`${r.status}: ${t}`);
+      }
+      const j = (await r.json()) as { results: ValidationResult[] };
+      setResults(j.results);
+      setInput('');
+      await refreshList();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(symbol: string) {
+    if (demo) return;
+    await fetch(`/api/tickers/${encodeURIComponent(symbol)}`, { method: 'DELETE' });
+    await refreshList();
+  }
+
+  return (
+    <div className="border border-border-subtle bg-surface rounded">
+      <div className="p-2 border-b border-border-subtle">
+        <div className="text-[10px] font-mono tracking-wider text-fg-muted uppercase mb-1.5">
+          Add tickers
+        </div>
+        <div className="flex gap-1">
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !busy) void validate(false);
+            }}
+            placeholder="NVDA AAPL META"
+            disabled={busy || demo}
+            className="flex-1 bg-surface-2 border border-border-subtle rounded px-2 py-1 text-xs focus:outline-none focus:border-ai disabled:opacity-50"
+          />
+          <button
+            onClick={() => void validate(false)}
+            disabled={busy || demo || !input.trim()}
+            className="px-2 py-1 text-xs bg-ai/10 text-ai rounded border border-ai/30 hover:bg-ai/20 disabled:opacity-40"
+            title="Validate and add"
+          >
+            Add
+          </button>
+          <button
+            onClick={() => void validate(true)}
+            disabled={busy || demo || !input.trim()}
+            className="px-2 py-1 text-xs bg-surface-2 text-fg-secondary rounded border border-border-subtle hover:text-fg disabled:opacity-40"
+            title="Force re-validation, bypass 7-day cache"
+          >
+            ↻
+          </button>
+        </div>
+        {demo && (
+          <div className="mt-1.5 text-[10px] text-fg-muted">
+            Demo mode — backend not reachable. Start the server to add real tickers.
+          </div>
+        )}
+        {err && <div className="mt-1.5 text-[10px] text-down">{err}</div>}
+        {busy && <div className="mt-1.5 text-[10px] text-fg-muted">Validating…</div>}
+      </div>
+
+      {results.length > 0 && (
+        <div className="border-b border-border-subtle p-2 space-y-2">
+          {results.map((r, i) => (
+            <ResultRow key={i} r={r} />
+          ))}
+          <p className="text-[10px] text-fg-muted italic">{DISCLAIMER}</p>
+        </div>
+      )}
+
+      <div>
+        <div className="px-2 pt-2 text-[10px] font-mono tracking-wider text-fg-muted uppercase">
+          Validated ({entries.length})
+        </div>
+        {entries.length === 0 ? (
+          <div className="px-2 py-3 text-[11px] text-fg-muted">
+            No validated tickers yet.
+          </div>
+        ) : (
+          <ul className="text-xs">
+            {entries.map((e) => (
+              <li
+                key={e.profile.symbol}
+                className="px-3 py-2 flex items-baseline gap-2 border-t border-border-subtle/40"
+                title={e.profile.description}
+              >
+                <span className="font-semibold tracking-tight w-12">{e.profile.symbol}</span>
+                <span className="text-fg-secondary truncate flex-1">{e.profile.name}</span>
+                <span className="text-[10px] text-fg-muted">{e.profile.exchange}</span>
+                <button
+                  onClick={() => void remove(e.profile.symbol)}
+                  className="text-fg-muted hover:text-down text-[10px]"
+                  title="Remove"
+                >
+                  ✕
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ResultRow({ r }: { r: ValidationResult }) {
+  if (r.ok) {
+    return (
+      <div className="text-[11px]">
+        <div>
+          <span className="text-up">✓</span>{' '}
+          <span className="font-semibold">{r.profile.symbol}</span>{' '}
+          <span className="text-fg-secondary">{r.profile.name}</span>{' '}
+          <span className="text-fg-muted">· {r.profile.exchange}</span>
+          {r.cached && <span className="text-fg-muted"> · cached</span>}
+        </div>
+        <div className="text-fg-muted">
+          {r.profile.sector} / {r.profile.industry}
+        </div>
+        <div className="text-fg">{r.profile.description}</div>
+      </div>
+    );
+  }
+  return (
+    <div className="text-[11px]">
+      <div className="text-down">✗ {r.symbol}: {r.error}</div>
+      {r.suggestions && r.suggestions.length > 0 && (
+        <div className="text-fg-muted mt-0.5">
+          Did you mean: {r.suggestions.map((s) => s.symbol).join(', ')}
+        </div>
+      )}
     </div>
   );
 }
