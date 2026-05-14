@@ -80,6 +80,56 @@ export const TradePlan = z.object({
 });
 export type TradePlan = z.infer<typeof TradePlan>;
 
+export const TickerProfile = z.object({
+  symbol: Ticker,
+  name: z.string().min(1),
+  exchange: z.string().min(1),
+  sector: z.string().min(1),
+  industry: z.string().min(1),
+  description: z.string().min(1),
+  sources: z.array(z.string().url()).min(1),
+  validatedAt: z.string(), // ISO
+});
+export type TickerProfile = z.infer<typeof TickerProfile>;
+
+/** What the LLM is asked to return; sources are added by the agent. */
+export const TickerProfileExtraction = z.object({
+  symbol: z.string().min(1).max(10),
+  name: z.string().min(1),
+  exchange: z.string().min(1),
+  sector: z.string().min(1),
+  industry: z.string().min(1),
+  description: z.string().min(1),
+});
+export type TickerProfileExtraction = z.infer<typeof TickerProfileExtraction>;
+
+export const TickerSuggestion = z.object({
+  symbol: z.string(),
+  name: z.string().optional(),
+  reason: z.string().optional(),
+});
+export type TickerSuggestion = z.infer<typeof TickerSuggestion>;
+
+export const WatchlistEntry = z.object({
+  profile: TickerProfile,
+  addedAt: z.string(), // ISO
+});
+export type WatchlistEntry = z.infer<typeof WatchlistEntry>;
+
+export const ValidationOk = z.object({
+  ok: z.literal(true),
+  profile: TickerProfile,
+  cached: z.boolean().default(false),
+});
+export const ValidationErr = z.object({
+  ok: z.literal(false),
+  symbol: z.string(),
+  error: z.string(),
+  suggestions: z.array(TickerSuggestion).default([]),
+});
+export const ValidationResult = z.discriminatedUnion('ok', [ValidationOk, ValidationErr]);
+export type ValidationResult = z.infer<typeof ValidationResult>;
+
 export const Briefing = z.object({
   symbol: Ticker,
   asOf: z.string(),
