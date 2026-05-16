@@ -122,14 +122,14 @@ describe('Scheduler', () => {
       cadence: () => 10,
       run: () =>
         new Promise<void>((resolve) => {
-          release = resolve;
+          release = resolve as () => void;
         }),
     });
     sched.start();
 
     await vi.advanceTimersByTimeAsync(15);
     expect(sched.statusOf('gated')).toBe('running');
-    release?.();
+    (release as (() => void) | null)?.();
     // Let the resolved promise + scheduleNext settle.
     await Promise.resolve();
     await Promise.resolve();

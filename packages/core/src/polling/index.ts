@@ -14,3 +14,14 @@ export {
   type JobStatus,
   type SchedulerOptions,
 } from './scheduler.js';
+export {
+  SnapshotStore,
+  SnapshotKind,
+  SnapshotEntry,
+  LatestSnapshot,
+  RetentionPolicy,
+  DEFAULT_RETENTION,
+  NEWS_DEDUP_WINDOW_MS,
+  snapshotsRoot,
+  type SnapshotStoreOptions,
+} from './store.js';
