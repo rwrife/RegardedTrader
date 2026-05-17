@@ -14,3 +14,14 @@ export {
   reconcile,
 } from './resolver.js';
 export type { SourceOutcome, TickerResolverOptions } from './resolver.js';
+export {
+  TickerStore,
+  PROFILE_TTL_MS,
+  EXISTENCE_TTL_MS,
+  DEFAULT_LRU_SIZE,
+} from './store.js';
+export type {
+  TickerStoreOptions,
+  GetOrResolveOptions,
+  ResolveOutcome,
+} from './store.js';
