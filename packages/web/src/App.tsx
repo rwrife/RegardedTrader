@@ -8,6 +8,9 @@ import {
   type SampleVerdict,
 } from './sample-data';
 import { Settings } from './routes/settings.js';
+import { useLiveQuote } from './hooks/useLiveQuote.js';
+import { computeRating } from '@regardedtrader/core/rating';
+import { RatingBadge } from './components/RatingBadge.js';
 
 // Tiny hash-based router so the dashboard stays a single bundle without
 // pulling in react-router. Routes: `#/` (default) and `#/settings`.
@@ -108,7 +111,7 @@ export function App() {
         <main className="col-span-12 md:col-span-9 space-y-4">
           {ticker ? (
             <>
-              <QuoteHeader t={ticker} />
+              <QuoteHeader t={ticker} demo={demo} />
               <TabBar tab={tab} setTab={setTab} />
               {tab === 'briefing' && <BriefingTab t={ticker} />}
               {tab === 'sentiment' && <SentimentTab t={ticker} />}
@@ -257,29 +260,51 @@ function CalendarStrip() {
   );
 }
 
-function QuoteHeader({ t }: { t: SampleTicker }) {
-  const up = t.quote.change >= 0;
+function QuoteHeader({ t, demo }: { t: SampleTicker; demo: boolean }) {
+  // Live quote (#81): polls the local server when the backend is reachable;
+  // falls back to the static sample data in demo mode.
+  const live = useLiveQuote(t.symbol, { enabled: !demo });
+  const price = live.quote?.price ?? t.quote.price;
+  const change = live.quote?.change ?? t.quote.change;
+  const changePercent = live.quote?.changePercent ?? t.quote.changePercent;
+  const up = change >= 0;
   const toneText = up ? 'text-up' : 'text-down';
   const arrow = up ? '▲' : '▼';
   const sign = up ? '+' : '';
+  // Rating (#82): prefer the live server-computed rating; fall back to a
+  // locally-computed one from the sample-data signals so the badge stays
+  // visible in demo mode.
+  const rating = useMemo(() => {
+    if (live.quote?.rating) return live.quote.rating;
+    return computeRating({
+      symbol: t.symbol,
+      changePercent,
+      rsi: t.indicators.rsi14,
+    });
+  }, [live.quote?.rating, t.symbol, t.indicators.rsi14, changePercent]);
   return (
     <div className="border border-border-subtle bg-surface rounded p-4">
-      <div className="flex items-baseline gap-4 flex-wrap">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-baseline gap-4 flex-wrap">
         <div className="flex items-baseline gap-3">
           <span className="text-xl font-semibold tracking-tight">{t.symbol}</span>
           <span className="text-xs text-fg-muted">{t.name}</span>
         </div>
-        <span className={`num text-2xl ${toneText}`}>${t.quote.price.toFixed(2)}</span>
+        <span className={`num text-2xl ${toneText}`}>${price.toFixed(2)}</span>
         <span className={`num text-sm ${toneText}`}>
           {arrow} {sign}
-          {t.quote.change.toFixed(2)} ({sign}
-          {t.quote.changePercent.toFixed(2)}%)
+          {change.toFixed(2)} ({sign}
+          {changePercent.toFixed(2)}%)
         </span>
+        {!demo && <LiveQuoteIndicator lastUpdatedAt={live.lastUpdatedAt} isLoading={live.isLoading} error={live.error} />}
         {t.earnings.daysUntil !== null && t.earnings.daysUntil <= 14 && (
           <span className="px-2 py-0.5 rounded bg-warn/10 text-warn text-[10px] font-mono tracking-wider">
             EARNINGS IN {t.earnings.daysUntil}D · {t.earnings.when.toUpperCase()}
           </span>
         )}
+        </div>
+        {/* Rating badge (#82) — top-right of the price box. */}
+        <RatingBadge rating={rating} className="mt-0.5 shrink-0" />
       </div>
       <div className="mt-3 flex gap-5 text-xs text-fg-secondary num">
         <span>
@@ -304,6 +329,49 @@ function QuoteHeader({ t }: { t: SampleTicker }) {
         </span>
       </div>
     </div>
+  );
+}
+
+function LiveQuoteIndicator({
+  lastUpdatedAt,
+  isLoading,
+  error,
+}: {
+  lastUpdatedAt: Date | null;
+  isLoading: boolean;
+  error: string | null;
+}) {
+  const [, setNow] = useState<number>(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  if (error) {
+    return (
+      <span
+        className="text-[10px] font-mono tracking-wider text-down"
+        title={error}
+        aria-label={`live quote error: ${error}`}
+      >
+        ⚠ live quote error
+      </span>
+    );
+  }
+  if (!lastUpdatedAt) {
+    return (
+      <span className="text-[10px] font-mono tracking-wider text-fg-muted">
+        {isLoading ? 'loading…' : 'waiting…'}
+      </span>
+    );
+  }
+  const secs = Math.max(0, Math.floor((Date.now() - lastUpdatedAt.getTime()) / 1000));
+  return (
+    <span
+      className={`text-[10px] font-mono tracking-wider ${isLoading ? 'text-ai' : 'text-fg-muted'}`}
+      aria-label={`updated ${secs} seconds ago`}
+    >
+      {isLoading ? '↻ refreshing…' : `updated ${secs}s ago`}
+    </span>
   );
 }
 

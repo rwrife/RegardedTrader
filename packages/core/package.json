@@ -8,7 +8,9 @@
   "exports": {
     ".": "./dist/index.js",
     "./schemas": "./dist/schemas/index.js",
-    "./agents": "./dist/agents/index.js"
+    "./agents": "./dist/agents/index.js",
+    "./marketHours": "./dist/marketHours.js",
+    "./rating": "./dist/rating.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

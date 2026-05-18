@@ -5,6 +5,7 @@ import {
   Orchestrator,
   YahooClient,
   Ticker,
+  QuoteSchema,
   loadConfig,
   saveConfig,
   redactConfig,
@@ -20,7 +21,9 @@ import {
   type WatchlistEntry,
   type ValidationResult,
   type MarketDataClient,
+  type LiveQuote,
 } from '@regardedtrader/core';
+import { liveQuote, type LiveQuoteSource } from './liveQuote.js';
 
 export interface AppDeps {
   market: MarketDataClient;
@@ -29,6 +32,13 @@ export interface AppDeps {
   llmFromConfig: (cfg: AppConfigT) => LLM | null;
   watchlist: WatchlistStore;
   initialConfig: AppConfigT;
+  /**
+   * Optional override for the live-quote source. Production wires this to
+   * `yahoo-finance2`'s `quote()`; tests inject a mock.
+   */
+  liveQuoteSource?: LiveQuoteSource;
+  /** Optional clock override for testing the live-quote cache. */
+  now?: () => number;
 }
 
 export interface AppHandle {
@@ -88,6 +98,33 @@ export function createApp(deps: AppDeps): AppHandle {
       next(e);
     }
   });
+
+  // --- Live quote (#81) ---
+  // Tiny in-memory cache to coalesce bursts from multiple clients.
+  if (deps.liveQuoteSource) {
+    const source = deps.liveQuoteSource;
+    const cache = new Map<string, { at: number; value: LiveQuote }>();
+    const CACHE_TTL_MS = 5_000;
+    const now = deps.now ?? Date.now;
+
+    app.get('/tickers/:symbol/quote', async (req, res, next) => {
+      try {
+        const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+        const cached = cache.get(symbol);
+        const t = now();
+        if (cached && t - cached.at < CACHE_TTL_MS) {
+          res.json(cached.value);
+          return;
+        }
+        const fresh = await liveQuote(source, symbol);
+        const parsed = QuoteSchema.parse(fresh);
+        cache.set(symbol, { at: t, value: parsed });
+        res.json(parsed);
+      } catch (e) {
+        next(e);
+      }
+    });
+  }
 
   app.get('/history/:symbol', async (req, res, next) => {
     try {
@@ -327,6 +364,19 @@ export function createDefaultApp(cfg: AppConfigT): AppHandle {
     webSearch: new DuckDuckGoSearch(),
     watchlist: new WatchlistStore(),
     initialConfig: cfg,
+    liveQuoteSource: async (symbol) => {
+      // Lazy import so tests that don't touch the live-quote endpoint don't
+      // pull yahoo-finance2 into their module graph. Using a string variable
+      // to keep the static analyzer from requiring the dep at compile time
+      // (yahoo-finance2 is a `core` dep, not a direct `server` dep).
+      const modName = 'yahoo-finance2';
+      const mod = (await import(modName)) as {
+        default: { quote: (s: string) => Promise<unknown> };
+      };
+      return (await mod.default.quote(symbol)) as Awaited<
+        ReturnType<LiveQuoteSource>
+      >;
+    },
     llmFromConfig: (c) => {
       try {
         return activeLLM(c);
