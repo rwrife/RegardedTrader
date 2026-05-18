@@ -16,7 +16,8 @@
  *   hook can never hand bogus shapes to the UI.
  */
 import { useEffect, useRef, useState } from 'react';
-import { QuoteSchema, isUsMarketOpen, type LiveQuote } from '@regardedtrader/core';
+import { QuoteSchema, type LiveQuote } from '@regardedtrader/core/schemas';
+import { isUsMarketOpen } from '@regardedtrader/core/marketHours';
 
 const INTERVAL_MARKET_MS = 10_000;
 const INTERVAL_OFF_HOURS_MS = 60_000;

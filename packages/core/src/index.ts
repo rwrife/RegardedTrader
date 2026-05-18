@@ -9,3 +9,4 @@ export * from './storage/watchlist.js';
 export { Orchestrator } from './orchestrator.js';
 export * from './polling/index.js';
 export { isUsMarketOpen } from './marketHours.js';
+export * from './rating.js';
