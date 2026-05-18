@@ -365,14 +365,10 @@ export function createDefaultApp(cfg: AppConfigT): AppHandle {
     watchlist: new WatchlistStore(),
     initialConfig: cfg,
     liveQuoteSource: async (symbol) => {
-      // Lazy import so tests that don't touch the live-quote endpoint don't
-      // pull yahoo-finance2 into their module graph. Using a string variable
-      // to keep the static analyzer from requiring the dep at compile time
-      // (yahoo-finance2 is a `core` dep, not a direct `server` dep).
-      const modName = 'yahoo-finance2';
-      const mod = (await import(modName)) as {
-        default: { quote: (s: string) => Promise<unknown> };
-      };
+      // yahoo-finance2 is a direct server dep; import dynamically so test
+      // suites that don't exercise the live-quote endpoint don't pay the
+      // module-load cost.
+      const mod = await import('yahoo-finance2');
       return (await mod.default.quote(symbol)) as Awaited<
         ReturnType<LiveQuoteSource>
       >;
