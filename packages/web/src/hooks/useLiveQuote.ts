@@ -94,6 +94,9 @@ export function useLiveQuote(
         if (!cancelled) setIsLoading(false);
       }
       if (cancelled) return;
+      // Use the freshly-fetched quote (not quoteRef.current) since React
+      // hasn't re-rendered yet between setState and this line, so the ref
+      // would still hold the stale previous value.
       const delay = intervalFor(next);
       timer = setTimeout(() => {
         void tick();

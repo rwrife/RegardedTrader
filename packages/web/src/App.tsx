@@ -296,7 +296,13 @@ function QuoteHeader({ t, demo }: { t: SampleTicker; demo: boolean }) {
           {change.toFixed(2)} ({sign}
           {changePercent.toFixed(2)}%)
         </span>
-        {!demo && <LiveQuoteIndicator lastUpdatedAt={live.lastUpdatedAt} isLoading={live.isLoading} error={live.error} />}
+        {!demo && (
+          <LiveQuoteIndicator
+            lastUpdatedAt={live.lastUpdatedAt}
+            isLoading={live.isLoading}
+            error={live.error}
+          />
+        )}
         {t.earnings.daysUntil !== null && t.earnings.daysUntil <= 14 && (
           <span className="px-2 py-0.5 rounded bg-warn/10 text-warn text-[10px] font-mono tracking-wider">
             EARNINGS IN {t.earnings.daysUntil}D · {t.earnings.when.toUpperCase()}
@@ -341,6 +347,8 @@ function LiveQuoteIndicator({
   isLoading: boolean;
   error: string | null;
 }) {
+  // Re-render once a second so the "updated Xs ago" label stays fresh even
+  // when nothing else in the parent changes.
   const [, setNow] = useState<number>(() => Date.now());
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);

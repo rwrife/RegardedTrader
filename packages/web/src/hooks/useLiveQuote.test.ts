@@ -131,7 +131,10 @@ describe('useLiveQuote', () => {
   it('does not fetch when disabled', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse(makeQuote()));
     renderHook(() =>
-      useLiveQuote('NVDA', { fetchImpl: fetchImpl as unknown as typeof fetch, enabled: false }),
+      useLiveQuote('NVDA', {
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        enabled: false,
+      }),
     );
     await act(async () => {
       await vi.advanceTimersByTimeAsync(30_000);
