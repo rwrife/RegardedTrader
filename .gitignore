@@ -28,7 +28,7 @@ yarn-error.log*
 # local data
 .regardedtrader/
 ~/.regardedtrader/
-data/
+/data/
 *.sqlite
 *.sqlite-journal
 *.db
