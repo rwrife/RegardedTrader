@@ -123,4 +123,40 @@ describe('GET /tickers/:symbol/quote', () => {
     const body = (await r.json()) as { marketState: string };
     expect(body.marketState).toBe('CLOSED');
   });
+
+  it('includes a computed rating derived from changePercent and volumeRatio', async () => {
+    const source = vi.fn(async (_symbol: string): Promise<YahooQuoteLike> => ({
+      symbol: 'GME',
+      regularMarketPrice: 50,
+      regularMarketChange: 12,
+      regularMarketChangePercent: 25, // big rip
+      regularMarketVolume: 30_000_000,
+      averageDailyVolume10Day: 5_000_000, // 6× avg
+      currency: 'USD',
+      marketState: 'REGULAR',
+      regularMarketTime: new Date('2024-06-12T15:30:00Z'),
+    }));
+    const { app } = createApp({
+      market: noopMarket(),
+      webSearch: { async search() { return []; } },
+      watchlist: new WatchlistStore({ path: join(dir, 'wl.json') }),
+      initialConfig: baseConfig(),
+      llmFromConfig: () => null,
+      liveQuoteSource: source,
+    });
+    const url = await listen(app);
+    const r = await fetch(`${url}/tickers/GME/quote`);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as {
+      rating?: { rating: string; score: number; reasons: string[]; symbol: string };
+    };
+    expect(body.rating).toBeDefined();
+    expect(body.rating!.symbol).toBe('GME');
+    expect(body.rating!.rating).toBe('YOLO');
+    expect(body.rating!.score).toBeGreaterThanOrEqual(85);
+    expect(body.rating!.reasons.some((s) => s.includes('25.0% today'))).toBe(true);
+    expect(body.rating!.reasons.some((s) => s.includes('6.0× avg volume'))).toBe(
+      true,
+    );
+  });
 });

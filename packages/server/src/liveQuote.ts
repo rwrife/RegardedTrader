@@ -3,7 +3,7 @@
  * coerces the upstream payload into our `QuoteSchema` shape. Kept separate
  * from the route handler so it's trivial to unit-test with a mocked source.
  */
-import type { LiveQuote } from '@regardedtrader/core';
+import { computeRating, type LiveQuote } from '@regardedtrader/core';
 
 /**
  * Subset of yahoo-finance2's `Quote` we actually read. Declared structurally
@@ -17,6 +17,10 @@ export interface YahooQuoteLike {
   currency?: string | null;
   marketState?: string | null;
   regularMarketTime?: Date | number | null;
+  /** Today's volume; used to derive a volumeRatio for the rating (#82). */
+  regularMarketVolume?: number | null;
+  /** 10-day average volume; denominator for volumeRatio. */
+  averageDailyVolume10Day?: number | null;
 }
 
 export interface LiveQuoteSource {
@@ -56,13 +60,34 @@ function toIso(t: Date | number | null | undefined): string {
  */
 export async function liveQuote(source: LiveQuoteSource, symbol: string): Promise<LiveQuote> {
   const q = await source(symbol);
+  const changePercent = q.regularMarketChangePercent ?? 0;
+  const asOf = toIso(q.regularMarketTime ?? null);
+
+  // Derive volumeRatio only when both today's volume and the 10-day average
+  // are present and positive; otherwise skip so we don't bias the score with
+  // a fake 1.0 reading.
+  const vol = q.regularMarketVolume ?? null;
+  const avg = q.averageDailyVolume10Day ?? null;
+  const volumeRatio =
+    typeof vol === 'number' && typeof avg === 'number' && avg > 0
+      ? vol / avg
+      : undefined;
+
+  const rating = computeRating({
+    symbol,
+    changePercent,
+    volumeRatio,
+    asOf,
+  });
+
   return {
     symbol,
     price: q.regularMarketPrice ?? 0,
     change: q.regularMarketChange ?? 0,
-    changePercent: q.regularMarketChangePercent ?? 0,
+    changePercent,
     currency: q.currency ?? 'USD',
     marketState: normalizeMarketState(q.marketState),
-    asOf: toIso(q.regularMarketTime ?? null),
+    asOf,
+    rating,
   };
 }

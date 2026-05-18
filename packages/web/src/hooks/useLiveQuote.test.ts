@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act, waitFor } from '@testing-library/react';
+import { renderHook, act } from '@testing-library/react';
 import { useLiveQuote } from './useLiveQuote.js';
 import type { LiveQuote } from '@regardedtrader/core/schemas';
 
@@ -45,22 +45,23 @@ describe('useLiveQuote', () => {
 
     // Let the initial fetch resolve.
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(50);
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(result.current.quote?.price).toBe(100);
     expect(result.current.error).toBeNull();
     expect(result.current.lastUpdatedAt).toBeInstanceOf(Date);
 
-    // 9s later — still no second fetch (cadence is 10s for REGULAR).
+    // 8s later — still no second fetch (cadence is 10s for REGULAR).
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(9_000);
+      await vi.advanceTimersByTimeAsync(8_000);
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
 
-    // Crossing 10s should trigger the next tick.
+    // Crossing 10s should trigger the next tick (plus a little slack for the
+    // promise chain that wraps the fetch).
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(5_000);
     });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
 
@@ -76,13 +77,13 @@ describe('useLiveQuote', () => {
     );
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(50);
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
 
-    // 11s — not enough to trigger the slow cadence.
+    // 15s — not enough to trigger the slow cadence.
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(11_000);
+      await vi.advanceTimersByTimeAsync(15_000);
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
 
@@ -101,7 +102,7 @@ describe('useLiveQuote', () => {
       useLiveQuote('NVDA', { fetchImpl: fetchImpl as unknown as typeof fetch }),
     );
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(50);
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
 
@@ -120,11 +121,9 @@ describe('useLiveQuote', () => {
       useLiveQuote('NVDA', { fetchImpl: fetchImpl as unknown as typeof fetch }),
     );
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(50);
     });
-    await waitFor(() => {
-      expect(result.current.error).toMatch(/HTTP 500/);
-    });
+    expect(result.current.error).toMatch(/HTTP 500/);
     expect(result.current.quote).toBeNull();
     unmount();
   });

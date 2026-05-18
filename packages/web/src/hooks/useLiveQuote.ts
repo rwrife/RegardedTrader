@@ -76,12 +76,14 @@ export function useLiveQuote(
         return;
       }
       setIsLoading(true);
+      let next: LiveQuote | null = quoteRef.current;
       try {
         const res = await f(`${base}/tickers/${encodeURIComponent(symbol)}/quote`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const raw = (await res.json()) as unknown;
         const parsed = QuoteSchema.parse(raw);
         if (cancelled) return;
+        next = parsed;
         setQuote(parsed);
         setError(null);
         setLastUpdatedAt(new Date());
@@ -92,7 +94,7 @@ export function useLiveQuote(
         if (!cancelled) setIsLoading(false);
       }
       if (cancelled) return;
-      const delay = intervalFor(quoteRef.current);
+      const delay = intervalFor(next);
       timer = setTimeout(() => {
         void tick();
       }, delay);

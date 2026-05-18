@@ -29,6 +29,21 @@ export const QuoteSchema = z.object({
   currency: z.string().min(1),
   marketState: z.enum(['REGULAR', 'PRE', 'POST', 'CLOSED', 'PREPRE', 'POSTPOST']),
   asOf: z.string(), // ISO
+  /**
+   * Conviction rating (#82). Computed deterministically from the same quote
+   * payload (`changePercent` + `volumeRatio` derived from
+   * `regularMarketVolume / averageDailyVolume10Day`). Optional so the field
+   * can be omitted when upstream data is too thin to be meaningful.
+   */
+  rating: z
+    .object({
+      symbol: Ticker,
+      rating: z.enum(['SELL', 'HOLD', 'BUY', 'YOLO']),
+      score: z.number().min(0).max(100),
+      reasons: z.array(z.string()),
+      asOf: z.string(),
+    })
+    .optional(),
 });
 export type LiveQuote = z.infer<typeof QuoteSchema>;
 
