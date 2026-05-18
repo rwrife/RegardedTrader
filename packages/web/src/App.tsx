@@ -9,6 +9,8 @@ import {
 } from './sample-data';
 import { Settings } from './routes/settings.js';
 import { useLiveQuote } from './hooks/useLiveQuote.js';
+import { computeRating } from '@regardedtrader/core/rating';
+import { RatingBadge } from './components/RatingBadge.js';
 
 // Tiny hash-based router so the dashboard stays a single bundle without
 // pulling in react-router. Routes: `#/` (default) and `#/settings`.
@@ -269,9 +271,21 @@ function QuoteHeader({ t, demo }: { t: SampleTicker; demo: boolean }) {
   const toneText = up ? 'text-up' : 'text-down';
   const arrow = up ? '▲' : '▼';
   const sign = up ? '+' : '';
+  // Rating (#82): prefer the live server-computed rating; fall back to a
+  // locally-computed one from the sample-data signals so the badge stays
+  // visible in demo mode.
+  const rating = useMemo(() => {
+    if (live.quote?.rating) return live.quote.rating;
+    return computeRating({
+      symbol: t.symbol,
+      changePercent,
+      rsi: t.indicators.rsi14,
+    });
+  }, [live.quote?.rating, t.symbol, t.indicators.rsi14, changePercent]);
   return (
     <div className="border border-border-subtle bg-surface rounded p-4">
-      <div className="flex items-baseline gap-4 flex-wrap">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-baseline gap-4 flex-wrap">
         <div className="flex items-baseline gap-3">
           <span className="text-xl font-semibold tracking-tight">{t.symbol}</span>
           <span className="text-xs text-fg-muted">{t.name}</span>
@@ -288,6 +302,9 @@ function QuoteHeader({ t, demo }: { t: SampleTicker; demo: boolean }) {
             EARNINGS IN {t.earnings.daysUntil}D · {t.earnings.when.toUpperCase()}
           </span>
         )}
+        </div>
+        {/* Rating badge (#82) — top-right of the price box. */}
+        <RatingBadge rating={rating} className="mt-0.5 shrink-0" />
       </div>
       <div className="mt-3 flex gap-5 text-xs text-fg-secondary num">
         <span>

@@ -34,3 +34,26 @@ body {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* --- RatingBadge (#82) -------------------------------------------------- */
+/* YOLO pill: a saturated gradient with a subtle pulse. The pulse is opted-in
+   via `prefers-reduced-motion: no-preference` so users who asked for less
+   motion get a static gradient. */
+.rating-yolo {
+  background-image: linear-gradient(90deg, #ff5c7a 0%, #f5a524 50%, #26d782 100%);
+  color: #0a0f14;
+  text-shadow: 0 0 1px rgba(255, 255, 255, 0.4);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .rating-yolo-pulse {
+    animation: rating-yolo-pulse 2.4s ease-in-out infinite;
+  }
+}
+@keyframes rating-yolo-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(245, 165, 36, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(245, 165, 36, 0);
+  }
+}
