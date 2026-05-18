@@ -15,7 +15,9 @@
     "packages/web"
   ],
   "scripts": {
-    "dev": "concurrently -n server,web -c blue,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "predev": "npm --workspace @regardedtrader/core run build",
+    "dev": "concurrently -n core,server,web -c green,blue,magenta \"npm:dev:core\" \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:core": "npm --workspace @regardedtrader/core run dev",
     "dev:server": "npm --workspace @regardedtrader/server run dev",
     "dev:web": "npm --workspace @regardedtrader/web run dev",
     "cli": "npm --workspace @regardedtrader/cli run start --",
