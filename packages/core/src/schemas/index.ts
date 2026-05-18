@@ -14,6 +14,24 @@ export const Quote = z.object({
 });
 export type Quote = z.infer<typeof Quote>;
 
+/**
+ * Live ticker quote (issue #81). Distinct from the heavier `Quote` schema
+ * above: this is the minimal payload used by the `/api/tickers/:symbol/quote`
+ * endpoint and the `useLiveQuote` web hook. `marketState` mirrors
+ * yahoo-finance2's upstream values (`REGULAR`, `PRE`, `POST`, `CLOSED`,
+ * `PREPRE`, `POSTPOST`).
+ */
+export const QuoteSchema = z.object({
+  symbol: Ticker,
+  price: z.number(),
+  change: z.number(),
+  changePercent: z.number(),
+  currency: z.string().min(1),
+  marketState: z.enum(['REGULAR', 'PRE', 'POST', 'CLOSED', 'PREPRE', 'POSTPOST']),
+  asOf: z.string(), // ISO
+});
+export type LiveQuote = z.infer<typeof QuoteSchema>;
+
 export const OHLCV = z.object({
   t: z.string(), // ISO date
   o: z.number(),
