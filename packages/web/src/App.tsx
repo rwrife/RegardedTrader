@@ -7,6 +7,34 @@ import {
   type SampleTicker,
   type SampleVerdict,
 } from './sample-data';
+import { Settings } from './routes/settings.js';
+
+// Tiny hash-based router so the dashboard stays a single bundle without
+// pulling in react-router. Routes: `#/` (default) and `#/settings`.
+type Route = 'home' | 'settings';
+
+function parseRoute(hash: string): Route {
+  return hash.replace(/^#/, '').replace(/^\/+/, '').startsWith('settings')
+    ? 'settings'
+    : 'home';
+}
+
+function useHashRoute(): [Route, (r: Route) => void] {
+  const [route, setRoute] = useState<Route>(() =>
+    typeof window === 'undefined' ? 'home' : parseRoute(window.location.hash),
+  );
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onHash = (): void => setRoute(parseRoute(window.location.hash));
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+  const navigate = useCallback((r: Route): void => {
+    if (typeof window === 'undefined') return;
+    window.location.hash = r === 'settings' ? '#/settings' : '#/';
+  }, []);
+  return [route, navigate];
+}
 
 const DISCLAIMER =
   'Not financial advice. AI-generated analysis based on public data. Verify everything before trading.';
@@ -34,9 +62,13 @@ type ValidationResult =
 type Tab = 'briefing' | 'sentiment' | 'news' | 'recommendation' | 'calendar';
 
 export function App() {
+  const [route, navigate] = useHashRoute();
   // Demo mode is on whenever the backend is unreachable or ?demo=1 is set.
   const demoForced = typeof window !== 'undefined' && /[?&]demo=1\b/.test(window.location.search);
   const [demo, setDemo] = useState<boolean>(demoForced || true);
+  if (route === 'settings') {
+    return <Settings onClose={() => navigate('home')} />;
+  }
   const [active, setActive] = useState<string>(SAMPLE_TICKERS[0]!.symbol);
   const [tab, setTab] = useState<Tab>('briefing');
   const [query, setQuery] = useState('');
@@ -57,7 +89,7 @@ export function App() {
 
   return (
     <div className="min-h-screen bg-app text-fg">
-      <TopBar demo={demo} />
+      <TopBar demo={demo} onOpenSettings={() => navigate('settings')} />
 
       <div className="max-w-7xl mx-auto px-6 py-4 grid grid-cols-12 gap-6">
         {/* Sidebar: validated watchlist + filter + calendar strip */}
@@ -95,7 +127,7 @@ export function App() {
 
 // ---------------------------------------------------------------------------
 
-function TopBar({ demo }: { demo: boolean }) {
+function TopBar({ demo, onOpenSettings }: { demo: boolean; onOpenSettings: () => void }) {
   return (
     <header className="border-b border-border-subtle bg-surface">
       <div className="max-w-7xl mx-auto px-6 h-12 flex items-center gap-4 text-xs">
@@ -114,6 +146,15 @@ function TopBar({ demo }: { demo: boolean }) {
         )}
         <div className="ml-auto flex items-center gap-3 text-fg-muted">
           <span className="num">{new Date().toUTCString().slice(17, 25)} UTC</span>
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            aria-label="Open settings"
+            title="Settings"
+            className="px-1.5 py-0.5 rounded border border-border-subtle text-[12px] hover:text-ai hover:border-ai"
+          >
+            ⚙
+          </button>
           <kbd className="px-1.5 py-0.5 rounded border border-border-subtle text-[10px]">⌘K</kbd>
         </div>
       </div>
