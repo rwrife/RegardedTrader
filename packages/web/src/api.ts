@@ -7,9 +7,9 @@
  * types from the shared `@regardedtrader/core` schemas so the wire format
  * stays in lockstep with the server.
  */
-import type { AppConfig, AiProvider } from '@regardedtrader/core';
+import type { AppConfig, AiProvider, MarketDataProviderConfig } from '@regardedtrader/core';
 
-export type { AppConfig, AiProvider };
+export type { AppConfig, AiProvider, MarketDataProviderConfig };
 
 export interface ConfigResponse {
   ok: boolean;
@@ -23,12 +23,30 @@ export interface TestResponse {
   error?: string;
 }
 
+export interface MarketDataConfigResponse {
+  ok: boolean;
+  activeMarketProvider: string | null;
+  config: AppConfig;
+}
+
+export interface MarketDataTestResponse {
+  ok: boolean;
+  provider?: string | null;
+  symbol?: string;
+  price?: number | null;
+  error?: string;
+}
+
 export interface ApiClient {
   getConfig(): Promise<AppConfig>;
   upsertProvider(id: string, provider: AiProvider): Promise<ConfigResponse>;
   removeProvider(id: string): Promise<ConfigResponse>;
   activateProvider(id: string): Promise<ConfigResponse>;
   testActive(): Promise<TestResponse>;
+  upsertMarketProvider(id: string, provider: MarketDataProviderConfig): Promise<MarketDataConfigResponse>;
+  removeMarketProvider(id: string): Promise<MarketDataConfigResponse>;
+  activateMarketProvider(id: string | null): Promise<MarketDataConfigResponse>;
+  testMarketProvider(symbol?: string): Promise<MarketDataTestResponse>;
 }
 
 export interface ApiOptions {
@@ -100,6 +118,34 @@ export function createApi(opts: ApiOptions = {}): ApiClient {
         return { ok: false, error: `Invalid JSON from ${res.url}` };
       }
     },
+    async upsertMarketProvider(id, provider) {
+      const res = await f(url('/config/market-data/providers'), json({ id, provider }));
+      return readJson<MarketDataConfigResponse>(res);
+    },
+    async removeMarketProvider(id) {
+      const res = await f(url(`/config/market-data/providers/${encodeURIComponent(id)}`), {
+        method: 'DELETE',
+      });
+      return readJson<MarketDataConfigResponse>(res);
+    },
+    async activateMarketProvider(id) {
+      const res = await f(url('/config/market-data/activate'), json({ id }));
+      return readJson<MarketDataConfigResponse>(res);
+    },
+    async testMarketProvider(symbol) {
+      const res = await f(
+        url('/config/market-data/test'),
+        json(symbol ? { symbol } : {}),
+      );
+      const text = await res.text();
+      try {
+        return text
+          ? (JSON.parse(text) as MarketDataTestResponse)
+          : { ok: false, error: 'empty response' };
+      } catch {
+        return { ok: false, error: `Invalid JSON from ${res.url}` };
+      }
+    },
   };
 }
 
@@ -164,4 +210,32 @@ export const CLI_BACKENDS: ReadonlyArray<CliBackendPreset> = [
   { id: 'codex-cli', label: 'Codex CLI', defaultCommand: 'codex' },
   { id: 'claude-cli', label: 'Claude CLI', defaultCommand: 'claude' },
   { id: 'copilot-cli', label: 'GitHub Copilot CLI', defaultCommand: 'copilot' },
+];
+
+/**
+ * Known market-data provider presets, surfaced in the Settings UI.
+ * Mirrors the discriminated union in `@regardedtrader/core`.
+ */
+export interface MarketProviderPreset {
+  kind: MarketDataProviderConfig['kind'];
+  label: string;
+  needsKey: boolean;
+  signupUrl?: string;
+  description: string;
+}
+
+export const MARKET_PROVIDER_PRESETS: ReadonlyArray<MarketProviderPreset> = [
+  {
+    kind: 'finnhub',
+    label: 'Finnhub',
+    needsKey: true,
+    signupUrl: 'https://finnhub.io/register',
+    description: 'Real-time US equities. Free tier: 60 calls/min, no daily cap. Recommended.',
+  },
+  {
+    kind: 'yahoo',
+    label: 'Yahoo Finance (unofficial)',
+    needsKey: false,
+    description: 'Scrape-based. No key needed, but frequently rate-limited (HTTP 429).',
+  },
 ];

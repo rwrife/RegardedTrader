@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import type { AiProvider, AppConfig } from '@regardedtrader/core';
+import type { AiProvider, AppConfig, MarketDataProviderConfig } from '@regardedtrader/core';
 import {
   CLI_BACKENDS,
   HTTP_PRESETS,
+  MARKET_PROVIDER_PRESETS,
   createApi,
   maskApiKey,
   type ApiClient,
   type HttpPreset,
+  type MarketProviderPreset,
 } from '../api.js';
 
 const DISCLAIMER =
@@ -178,6 +180,8 @@ export function Settings(props: SettingsProps): JSX.Element {
         )}
 
         {addOpen && <AddProviderModal onSave={onAdd} onCancel={() => setAddOpen(false)} />}
+
+        {config && <MarketDataSection api={api} config={config} onConfigChange={refresh} />}
 
         <p className="pt-4 text-[10px] text-fg-muted">{DISCLAIMER}</p>
       </div>
@@ -629,6 +633,324 @@ function FormFooter({
           {saving ? 'Saving…' : 'Save'}
         </button>
       </div>
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Market Data (#91)
+// -----------------------------------------------------------------------------
+
+interface MarketDataSectionProps {
+  api: ApiClient;
+  config: AppConfig;
+  onConfigChange: (next: AppConfig) => void;
+}
+
+function MarketDataSection({ api, config, onConfigChange }: MarketDataSectionProps): JSX.Element {
+  const [addOpen, setAddOpen] = useState(false);
+  const [status, setStatus] = useState<Status>({ kind: 'idle' });
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const md = config.marketData;
+  const active = md.activeProvider;
+  const providers = Object.entries(md.providers);
+
+  const handleActivate = async (id: string | null): Promise<void> => {
+    try {
+      const r = await api.activateMarketProvider(id);
+      onConfigChange(r.config);
+      setStatus({ kind: 'info', message: id ? `Activated "${id}"` : 'Cleared active provider' });
+      setTestResult(null);
+    } catch (e) {
+      setStatus({ kind: 'error', message: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
+  const handleDelete = async (id: string): Promise<void> => {
+    if (!confirm(`Remove market-data provider "${id}"?`)) return;
+    try {
+      const r = await api.removeMarketProvider(id);
+      onConfigChange(r.config);
+      setStatus({ kind: 'info', message: `Removed "${id}"` });
+    } catch (e) {
+      setStatus({ kind: 'error', message: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
+  const handleAdd = async (id: string, provider: MarketDataProviderConfig): Promise<void> => {
+    try {
+      const r = await api.upsertMarketProvider(id, provider);
+      onConfigChange(r.config);
+      setAddOpen(false);
+      setStatus({ kind: 'info', message: `Saved "${id}"` });
+    } catch (e) {
+      setStatus({ kind: 'error', message: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
+  const handleTest = async (): Promise<void> => {
+    setTestResult(null);
+    setStatus({ kind: 'loading' });
+    const r = await api.testMarketProvider();
+    setStatus({ kind: 'idle' });
+    setTestResult({
+      ok: !!r.ok,
+      message: r.ok
+        ? `OK — ${r.symbol} @ ${typeof r.price === 'number' ? r.price.toFixed(2) : '—'}`
+        : r.error ?? 'Test failed',
+    });
+  };
+
+  return (
+    <div className="pt-6 mt-6 border-t border-border-subtle space-y-3">
+      <div className="flex items-baseline justify-between">
+        <div>
+          <h2 className="text-lg font-semibold tracking-tight">Market Data</h2>
+          <p className="text-xs text-fg-muted mt-1">
+            Source for live quotes, history, and news. Falls back to Yahoo when the active provider
+            doesn't support a capability.
+          </p>
+        </div>
+        <button
+          onClick={() => setAddOpen(true)}
+          className="px-3 py-1.5 text-xs rounded border border-border-subtle bg-surface-2 hover:border-ai"
+        >
+          + Add provider
+        </button>
+      </div>
+
+      {status.kind === 'error' && (
+        <div role="alert" className="border border-down rounded p-2 text-xs bg-down/10 text-down">
+          {status.message}
+        </div>
+      )}
+      {status.kind === 'info' && (
+        <div className="border border-border-subtle rounded p-2 text-xs text-fg-secondary bg-surface">
+          {status.message}
+        </div>
+      )}
+
+      {providers.length === 0 ? (
+        <div className="border border-dashed border-border-subtle rounded p-4 text-sm text-fg-muted">
+          No market-data provider configured. Live quotes will use the built-in Yahoo source, which
+          is unreliable. Add a Finnhub key for stable real-time quotes.
+        </div>
+      ) : (
+        <table className="w-full text-sm border border-border-subtle rounded overflow-hidden">
+          <thead className="bg-surface-2 text-xs text-fg-muted">
+            <tr>
+              <th className="text-left px-3 py-2 font-medium">Active</th>
+              <th className="text-left px-3 py-2 font-medium">ID</th>
+              <th className="text-left px-3 py-2 font-medium">Kind</th>
+              <th className="text-left px-3 py-2 font-medium">Key</th>
+              <th className="text-right px-3 py-2 font-medium">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {providers.map(([id, p]) => (
+              <tr key={id} className="border-t border-border-subtle align-top">
+                <td className="px-3 py-2">
+                  <input
+                    type="radio"
+                    name="activeMarketProvider"
+                    checked={active === id}
+                    onChange={() => void handleActivate(id)}
+                    aria-label={`Activate ${id}`}
+                  />
+                </td>
+                <td className="px-3 py-2 font-mono text-xs">{id}</td>
+                <td className="px-3 py-2 text-xs">{p.label} <span className="text-fg-muted">({p.kind})</span></td>
+                <td className="px-3 py-2 text-xs font-mono">
+                  {p.kind === 'finnhub' ? maskApiKey(p.apiKey) || '—' : 'n/a'}
+                </td>
+                <td className="px-3 py-2 text-right">
+                  <button
+                    onClick={() => void handleDelete(id)}
+                    className="text-xs text-fg-muted hover:text-down"
+                  >
+                    Remove
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {active && (
+        <div className="flex items-center gap-3 pt-1">
+          <button
+            onClick={() => void handleTest()}
+            className="px-3 py-1.5 text-xs rounded border border-border-subtle bg-surface-2 hover:border-ai"
+          >
+            Test active provider
+          </button>
+          {testResult && (
+            <span
+              role="status"
+              className={`text-xs ${testResult.ok ? 'text-up' : 'text-down'}`}
+            >
+              {testResult.message}
+            </span>
+          )}
+        </div>
+      )}
+
+      {addOpen && (
+        <AddMarketProviderModal
+          onSave={handleAdd}
+          onCancel={() => setAddOpen(false)}
+          existingIds={new Set(providers.map(([id]) => id))}
+        />
+      )}
+    </div>
+  );
+}
+
+interface AddMarketProviderModalProps {
+  onSave: (id: string, provider: MarketDataProviderConfig) => Promise<void>;
+  onCancel: () => void;
+  existingIds: Set<string>;
+}
+
+function AddMarketProviderModal({
+  onSave,
+  onCancel,
+  existingIds,
+}: AddMarketProviderModalProps): JSX.Element {
+  // First preset is statically guaranteed to exist (the constant is non-empty),
+  // but the strict-indexed-access lint can't see that — narrow once.
+  const FIRST = MARKET_PROVIDER_PRESETS[0] as MarketProviderPreset;
+  const [preset, setPreset] = useState<MarketProviderPreset>(FIRST);
+  const [id, setId] = useState<string>(FIRST.kind);
+  const [apiKey, setApiKey] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const onSubmit = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault();
+    setError(null);
+    if (!id) {
+      setError('ID is required');
+      return;
+    }
+    if (existingIds.has(id)) {
+      setError(`A provider with id "${id}" already exists`);
+      return;
+    }
+    let provider: MarketDataProviderConfig;
+    if (preset.kind === 'finnhub') {
+      if (!apiKey.trim()) {
+        setError('Finnhub requires an API key');
+        return;
+      }
+      provider = {
+        kind: 'finnhub',
+        label: preset.label,
+        apiKey: apiKey.trim(),
+        baseUrl: 'https://finnhub.io/api/v1',
+      };
+    } else {
+      provider = { kind: 'yahoo', label: preset.label };
+    }
+    setSaving(true);
+    try {
+      await onSave(id, provider);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <form
+        onSubmit={onSubmit}
+        className="bg-surface border border-border-subtle rounded p-4 max-w-md w-full space-y-3"
+        aria-label="Add market-data provider"
+      >
+        <h3 className="text-base font-semibold">Add market-data provider</h3>
+
+        <label className="block text-xs">
+          <span className="text-fg-muted">Provider</span>
+          <select
+            value={preset.kind}
+            onChange={(e) => {
+              const found = MARKET_PROVIDER_PRESETS.find((p) => p.kind === e.target.value);
+              const next: MarketProviderPreset = found ?? FIRST;
+              setPreset(next);
+              setId(next.kind);
+            }}
+            className="mt-1 w-full bg-surface-2 border border-border-subtle rounded px-2 py-1.5 text-sm"
+          >
+            {MARKET_PROVIDER_PRESETS.map((p) => (
+              <option key={p.kind} value={p.kind}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+          <span className="block text-fg-muted mt-1">{preset.description}</span>
+          {preset.signupUrl && (
+            <a
+              href={preset.signupUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="block text-ai underline mt-0.5"
+            >
+              Get a free API key →
+            </a>
+          )}
+        </label>
+
+        <label className="block text-xs">
+          <span className="text-fg-muted">ID</span>
+          <input
+            value={id}
+            onChange={(e) => setId(e.target.value.trim())}
+            className="mt-1 w-full bg-surface-2 border border-border-subtle rounded px-2 py-1.5 text-sm font-mono"
+            placeholder="finnhub"
+          />
+        </label>
+
+        {preset.needsKey && (
+          <label className="block text-xs">
+            <span className="text-fg-muted">API key</span>
+            <input
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              type="password"
+              autoComplete="off"
+              className="mt-1 w-full bg-surface-2 border border-border-subtle rounded px-2 py-1.5 text-sm font-mono"
+              placeholder="…"
+            />
+          </label>
+        )}
+
+        {error && (
+          <div role="alert" className="text-xs text-down border border-down/40 rounded p-2 bg-down/10">
+            {error}
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="px-3 py-1.5 text-xs rounded border border-border-subtle hover:border-ai"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={saving}
+            className="px-3 py-1.5 text-xs rounded border border-ai text-ai hover:bg-ai/10 disabled:opacity-50"
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }

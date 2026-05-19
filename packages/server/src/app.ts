@@ -12,6 +12,8 @@ import {
   activeLLM,
   AppConfig,
   AiProvider,
+  MarketDataProviderConfig,
+  createMarketDataRegistry,
   TickerValidator,
   WatchlistStore,
   DuckDuckGoSearch,
@@ -23,9 +25,13 @@ import {
   type MarketDataClient,
   type LiveQuote,
 } from '@regardedtrader/core';
-import { liveQuote, type LiveQuoteSource } from './liveQuote.js';
+import { liveQuote, type LiveQuoteSource, type YahooQuoteLike } from './liveQuote.js';
 
 export interface AppDeps {
+  /**
+   * Fallback market-data client used when the user hasn't configured a
+   * provider. Production wires `YahooClient`; tests inject mocks.
+   */
   market: MarketDataClient;
   webSearch: WebSearch;
   /** Build an LLM from current config; returns null if not configured. */
@@ -33,8 +39,9 @@ export interface AppDeps {
   watchlist: WatchlistStore;
   initialConfig: AppConfigT;
   /**
-   * Optional override for the live-quote source. Production wires this to
-   * `yahoo-finance2`'s `quote()`; tests inject a mock.
+   * Built-in live-quote source used when no provider is configured (or when
+   * the configured provider is `yahoo`). Production wires the lazy
+   * `yahoo-finance2.quoteCombine` adapter; tests inject a mock.
    */
   liveQuoteSource?: LiveQuoteSource;
   /** Optional clock override for testing the live-quote cache. */
@@ -54,10 +61,29 @@ export interface AppHandle {
 export function createApp(deps: AppDeps): AppHandle {
   let cfg: AppConfigT = deps.initialConfig;
 
+  // --- Market data registry (#91) ---
+  // Rebuilt whenever the marketData config changes so route handlers always
+  // see the active provider without restarting the server.
+  let registry = createMarketDataRegistry(cfg.marketData, { fallback: deps.market });
+  function rebuildRegistry(): void {
+    registry = createMarketDataRegistry(cfg.marketData, { fallback: deps.market });
+  }
+  /** Resolve the live-quote source for the active provider, or fall back. */
+  function resolveLiveQuoteSource(): LiveQuoteSource | null {
+    if (registry.liveQuoteSource) {
+      // Providers other than Yahoo return their own native shape; cast at
+      // the boundary so `liveQuote.ts`'s `YahooQuoteLike` projector can
+      // chew it. Each provider client is responsible for emitting a
+      // structurally-compatible payload.
+      return registry.liveQuoteSource as unknown as LiveQuoteSource;
+    }
+    return deps.liveQuoteSource ?? null;
+  }
+
   function makeOrchestrator(): Orchestrator | null {
     const llm = deps.llmFromConfig(cfg);
     if (!llm) return null;
-    return new Orchestrator(deps.market, llm, {
+    return new Orchestrator(registry.client, llm, {
       maxLossUsd: cfg.risk.maxLossUsd,
       maxLegs: cfg.risk.maxLegs,
       forbidNakedShorts: cfg.risk.forbidNakedShorts,
@@ -93,33 +119,41 @@ export function createApp(deps: AppDeps): AppHandle {
   app.get('/quote/:symbol', async (req, res, next) => {
     try {
       const symbol = Ticker.parse(req.params.symbol.toUpperCase());
-      res.json(await deps.market.quote(symbol));
+      res.json(await registry.client.quote(symbol));
     } catch (e) {
       next(e);
     }
   });
 
-  // --- Live quote (#81) ---
+  // --- Live quote (#81, made provider-aware in #91) ---
   // Tiny in-memory cache to coalesce bursts from multiple clients, plus an
   // in-flight dedupe map so N concurrent requests for the same symbol only
   // produce one upstream call. On upstream failure (e.g. Yahoo HTTP 429 /
   // "Too Many Requests"), we fall back to a recent cached value if we have
   // one — better to serve a slightly-stale quote than to surface a noisy
   // error to every poller in the UI.
-  if (deps.liveQuoteSource) {
-    const source = deps.liveQuoteSource;
+  //
+  // The actual upstream is resolved per-request from the market-data
+  // registry so swapping providers in Settings takes effect immediately
+  // without restarting the server.
+  {
     const cache = new Map<string, { at: number; value: LiveQuote }>();
     const inflight = new Map<string, Promise<LiveQuote>>();
     const CACHE_TTL_MS = 5_000;
-    // How long a cached quote may still be served when the upstream is
-    // failing. 5 minutes is short enough to stay roughly accurate during a
-    // brief Yahoo throttle but long enough to ride out a typical 429 window.
     const STALE_FALLBACK_MS = 5 * 60_000;
     const now = deps.now ?? Date.now;
 
     app.get('/tickers/:symbol/quote', async (req, res, next) => {
       try {
         const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+        const source = resolveLiveQuoteSource();
+        if (!source) {
+          res.status(503).json({
+            error: 'No market-data provider configured',
+            hint: 'Open Settings → Market Data and add a provider (Finnhub recommended).',
+          });
+          return;
+        }
         const cached = cache.get(symbol);
         const t = now();
         if (cached && t - cached.at < CACHE_TTL_MS) {
@@ -167,7 +201,7 @@ export function createApp(deps: AppDeps): AppHandle {
     try {
       const symbol = Ticker.parse(req.params.symbol.toUpperCase());
       const days = Math.min(Number(req.query.days ?? 180), 365 * 5);
-      res.json(await deps.market.history(symbol, days));
+      res.json(await registry.client.history(symbol, days));
     } catch (e) {
       next(e);
     }
@@ -177,7 +211,7 @@ export function createApp(deps: AppDeps): AppHandle {
     try {
       const symbol = Ticker.parse(req.params.symbol.toUpperCase());
       const expiry = typeof req.query.expiry === 'string' ? req.query.expiry : undefined;
-      res.json(await deps.market.optionsChain(symbol, expiry));
+      res.json(await registry.client.optionsChain(symbol, expiry));
     } catch (e) {
       next(e);
     }
@@ -314,9 +348,96 @@ export function createApp(deps: AppDeps): AppHandle {
       await saveConfig(next);
       cfg = next;
       orchestrator = makeOrchestrator();
+      rebuildRegistry();
       res.json({ ok: true, aiConfigured: orchestrator !== null, config: redactConfig(cfg) });
     } catch (e) {
       next(e);
+    }
+  });
+
+  // --- Market-data providers (#91) ---
+
+  const MarketProviderUpsert = z.object({
+    id: z.string().min(1),
+    provider: MarketDataProviderConfig,
+  });
+
+  app.post('/config/market-data/providers', async (req, res, next) => {
+    try {
+      const { id, provider } = MarketProviderUpsert.parse(req.body);
+      cfg.marketData.providers[id] = provider;
+      if (!cfg.marketData.activeProvider) cfg.marketData.activeProvider = id;
+      await saveConfig(cfg);
+      rebuildRegistry();
+      res.json({
+        ok: true,
+        activeMarketProvider: cfg.marketData.activeProvider,
+        config: redactConfig(cfg),
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.delete('/config/market-data/providers/:id', async (req, res, next) => {
+    try {
+      const id = req.params.id;
+      delete cfg.marketData.providers[id];
+      if (cfg.marketData.activeProvider === id) cfg.marketData.activeProvider = null;
+      await saveConfig(cfg);
+      rebuildRegistry();
+      res.json({
+        ok: true,
+        activeMarketProvider: cfg.marketData.activeProvider,
+        config: redactConfig(cfg),
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.post('/config/market-data/activate', async (req, res, next) => {
+    try {
+      const { id } = z.object({ id: z.string().min(1).nullable() }).parse(req.body);
+      if (id !== null && !cfg.marketData.providers[id]) {
+        res.status(404).json({ error: `market-data provider "${id}" not found` });
+        return;
+      }
+      cfg.marketData.activeProvider = id;
+      await saveConfig(cfg);
+      rebuildRegistry();
+      res.json({
+        ok: true,
+        activeMarketProvider: cfg.marketData.activeProvider,
+        config: redactConfig(cfg),
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  /**
+   * Probe the active market-data provider: fetches a quote for AAPL and
+   * reports success/failure. Used by the Settings panel to give the user
+   * feedback that their key works.
+   */
+  app.post('/config/market-data/test', async (req, res) => {
+    const probeSymbol = typeof req.body?.symbol === 'string' ? req.body.symbol.toUpperCase() : 'AAPL';
+    const source = resolveLiveQuoteSource();
+    if (!source) {
+      res.status(503).json({ ok: false, error: 'No market-data provider configured' });
+      return;
+    }
+    try {
+      const raw = (await source(probeSymbol)) as YahooQuoteLike;
+      res.json({
+        ok: true,
+        provider: registry.activeId,
+        symbol: probeSymbol,
+        price: raw.regularMarketPrice ?? null,
+      });
+    } catch (e) {
+      res.status(502).json({ ok: false, error: (e as Error).message });
     }
   });
 

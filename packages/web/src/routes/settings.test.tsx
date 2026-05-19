@@ -20,6 +20,7 @@ function makeConfig(extra: Partial<AppConfig> = {}): AppConfig {
     activeProvider: 'openai',
     risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true },
     server: { host: '127.0.0.1', port: 4317 },
+    marketData: { providers: {}, activeProvider: null },
     ...extra,
   } as AppConfig;
 }
@@ -43,6 +44,22 @@ function makeApi(overrides: Partial<ApiClient> = {}): ApiClient {
       config: makeConfig({ activeProvider: id }),
     })),
     testActive: vi.fn(async () => ({ ok: true, sample: 'OK' })),
+    upsertMarketProvider: vi.fn(async (id, provider) => ({
+      ok: true,
+      activeMarketProvider: id,
+      config: makeConfig({ marketData: { providers: { [id]: provider }, activeProvider: id } }),
+    })),
+    removeMarketProvider: vi.fn(async () => ({
+      ok: true,
+      activeMarketProvider: null,
+      config: makeConfig({ marketData: { providers: {}, activeProvider: null } }),
+    })),
+    activateMarketProvider: vi.fn(async (id) => ({
+      ok: true,
+      activeMarketProvider: id,
+      config: makeConfig({ marketData: { providers: {}, activeProvider: id } }),
+    })),
+    testMarketProvider: vi.fn(async () => ({ ok: true, provider: 'finnhub', symbol: 'AAPL', price: 100 })),
     ...overrides,
   };
 }

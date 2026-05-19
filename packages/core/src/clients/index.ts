@@ -2,6 +2,8 @@ import yahooFinance from 'yahoo-finance2';
 import type { OHLCV, Quote, NewsItem, OptionContract } from '../schemas/index.js';
 
 export * from './web-search.js';
+export * from './finnhub.js';
+export * from './registry.js';
 
 export interface MarketDataClient {
   quote(symbol: string): Promise<Quote>;
