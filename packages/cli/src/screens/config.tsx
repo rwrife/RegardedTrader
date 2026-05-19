@@ -356,7 +356,7 @@ function CliForm({
   const backends: { backend: CliBackend; defaultCmd: string; hint: string }[] = [
     { backend: 'codex-cli', defaultCmd: 'codex', hint: 'OpenAI Codex CLI (`codex exec`)' },
     { backend: 'claude-cli', defaultCmd: 'claude', hint: 'Claude Code (`claude -p`)' },
-    { backend: 'copilot-cli', defaultCmd: 'gh', hint: 'GitHub Copilot CLI (`gh copilot`)' },
+    { backend: 'copilot-cli', defaultCmd: 'copilot', hint: 'GitHub Copilot CLI (standalone `@github/copilot`)' },
   ];
   const [bIdx, setBIdx] = useState(0);
   const [id, setId] = useState('codex');

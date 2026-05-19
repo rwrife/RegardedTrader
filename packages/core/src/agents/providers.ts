@@ -43,7 +43,8 @@ export function activeLLM(cfg: AppConfig): LLM {
  * Defaults follow OpenClaw's sanctioned invocation patterns:
  *   - codex-cli   → `codex exec --json --color never --sandbox workspace-write --skip-git-repo-check`
  *   - claude-cli  → `claude -p --output-format stream-json`
- *   - copilot-cli → `gh copilot suggest -t shell` (text mode; richer support tracked as follow-up)
+ *   - copilot-cli → `copilot -p <prompt>` (GitHub Copilot CLI standalone,
+ *     `@github/copilot` npm package — not the older `gh copilot` extension)
  *
  * Each backend has its own quirks; this implementation gives a working baseline.
  * Per-backend hardening (sessions, JSONL parsing, MCP loopback) is tracked as
@@ -66,7 +67,7 @@ export class CliLLM implements LLM {
     user: string;
     json?: boolean;
   }): Promise<string> {
-    const { cmd, args, prompt } = this.buildInvocation(system, user);
+    const { cmd, args, prompt, promptViaStdin } = this.buildInvocation(system, user);
     return new Promise<string>((resolve, reject) => {
       const child = spawn(cmd, args, {
         env: { ...process.env, ...(this.env ?? {}) },
@@ -88,7 +89,11 @@ export class CliLLM implements LLM {
         }
         resolve(this.extractText(stdout));
       });
-      child.stdin.end(prompt);
+      if (promptViaStdin) {
+        child.stdin.end(prompt);
+      } else {
+        child.stdin.end();
+      }
     });
   }
 
@@ -96,6 +101,8 @@ export class CliLLM implements LLM {
     cmd: string;
     args: string[];
     prompt: string;
+    /** When true, write `prompt` to the child's stdin. When false, the prompt is already in `args`. */
+    promptViaStdin: boolean;
   } {
     const prompt = `${system}\n\n---\n\n${user}`;
     switch (this.backend) {
@@ -112,23 +119,27 @@ export class CliLLM implements LLM {
         ];
         if (this.model) args.push('--model', this.model);
         if (this.extraArgs) args.push(...this.extraArgs);
-        return { cmd, args, prompt };
+        return { cmd, args, prompt, promptViaStdin: true };
       }
       case 'claude-cli': {
         const cmd = this.command ?? 'claude';
         const args = ['-p', '--output-format', 'stream-json', '--verbose'];
         if (this.model) args.push('--model', this.model);
         if (this.extraArgs) args.push(...this.extraArgs);
-        return { cmd, args, prompt };
+        return { cmd, args, prompt, promptViaStdin: true };
       }
       case 'copilot-cli': {
-        // GitHub Copilot CLI is primarily for shell suggestions; we use the
-        // non-interactive `explain` flow. A richer Copilot-Chat backend is
-        // tracked as a follow-up issue.
-        const cmd = this.command ?? 'gh';
-        const args = ['copilot', 'explain'];
+        // Standalone GitHub Copilot CLI (`@github/copilot`). It accepts the
+        // prompt as a `-p`/`--prompt` argument in non-interactive mode and
+        // does NOT read from stdin (older `gh copilot explain` integration
+        // was removed — `gh copilot` only handled shell-suggest flows and
+        // wasn't a real chat interface).
+        const cmd = this.command ?? 'copilot';
+        const args: string[] = [];
+        if (this.model) args.push('--model', this.model);
         if (this.extraArgs) args.push(...this.extraArgs);
-        return { cmd, args, prompt };
+        args.push('-p', prompt);
+        return { cmd, args, prompt, promptViaStdin: false };
       }
     }
   }
@@ -170,6 +181,13 @@ export class CliLLM implements LLM {
         }
       }
       return last || out.trim();
+    }
+    if (this.backend === 'copilot-cli') {
+      // Strip ANSI escape sequences (the standalone Copilot CLI emits color
+      // codes even in non-interactive mode). Anything beyond that is the
+      // model's plain-text response.
+      // eslint-disable-next-line no-control-regex
+      return out.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '').trim();
     }
     return out.trim();
   }
