@@ -708,8 +708,8 @@ function MarketDataSection({ api, config, onConfigChange }: MarketDataSectionPro
         <div>
           <h2 className="text-lg font-semibold tracking-tight">Market Data</h2>
           <p className="text-xs text-fg-muted mt-1">
-            Source for live quotes, history, and news. Falls back to Yahoo when the active provider
-            doesn't support a capability.
+            Source for live quotes, history, options chains, and news. All data flows through the
+            active provider — there is no silent fallback to another vendor.
           </p>
         </div>
         <button

@@ -4,18 +4,25 @@
  * Glue layer between `AppConfig.marketData` (user-facing config) and the
  * actual `MarketDataClient` instances used by the server / orchestrator.
  *
- * Capability-aware fallback chain:
- *   - Live quote: active provider → built-in Yahoo fallback.
- *   - History / options / news: active provider, but if it throws
- *     `FinnhubCapabilityError` we transparently fall through to Yahoo so the
- *     dashboard still works on a free Finnhub key.
+ * Single-provider model: when an active provider is configured, ALL market
+ * data (quotes, history, options, news) goes through it. We deliberately do
+ * NOT fall back to Yahoo on capability errors — Yahoo's endpoints are
+ * unreliable (HTTP 429 rate-limiting hits us constantly) and silently
+ * routing around the user's chosen provider hides real configuration
+ * problems. If Finnhub's free tier doesn't expose history/options, that
+ * should surface as a clear error in the UI, not a secret hit to a
+ * different vendor.
+ *
+ * The `fallback` option is only used when NO active provider is configured;
+ * it gives the server something to call so endpoints don't 500 before the
+ * user has had a chance to set up Settings → Market Data.
  *
  * Tests can supply `buildClient` to inject mocks without monkey-patching.
  */
 import type { MarketDataConfig, MarketDataProviderConfig } from '../schemas/marketData.js';
 import type { MarketDataClient } from './index.js';
 import { YahooClient } from './index.js';
-import { FinnhubClient, FinnhubCapabilityError } from './finnhub.js';
+import { FinnhubClient } from './finnhub.js';
 
 export interface MarketDataRegistryOptions {
   /**
@@ -58,26 +65,16 @@ function defaultBuildClient(cfg: MarketDataProviderConfig): MarketDataClient {
  * not supporting history) transparently fall through to a fallback. Quote
  * calls do *not* fall through — if the user picked a primary provider, we
  * want real errors to surface so they know to fix their config.
+ *
+ * NOTE: Currently unused. The registry no longer chains providers — the
+ * active provider is the only provider. Kept here intentionally so we can
+ * revisit a user-opt-in "secondary fallback" feature later without
+ * re-deriving the wrapper. Do not re-enable without an explicit config
+ * surface that lets the user pick the fallback target.
  */
-function withFallback(primary: MarketDataClient, fallback: MarketDataClient): MarketDataClient {
-  const tryWithFallback = async <T>(
-    op: (c: MarketDataClient) => Promise<T>,
-  ): Promise<T> => {
-    try {
-      return await op(primary);
-    } catch (e) {
-      if (e instanceof FinnhubCapabilityError) {
-        return op(fallback);
-      }
-      throw e;
-    }
-  };
-  return {
-    quote: (s) => primary.quote(s),
-    history: (s, d) => tryWithFallback((c) => c.history(s, d)),
-    news: (s) => tryWithFallback((c) => c.news(s)),
-    optionsChain: (s, e) => tryWithFallback((c) => c.optionsChain(s, e)),
-  };
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function _withFallback(_primary: MarketDataClient, _fallback: MarketDataClient): MarketDataClient {
+  throw new Error('withFallback is disabled; see registry.ts header');
 }
 
 export function createMarketDataRegistry(
@@ -91,7 +88,8 @@ export function createMarketDataRegistry(
   const activeCfg = activeId ? cfg.providers[activeId] : undefined;
 
   if (!activeCfg) {
-    // No active provider — everything goes through the fallback.
+    // No active provider — everything goes through the fallback so the
+    // server stays alive long enough for the user to configure one.
     return {
       client: fallback,
       liveQuoteSource: null,
@@ -100,7 +98,6 @@ export function createMarketDataRegistry(
   }
 
   const primary = build(activeCfg);
-  const client = withFallback(primary, fallback);
 
   let liveQuoteSource: ((symbol: string) => Promise<unknown>) | null = null;
   if (activeCfg.kind === 'finnhub' && primary instanceof FinnhubClient) {
@@ -108,5 +105,8 @@ export function createMarketDataRegistry(
   }
   // Yahoo active-provider keeps the existing built-in source (caller handles).
 
-  return { client, liveQuoteSource, activeId };
+  // Use the active provider directly for everything. Capability errors (e.g.
+  // Finnhub free-tier history) propagate to the route handler, which surfaces
+  // them in the UI rather than silently routing to a different vendor.
+  return { client: primary, liveQuoteSource, activeId };
 }

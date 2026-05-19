@@ -53,7 +53,7 @@ describe('createMarketDataRegistry', () => {
     expect(q.price).toBe(42);
   });
 
-  it('falls back to the secondary client when the primary throws FinnhubCapabilityError', async () => {
+  it('does NOT fall back to the secondary on FinnhubCapabilityError — surfaces it', async () => {
     const primary = fakeClient({
       history: vi.fn(async () => {
         throw new FinnhubCapabilityError('history');
@@ -69,9 +69,8 @@ describe('createMarketDataRegistry', () => {
       activeProvider: 'fin',
     };
     const reg = createMarketDataRegistry(cfg, { fallback, buildClient: () => primary });
-    const rows = await reg.client.history('AAPL', 30);
-    expect(rows).toHaveLength(1);
-    expect(fallback.history).toHaveBeenCalledOnce();
+    await expect(reg.client.history('AAPL', 30)).rejects.toBeInstanceOf(FinnhubCapabilityError);
+    expect(fallback.history).not.toHaveBeenCalled();
   });
 
   it('does NOT swallow non-capability errors from the primary', async () => {

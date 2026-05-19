@@ -3,13 +3,13 @@ import React from 'react';
 import { render } from 'ink';
 import meow from 'meow';
 import { App } from './app.js';
-import { MainMenu } from './screens/menu.js';
+import { Shell } from './shell.js';
 
 const cli = meow(
   `
   Usage
-    $ regard                   Launch interactive menu
-    $ regard <command> [args]  Run a single action
+    $ regard                   Launch interactive slash-command shell
+    $ regard <command> [args]  Run a single action and exit
 
   Commands
     add <SYM>...               Validate ticker(s) via web search + LLM and add to watchlist
@@ -50,7 +50,7 @@ if (cli.flags.help) {
 }
 
 if (!command) {
-  render(<MainMenu serverUrl={cli.flags.server} />);
+  render(<Shell serverUrl={cli.flags.server} />);
 } else {
   render(
     <App
