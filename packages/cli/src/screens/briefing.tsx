@@ -3,24 +3,45 @@ import { Box, Text, useApp } from 'ink';
 import Spinner from 'ink-spinner';
 import type { Briefing } from '@regardedtrader/core';
 import { api } from '../api.js';
+import { ReturnPrompt } from './menu.js';
 
-export function BriefingScreen({ symbol, serverUrl }: { symbol: string; serverUrl: string }) {
+export function BriefingScreen({
+  symbol,
+  serverUrl,
+  onDone,
+}: {
+  symbol: string;
+  serverUrl: string;
+  onDone?: () => void;
+}) {
   const { exit } = useApp();
   const [data, setData] = useState<Briefing | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [finished, setFinished] = useState(false);
 
   useEffect(() => {
     if (!symbol) {
       setErr('Missing symbol. Usage: regard briefing NVDA');
+      setFinished(true);
+      if (!onDone) setTimeout(() => exit(), 50);
       return;
     }
     api<Briefing>(serverUrl, `/briefing/${encodeURIComponent(symbol.toUpperCase())}`)
       .then(setData)
       .catch((e) => setErr(String(e)))
-      .finally(() => setTimeout(() => exit(), 50));
-  }, [symbol, serverUrl, exit]);
+      .finally(() => {
+        setFinished(true);
+        if (!onDone) setTimeout(() => exit(), 50);
+      });
+  }, [symbol, serverUrl, exit, onDone]);
 
-  if (err) return <Text color="red">{err}</Text>;
+  if (err)
+    return (
+      <Box flexDirection="column">
+        <Text color="red">{err}</Text>
+        {onDone && finished && <ReturnPrompt onDone={onDone} />}
+      </Box>
+    );
   if (!data)
     return (
       <Text>
@@ -70,6 +91,7 @@ export function BriefingScreen({ symbol, serverUrl }: { symbol: string; serverUr
       <Text dimColor italic>
         {data.disclaimer}
       </Text>
+      {onDone && finished && <ReturnPrompt onDone={onDone} />}
     </Box>
   );
 }

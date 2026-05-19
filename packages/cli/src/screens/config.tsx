@@ -22,8 +22,9 @@ type Mode =
 
 type CliBackend = 'codex-cli' | 'claude-cli' | 'copilot-cli';
 
-export function ConfigScreen({ sub }: { sub?: string }) {
+export function ConfigScreen({ sub, onDone }: { sub?: string; onDone?: () => void }) {
   const { exit } = useApp();
+  const leave = onDone ?? exit;
   const [cfg, setCfg] = useState<AppConfig | null>(null);
   const [mode, setMode] = useState<Mode>(sub === 'show' ? 'show' : 'menu');
   const [msg, setMsg] = useState<string>('');
@@ -52,7 +53,7 @@ export function ConfigScreen({ sub }: { sub?: string }) {
         <Text>Risk: maxLoss=${cfg.risk.maxLossUsd} maxLegs={cfg.risk.maxLegs} forbidNakedShorts={String(cfg.risk.forbidNakedShorts)}</Text>
         <Text>Server: {cfg.server.host}:{cfg.server.port}</Text>
         <Text dimColor>(use `regard config` for the interactive editor)</Text>
-        <Exit exit={exit} />
+        <Exit exit={leave} interactive={!!onDone} />
       </Box>
     );
   }
@@ -62,7 +63,7 @@ export function ConfigScreen({ sub }: { sub?: string }) {
       <Box flexDirection="column">
         <Text color="green">{msg || 'Config saved.'}</Text>
         <Text dimColor>{configPath()}</Text>
-        <Exit exit={exit} />
+        <Exit exit={leave} interactive={!!onDone} />
       </Box>
     );
   }
@@ -76,7 +77,7 @@ export function ConfigScreen({ sub }: { sub?: string }) {
           else if (choice === 'active') setMode('pick-active');
           else if (choice === 'remove') setMode('remove');
           else if (choice === 'show') setMode('show');
-          else if (choice === 'quit') exit();
+          else if (choice === 'quit') leave();
         }}
       />
     );
@@ -166,14 +167,16 @@ export function ConfigScreen({ sub }: { sub?: string }) {
   return null;
 }
 
-function Exit({ exit }: { exit: () => void }) {
+function Exit({ exit, interactive }: { exit: () => void; interactive?: boolean }) {
   useInput((input) => {
     if (input === 'q' || input === '\u001b') exit();
+    else if (interactive) exit();
   });
   useEffect(() => {
+    if (interactive) return;
     const t = setTimeout(exit, 100);
     return () => clearTimeout(t);
-  }, [exit]);
+  }, [exit, interactive]);
   return null;
 }
 
