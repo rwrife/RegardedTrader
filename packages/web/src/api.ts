@@ -163,5 +163,5 @@ export interface CliBackendPreset {
 export const CLI_BACKENDS: ReadonlyArray<CliBackendPreset> = [
   { id: 'codex-cli', label: 'Codex CLI', defaultCommand: 'codex' },
   { id: 'claude-cli', label: 'Claude CLI', defaultCommand: 'claude' },
-  { id: 'copilot-cli', label: 'GitHub Copilot CLI', defaultCommand: 'gh' },
+  { id: 'copilot-cli', label: 'GitHub Copilot CLI', defaultCommand: 'copilot' },
 ];
