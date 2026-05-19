@@ -10,6 +10,7 @@ import { createGzip } from 'node:zlib';
 import { createInterface } from 'node:readline';
 import { z } from 'zod';
 import { configHome } from '../config/index.js';
+import { SentimentSnapshot } from '../schemas/sentiment.js';
 
 /**
  * Snapshot kinds tracked per symbol. Each maps to a separate JSONL stream on disk.
@@ -40,6 +41,11 @@ export const LatestSnapshot = z.object({
   symbol: z.string(),
   updatedAt: z.string(),
   entries: z.record(SnapshotEntry).default({}),
+  /**
+   * Optional aggregate sentiment block, written by `MentionStore`. Added in
+   * #31; pre-existing `latest.json` files without this field round-trip fine.
+   */
+  sentiment: SentimentSnapshot.optional(),
 });
 export type LatestSnapshot = z.infer<typeof LatestSnapshot>;
 

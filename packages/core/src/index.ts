@@ -1,5 +1,6 @@
 export * from './schemas/index.js';
 export * from './schemas/config.js';
+export * from './schemas/sentiment.js';
 export * from './tickers/index.js';
 export * from './agents/index.js';
 export * from './indicators/index.js';

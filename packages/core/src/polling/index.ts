@@ -25,3 +25,10 @@ export {
   snapshotsRoot,
   type SnapshotStoreOptions,
 } from './store.js';
+export {
+  MentionStore,
+  MentionKind,
+  MentionRetentionPolicy,
+  DEFAULT_MENTION_RETENTION,
+  type MentionStoreOptions,
+} from './mention-store.js';
