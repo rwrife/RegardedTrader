@@ -101,6 +101,93 @@ describe('GET /tickers/:symbol/quote', () => {
     expect(source).toHaveBeenCalledTimes(2);
   });
 
+  it('serves the last cached value when the upstream throws (e.g. Yahoo 429)', async () => {
+    let n = 0;
+    const source = vi.fn(async (_symbol: string): Promise<YahooQuoteLike> => {
+      n += 1;
+      if (n === 1) {
+        return {
+          symbol: 'AAPL',
+          regularMarketPrice: 200,
+          regularMarketChange: 1,
+          regularMarketChangePercent: 0.5,
+          currency: 'USD',
+          marketState: 'REGULAR',
+          regularMarketTime: new Date('2024-06-12T15:30:00Z'),
+        };
+      }
+      throw new Error(
+        'invalid json response body ... reason: Unexpected token \'T\', "Too Many Requests',
+      );
+    });
+    let now = 2_000_000;
+    const { app } = createApp({
+      market: noopMarket(),
+      webSearch: { async search() { return []; } },
+      watchlist: new WatchlistStore({ path: join(dir, 'wl.json') }),
+      initialConfig: baseConfig(),
+      llmFromConfig: () => null,
+      liveQuoteSource: source,
+      now: () => now,
+    });
+    const url = await listen(app);
+
+    // Prime the cache with a successful first call.
+    const r1 = await fetch(`${url}/tickers/AAPL/quote`);
+    expect(r1.status).toBe(200);
+
+    // Advance past the 5s coalescing TTL so the next request actually hits
+    // the source (which is now configured to throw).
+    now += 10_000;
+    const r2 = await fetch(`${url}/tickers/AAPL/quote`);
+    if (r2.status !== 200) {
+      const txt = await r2.text();
+      throw new Error(`expected 200, got ${r2.status}: ${txt}`);
+    }
+    expect(r2.status).toBe(200);
+    expect(r2.headers.get('x-quote-stale')).toBe('1');
+    const body = (await r2.json()) as { symbol: string; price: number };
+    expect(body.symbol).toBe('AAPL');
+    expect(body.price).toBe(200);
+  });
+
+  it('dedupes concurrent in-flight requests for the same symbol', async () => {
+    let pending: ((v: YahooQuoteLike) => void) | null = null;
+    const source = vi.fn(
+      (_symbol: string): Promise<YahooQuoteLike> =>
+        new Promise<YahooQuoteLike>((resolve) => {
+          pending = resolve;
+        }),
+    );
+    const { app } = createApp({
+      market: noopMarket(),
+      webSearch: { async search() { return []; } },
+      watchlist: new WatchlistStore({ path: join(dir, 'wl.json') }),
+      initialConfig: baseConfig(),
+      llmFromConfig: () => null,
+      liveQuoteSource: source,
+    });
+    const url = await listen(app);
+
+    const p1 = fetch(`${url}/tickers/MSFT/quote`);
+    const p2 = fetch(`${url}/tickers/MSFT/quote`);
+    // Give Express a tick to dispatch both handlers.
+    await new Promise((r) => setTimeout(r, 25));
+    expect(source).toHaveBeenCalledTimes(1);
+    pending!({
+      symbol: 'MSFT',
+      regularMarketPrice: 300,
+      regularMarketChange: 0,
+      regularMarketChangePercent: 0,
+      currency: 'USD',
+      marketState: 'REGULAR',
+      regularMarketTime: new Date('2024-06-12T15:30:00Z'),
+    });
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(r1.status).toBe(200);
+    expect(r2.status).toBe(200);
+  });
+
   it('normalizes an unknown marketState to CLOSED', async () => {
     const source = vi.fn(async (_symbol: string): Promise<YahooQuoteLike> => ({
       regularMarketPrice: 10,

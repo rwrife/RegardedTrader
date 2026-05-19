@@ -100,11 +100,21 @@ export function createApp(deps: AppDeps): AppHandle {
   });
 
   // --- Live quote (#81) ---
-  // Tiny in-memory cache to coalesce bursts from multiple clients.
+  // Tiny in-memory cache to coalesce bursts from multiple clients, plus an
+  // in-flight dedupe map so N concurrent requests for the same symbol only
+  // produce one upstream call. On upstream failure (e.g. Yahoo HTTP 429 /
+  // "Too Many Requests"), we fall back to a recent cached value if we have
+  // one — better to serve a slightly-stale quote than to surface a noisy
+  // error to every poller in the UI.
   if (deps.liveQuoteSource) {
     const source = deps.liveQuoteSource;
     const cache = new Map<string, { at: number; value: LiveQuote }>();
+    const inflight = new Map<string, Promise<LiveQuote>>();
     const CACHE_TTL_MS = 5_000;
+    // How long a cached quote may still be served when the upstream is
+    // failing. 5 minutes is short enough to stay roughly accurate during a
+    // brief Yahoo throttle but long enough to ride out a typical 429 window.
+    const STALE_FALLBACK_MS = 5 * 60_000;
     const now = deps.now ?? Date.now;
 
     app.get('/tickers/:symbol/quote', async (req, res, next) => {
@@ -116,10 +126,37 @@ export function createApp(deps: AppDeps): AppHandle {
           res.json(cached.value);
           return;
         }
-        const fresh = await liveQuote(source, symbol);
-        const parsed = QuoteSchema.parse(fresh);
-        cache.set(symbol, { at: t, value: parsed });
-        res.json(parsed);
+        let pending = inflight.get(symbol);
+        if (!pending) {
+          pending = (async () => {
+            const fresh = await liveQuote(source, symbol);
+            return QuoteSchema.parse(fresh);
+          })();
+          inflight.set(symbol, pending);
+          // Always clear the in-flight slot so a future failure doesn't
+          // permanently poison the symbol.
+          pending.finally(() => {
+            if (inflight.get(symbol) === pending) inflight.delete(symbol);
+          }).catch(() => {
+            // The actual rejection is observed below via `await pending`;
+            // swallow it on this side-chain to avoid an unhandled rejection.
+          });
+        }
+        try {
+          const parsed = await pending;
+          cache.set(symbol, { at: now(), value: parsed });
+          res.json(parsed);
+        } catch (e) {
+          // Upstream fetch failed (commonly Yahoo 429). Serve the last good
+          // value if we have one and it's not absurdly old.
+          const fallback = cache.get(symbol);
+          if (fallback && now() - fallback.at < STALE_FALLBACK_MS) {
+            res.setHeader('X-Quote-Stale', '1');
+            res.json(fallback.value);
+            return;
+          }
+          throw e;
+        }
       } catch (e) {
         next(e);
       }
@@ -368,8 +405,16 @@ export function createDefaultApp(cfg: AppConfigT): AppHandle {
       // yahoo-finance2 is a direct server dep; import dynamically so test
       // suites that don't exercise the live-quote endpoint don't pay the
       // module-load cost.
+      //
+      // We use `quoteCombine` instead of `quote` so that bursts of
+      // per-symbol requests (every visible ticker in the dashboard polls
+      // independently) get batched into a single upstream call. That's the
+      // root cause of the Yahoo `HTTP 429 / Too Many Requests` errors we
+      // were seeing — each visible row was firing its own
+      // `https://query2.finance.yahoo.com/v7/finance/quote?symbols=<SYM>`
+      // request, and Yahoo throttles aggressively per client.
       const mod = await import('yahoo-finance2');
-      return (await mod.default.quote(symbol)) as Awaited<
+      return (await mod.default.quoteCombine(symbol)) as Awaited<
         ReturnType<LiveQuoteSource>
       >;
     },
