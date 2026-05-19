@@ -88,7 +88,7 @@ export interface SampleTicker {
   name: string;
   exchange: string;
   sector: string;
-  candles: { o: number; h: number; l: number; c: number }[]; // last 90 sessions
+  candles: { o: number; h: number; l: number; c: number; v: number }[]; // last 90 sessions
   quote: SampleQuote;
   indicators: SampleIndicators;
   briefing: SampleBriefing;
@@ -115,14 +115,24 @@ function rng(seed: number) {
 function genCandles(seed: number, start: number, drift = 0.0008, vol = 0.018) {
   const r = rng(seed);
   let p = start;
-  const out: { o: number; h: number; l: number; c: number }[] = [];
+  const out: { o: number; h: number; l: number; c: number; v: number }[] = [];
+  // Pick a plausible average daily volume per fixture (seed-derived so it
+  // stays stable across renders). Real numbers come from the server when the
+  // backend is reachable; this is just sample data for demo mode.
+  const avgVol = 5_000_000 + Math.floor(r() * 60_000_000);
   for (let i = 0; i < 90; i++) {
     const o = p;
     const dailyDrift = drift + (r() - 0.5) * 0.0005;
     const c = +(o * (1 + dailyDrift + (r() - 0.5) * vol)).toFixed(2);
     const h = +(Math.max(o, c) * (1 + r() * vol * 0.5)).toFixed(2);
     const l = +(Math.min(o, c) * (1 - r() * vol * 0.5)).toFixed(2);
-    out.push({ o, h, l, c });
+    // Volume tends to spike on bigger moves; scale by |c-o|/o relative to vol.
+    const moveRatio = Math.abs(c - o) / Math.max(o, 0.01) / Math.max(vol, 1e-6);
+    const v = Math.max(
+      1,
+      Math.floor(avgVol * (0.6 + r() * 0.8 + moveRatio * 0.6)),
+    );
+    out.push({ o, h, l, c, v });
     p = c;
   }
   return out;

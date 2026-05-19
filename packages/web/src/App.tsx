@@ -9,8 +9,10 @@ import {
 } from './sample-data';
 import { Settings } from './routes/settings.js';
 import { useLiveQuote } from './hooks/useLiveQuote.js';
+import { useHistory } from './hooks/useHistory.js';
 import { computeRating } from '@regardedtrader/core/rating';
 import { RatingBadge } from './components/RatingBadge.js';
+import { CandleChart, type Candle } from './components/CandleChart.js';
 
 // Tiny hash-based router so the dashboard stays a single bundle without
 // pulling in react-router. Routes: `#/` (default) and `#/settings`.
@@ -62,7 +64,7 @@ type ValidationResult =
   | { ok: true; profile: TickerProfile; cached?: boolean }
   | { ok: false; symbol: string; error: string; suggestions?: { symbol: string; name?: string; reason?: string }[] };
 
-type Tab = 'briefing' | 'sentiment' | 'news' | 'recommendation' | 'calendar';
+type Tab = 'briefing' | 'sentiment' | 'news' | 'recommendation' | 'calendar' | 'chart';
 
 export function App() {
   const [route, navigate] = useHashRoute();
@@ -118,6 +120,7 @@ export function App() {
               {tab === 'news' && <NewsTab t={ticker} />}
               {tab === 'recommendation' && <RecommendationTab t={ticker} />}
               {tab === 'calendar' && <CalendarTab t={ticker} />}
+              {tab === 'chart' && <ChartTab t={ticker} demo={demo} />}
             </>
           ) : (
             <div className="text-fg-muted text-sm">No ticker selected.</div>
@@ -387,6 +390,7 @@ function TabBar({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
   const tabs: { id: Tab; label: string }[] = [
     { id: 'briefing', label: 'Briefing' },
     { id: 'recommendation', label: 'Recommendation' },
+    { id: 'chart', label: 'Chart' },
     { id: 'sentiment', label: 'Sentiment' },
     { id: 'news', label: 'News' },
     { id: 'calendar', label: 'Calendar' },
@@ -685,6 +689,153 @@ function NewsTab({ t }: { t: SampleTicker }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function ChartTab({ t, demo }: { t: SampleTicker; demo: boolean }) {
+  type Range = 30 | 90 | 180;
+  const [days, setDays] = useState<Range>(90);
+  const history = useHistory(t.symbol, days, { enabled: !demo });
+
+  // Pick the data source: live history when the backend is reachable,
+  // otherwise fall back to the sample candles. Sample data is undated, so
+  // we synthesize a trailing date series so the X-axis still labels.
+  const candles: Candle[] = useMemo(() => {
+    if (!demo && history.rows && history.rows.length > 0) {
+      const slice = history.rows.slice(-days);
+      return slice.map((r) => ({ t: r.t, o: r.o, h: r.h, l: r.l, c: r.c, v: r.v }));
+    }
+    const slice = t.candles.slice(-days);
+    const today = new Date();
+    return slice.map((c, i) => {
+      const d = new Date(today);
+      d.setDate(today.getDate() - (slice.length - 1 - i));
+      return { ...c, t: d.toISOString().slice(0, 10) };
+    });
+  }, [demo, history.rows, days, t.candles]);
+
+  const today = candles[candles.length - 1];
+  const prev = candles[candles.length - 2];
+  const change = today && prev ? today.c - prev.c : 0;
+  const changePct = today && prev && prev.c !== 0 ? (change / prev.c) * 100 : 0;
+  const up = change >= 0;
+
+  // Average volume across the visible window minus today, so today's volume
+  // ratio is comparable to a true "recent average".
+  const avgVol = useMemo(() => {
+    if (candles.length <= 1) return 0;
+    const prior = candles.slice(0, -1);
+    const sum = prior.reduce((a, c) => a + c.v, 0);
+    return sum / prior.length;
+  }, [candles]);
+  const volRatio = today && avgVol > 0 ? today.v / avgVol : null;
+
+  const fmtVol = (v: number): string => {
+    if (v >= 1e9) return `${(v / 1e9).toFixed(2)}B`;
+    if (v >= 1e6) return `${(v / 1e6).toFixed(2)}M`;
+    if (v >= 1e3) return `${(v / 1e3).toFixed(1)}K`;
+    return `${v}`;
+  };
+
+  const ranges: Range[] = [30, 90, 180];
+
+  return (
+    <div className="border border-border-subtle bg-surface rounded p-4 space-y-4">
+      <div className="flex items-baseline justify-between gap-3 flex-wrap">
+        <h3 className="text-[10px] font-mono tracking-wider text-fg-muted uppercase">
+          Price & Volume
+        </h3>
+        <div className="flex items-center gap-1 text-[11px]">
+          {ranges.map((r) => (
+            <button
+              key={r}
+              type="button"
+              onClick={() => setDays(r)}
+              className={`px-2 py-0.5 rounded border ${
+                days === r
+                  ? 'border-ai text-ai bg-ai/10'
+                  : 'border-border-subtle text-fg-muted hover:text-fg-secondary'
+              }`}
+              aria-pressed={days === r}
+              aria-label={`Show last ${r} days`}
+            >
+              {r}D
+            </button>
+          ))}
+          {history.isLoading && (
+            <span className="ml-2 text-fg-muted">loading…</span>
+          )}
+          {history.error && !demo && (
+            <span
+              className="ml-2 text-down"
+              title={history.error}
+              aria-label={`history fetch error: ${history.error}`}
+            >
+              ⚠ history error
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Today's stats strip */}
+      {today && (
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
+          <Stat label="Open" value={`$${today.o.toFixed(2)}`} />
+          <Stat label="High" value={`$${today.h.toFixed(2)}`} />
+          <Stat label="Low" value={`$${today.l.toFixed(2)}`} />
+          <Stat
+            label="Close"
+            value={`$${today.c.toFixed(2)}`}
+            sub={`${up ? '+' : ''}${change.toFixed(2)} (${up ? '+' : ''}${changePct.toFixed(2)}%)`}
+            subClass={up ? 'text-up' : 'text-down'}
+          />
+          <Stat
+            label="Volume"
+            value={fmtVol(today.v)}
+            sub={
+              volRatio !== null
+                ? `${volRatio.toFixed(2)}× avg`
+                : undefined
+            }
+            subClass={
+              volRatio !== null && volRatio >= 1.25
+                ? 'text-up'
+                : volRatio !== null && volRatio <= 0.75
+                  ? 'text-down'
+                  : 'text-fg-muted'
+            }
+          />
+        </div>
+      )}
+
+      <div className="w-full">
+        <CandleChart candles={candles} className="w-full h-[340px]" />
+      </div>
+
+      <p className="text-[11px] text-fg-muted italic">{DISCLAIMER}</p>
+    </div>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  sub,
+  subClass,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  subClass?: string;
+}) {
+  return (
+    <div className="border border-border-subtle rounded p-2">
+      <div className="text-[10px] font-mono tracking-wider text-fg-muted uppercase">
+        {label}
+      </div>
+      <div className="num text-sm text-fg">{value}</div>
+      {sub && <div className={`num text-[11px] ${subClass ?? 'text-fg-muted'}`}>{sub}</div>}
     </div>
   );
 }
