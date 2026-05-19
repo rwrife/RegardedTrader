@@ -358,6 +358,20 @@ function LiveQuoteIndicator({
     return () => clearInterval(id);
   }, []);
   if (error) {
+    // Surface the "please configure a provider" 503 with an actionable hint
+    // rather than the generic "live quote error" badge.
+    const needsProvider = /no market-data provider/i.test(error);
+    if (needsProvider) {
+      return (
+        <span
+          className="text-[10px] font-mono tracking-wider text-down"
+          title={error}
+          aria-label="market-data provider not configured"
+        >
+          ⚠ configure provider in Settings
+        </span>
+      );
+    }
     return (
       <span
         className="text-[10px] font-mono tracking-wider text-down"

@@ -79,7 +79,18 @@ export function useLiveQuote(
       let next: LiveQuote | null = quoteRef.current;
       try {
         const res = await f(`${base}/tickers/${encodeURIComponent(symbol)}/quote`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) {
+          // Try to surface the server's structured error message (e.g. the
+          // 503 "No market-data provider configured" we emit from /api/...).
+          let detail = `HTTP ${res.status}`;
+          try {
+            const body = (await res.json()) as { error?: string };
+            if (body && typeof body.error === 'string') detail = body.error;
+          } catch {
+            /* non-JSON body — keep the status code as the message */
+          }
+          throw new Error(detail);
+        }
         const raw = (await res.json()) as unknown;
         const parsed = QuoteSchema.parse(raw);
         if (cancelled) return;

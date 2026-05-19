@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createApi, maskApiKey, HTTP_PRESETS, CLI_BACKENDS } from './api.js';
+import { createApi, maskApiKey, HTTP_PRESETS, CLI_BACKENDS, MARKET_PROVIDER_PRESETS } from './api.js';
 import type { AiProvider } from '@regardedtrader/core';
 
 function fakeFetch(handler: (url: string, init?: RequestInit) => Response | Promise<Response>) {
@@ -140,5 +140,44 @@ describe('presets', () => {
       'claude-cli',
       'copilot-cli',
     ]);
+  });
+
+  it('exposes market-data presets with finnhub first', () => {
+    expect(MARKET_PROVIDER_PRESETS.map((p) => p.kind)).toEqual(['finnhub', 'yahoo']);
+  });
+});
+
+describe('market-data API methods', () => {
+  it('POSTs to /config/market-data/providers when upserting', async () => {
+    const seen: Array<{ url: string; init?: RequestInit }> = [];
+    const f: typeof fetch = async (input, init) => {
+      seen.push({ url: String(input), init });
+      return new Response(
+        JSON.stringify({ ok: true, activeMarketProvider: 'fin', config: {} }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    };
+    const api = createApi({ fetchImpl: f });
+    const r = await api.upsertMarketProvider('fin', {
+      kind: 'finnhub',
+      label: 'Finnhub',
+      apiKey: 'k',
+      baseUrl: 'https://finnhub.io/api/v1',
+    });
+    expect(r.activeMarketProvider).toBe('fin');
+    expect(seen[0]?.url).toContain('/config/market-data/providers');
+    expect(seen[0]?.init?.method).toBe('POST');
+  });
+
+  it('returns a structured error when testMarketProvider fails', async () => {
+    const f: typeof fetch = async () =>
+      new Response(JSON.stringify({ ok: false, error: 'No market-data provider configured' }), {
+        status: 503,
+        headers: { 'content-type': 'application/json' },
+      });
+    const api = createApi({ fetchImpl: f });
+    const r = await api.testMarketProvider();
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/No market-data provider/);
   });
 });

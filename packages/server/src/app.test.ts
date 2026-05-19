@@ -83,6 +83,7 @@ describe('POST /tickers/validate', () => {
         activeProvider: 'fake',
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true },
         server: { host: '127.0.0.1', port: 4317 },
+        marketData: { providers: {}, activeProvider: null },
       },
       llmFromConfig: () => fakeLLM(goodReply),
     });
@@ -133,6 +134,7 @@ describe('POST /tickers/validate', () => {
         activeProvider: 'fake',
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true },
         server: { host: '127.0.0.1', port: 4317 },
+        marketData: { providers: {}, activeProvider: null },
       },
       llmFromConfig: () => fakeLLM(goodReply),
     });
@@ -160,6 +162,7 @@ describe('POST /tickers/validate', () => {
         activeProvider: null,
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true },
         server: { host: '127.0.0.1', port: 4317 },
+        marketData: { providers: {}, activeProvider: null },
       },
       llmFromConfig: () => null,
     });

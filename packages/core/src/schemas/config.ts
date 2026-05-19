@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { MarketDataConfig } from './marketData.js';
+export * from './marketData.js';
 
 /** OpenAI-compatible HTTP endpoint (OpenAI, Azure OpenAI, OpenRouter, Groq, Together, local Ollama, vLLM, etc.) */
 export const OpenAICompatibleProvider = z.object({
@@ -60,6 +62,8 @@ export const AppConfig = z.object({
       port: z.number().int().min(1).max(65535).default(4317),
     })
     .default({ host: '127.0.0.1', port: 4317 }),
+  /** Pluggable market-data provider config (#91). */
+  marketData: MarketDataConfig,
 });
 export type AppConfig = z.infer<typeof AppConfig>;
 
@@ -75,7 +79,16 @@ export function redactConfig(cfg: AppConfig): AppConfig {
       providers[id] = p;
     }
   }
-  return { ...cfg, providers };
+  const md = cfg.marketData;
+  const mdProviders: Record<string, MarketDataConfig['providers'][string]> = {};
+  for (const [id, p] of Object.entries(md.providers)) {
+    if (p.kind === 'finnhub' && p.apiKey) {
+      mdProviders[id] = { ...p, apiKey: maskKey(p.apiKey) };
+    } else {
+      mdProviders[id] = p;
+    }
+  }
+  return { ...cfg, providers, marketData: { ...md, providers: mdProviders } };
 }
 
 function maskKey(k: string): string {
