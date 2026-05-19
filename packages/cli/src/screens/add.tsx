@@ -3,6 +3,7 @@ import { Box, Text, useApp } from 'ink';
 import Spinner from 'ink-spinner';
 import type { ValidationResult, TickerProfile } from '@regardedtrader/core';
 import { api } from '../api.js';
+import { ReturnPrompt } from './menu.js';
 
 const DISCLAIMER = 'Not financial advice. Educational/research output.';
 
@@ -16,10 +17,12 @@ export function AddScreen({
   symbols,
   refresh,
   serverUrl,
+  onDone,
 }: {
   symbols: string[];
   refresh: boolean;
   serverUrl: string;
+  onDone?: () => void;
 }) {
   const { exit } = useApp();
   const [state, setState] = useState<State>({ loading: true, results: [], err: null });
@@ -27,7 +30,7 @@ export function AddScreen({
   useEffect(() => {
     if (symbols.length === 0) {
       setState({ loading: false, results: [], err: 'Usage: regard add <SYM> [<SYM>...] [--refresh]' });
-      setTimeout(() => exit(), 50);
+      if (!onDone) setTimeout(() => exit(), 50);
       return;
     }
     api<{ results: ValidationResult[] }>(serverUrl, '/tickers/validate', {
@@ -36,10 +39,18 @@ export function AddScreen({
     })
       .then((r) => setState({ loading: false, results: r.results, err: null }))
       .catch((e) => setState({ loading: false, results: [], err: String(e) }))
-      .finally(() => setTimeout(() => exit(), 50));
-  }, [symbols, refresh, serverUrl, exit]);
+      .finally(() => {
+        if (!onDone) setTimeout(() => exit(), 50);
+      });
+  }, [symbols, refresh, serverUrl, exit, onDone]);
 
-  if (state.err) return <Text color="red">{state.err}</Text>;
+  if (state.err)
+    return (
+      <Box flexDirection="column">
+        <Text color="red">{state.err}</Text>
+        {onDone && <ReturnPrompt onDone={onDone} />}
+      </Box>
+    );
   if (state.loading)
     return (
       <Text>
@@ -55,6 +66,7 @@ export function AddScreen({
       <Text dimColor italic>
         {DISCLAIMER}
       </Text>
+      {onDone && <ReturnPrompt onDone={onDone} />}
     </Box>
   );
 }

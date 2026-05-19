@@ -3,8 +3,15 @@ import { Box, Text, useApp } from 'ink';
 import Spinner from 'ink-spinner';
 import type { WatchlistEntry } from '@regardedtrader/core';
 import { api } from '../api.js';
+import { ReturnPrompt } from './menu.js';
 
-export function ListScreen({ serverUrl }: { serverUrl: string }) {
+export function ListScreen({
+  serverUrl,
+  onDone,
+}: {
+  serverUrl: string;
+  onDone?: () => void;
+}) {
   const { exit } = useApp();
   const [data, setData] = useState<WatchlistEntry[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -13,10 +20,18 @@ export function ListScreen({ serverUrl }: { serverUrl: string }) {
     api<{ entries: WatchlistEntry[] }>(serverUrl, '/tickers')
       .then((r) => setData(r.entries))
       .catch((e) => setErr(String(e)))
-      .finally(() => setTimeout(() => exit(), 50));
-  }, [serverUrl, exit]);
+      .finally(() => {
+        if (!onDone) setTimeout(() => exit(), 50);
+      });
+  }, [serverUrl, exit, onDone]);
 
-  if (err) return <Text color="red">{err}</Text>;
+  if (err)
+    return (
+      <Box flexDirection="column">
+        <Text color="red">{err}</Text>
+        {onDone && <ReturnPrompt onDone={onDone} />}
+      </Box>
+    );
   if (!data)
     return (
       <Text>
@@ -28,6 +43,7 @@ export function ListScreen({ serverUrl }: { serverUrl: string }) {
       <Box flexDirection="column">
         <Text dimColor>No tickers yet.</Text>
         <Text>Add one with: <Text bold>regard add NVDA</Text></Text>
+        {onDone && <ReturnPrompt onDone={onDone} />}
       </Box>
     );
 
@@ -42,19 +58,30 @@ export function ListScreen({ serverUrl }: { serverUrl: string }) {
           <Text dimColor>{e.profile.sector}</Text>
         </Text>
       ))}
+      {onDone && <ReturnPrompt onDone={onDone} />}
     </Box>
   );
 }
 
-export function RemoveScreen({ symbol, serverUrl }: { symbol: string; serverUrl: string }) {
+export function RemoveScreen({
+  symbol,
+  serverUrl,
+  onDone,
+}: {
+  symbol: string;
+  serverUrl: string;
+  onDone?: () => void;
+}) {
   const { exit } = useApp();
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [finished, setFinished] = useState(false);
 
   useEffect(() => {
     if (!symbol) {
       setErr('Usage: regard rm <SYM>');
-      setTimeout(() => exit(), 50);
+      setFinished(true);
+      if (!onDone) setTimeout(() => exit(), 50);
       return;
     }
     api<{ ok: boolean; removed: boolean }>(serverUrl, `/tickers/${encodeURIComponent(symbol.toUpperCase())}`, {
@@ -64,10 +91,24 @@ export function RemoveScreen({ symbol, serverUrl }: { symbol: string; serverUrl:
         setMsg(r.removed ? `Removed ${symbol.toUpperCase()}` : `${symbol.toUpperCase()} not in watchlist`),
       )
       .catch((e) => setErr(String(e)))
-      .finally(() => setTimeout(() => exit(), 50));
-  }, [symbol, serverUrl, exit]);
+      .finally(() => {
+        setFinished(true);
+        if (!onDone) setTimeout(() => exit(), 50);
+      });
+  }, [symbol, serverUrl, exit, onDone]);
 
-  if (err) return <Text color="red">{err}</Text>;
+  if (err)
+    return (
+      <Box flexDirection="column">
+        <Text color="red">{err}</Text>
+        {onDone && finished && <ReturnPrompt onDone={onDone} />}
+      </Box>
+    );
   if (!msg) return <Text><Spinner type="dots" /> removing…</Text>;
-  return <Text>{msg}</Text>;
+  return (
+    <Box flexDirection="column">
+      <Text>{msg}</Text>
+      {onDone && finished && <ReturnPrompt onDone={onDone} />}
+    </Box>
+  );
 }

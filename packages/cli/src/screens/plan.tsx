@@ -4,10 +4,19 @@ import TextInput from 'ink-text-input';
 import Spinner from 'ink-spinner';
 import type { TradePlan } from '@regardedtrader/core';
 import { api } from '../api.js';
+import { ReturnPrompt } from './menu.js';
 
 type PlanResult = { plan: TradePlan; ok: boolean; violations: string[] };
 
-export function PlanScreen({ symbol, serverUrl }: { symbol: string; serverUrl: string }) {
+export function PlanScreen({
+  symbol,
+  serverUrl,
+  onDone,
+}: {
+  symbol: string;
+  serverUrl: string;
+  onDone?: () => void;
+}) {
   const { exit } = useApp();
   const [stage, setStage] = useState<'thesis' | 'budget' | 'loading' | 'done' | 'err'>(
     symbol ? 'thesis' : 'err',
@@ -19,11 +28,17 @@ export function PlanScreen({ symbol, serverUrl }: { symbol: string; serverUrl: s
 
   useEffect(() => {
     if (stage === 'done' || stage === 'err') {
-      setTimeout(() => exit(), 50);
+      if (!onDone) setTimeout(() => exit(), 50);
     }
-  }, [stage, exit]);
+  }, [stage, exit, onDone]);
 
-  if (stage === 'err') return <Text color="red">{err}</Text>;
+  if (stage === 'err')
+    return (
+      <Box flexDirection="column">
+        <Text color="red">{err}</Text>
+        {onDone && <ReturnPrompt onDone={onDone} />}
+      </Box>
+    );
 
   if (stage === 'thesis') {
     return (
@@ -106,6 +121,7 @@ export function PlanScreen({ symbol, serverUrl }: { symbol: string; serverUrl: s
           {r.plan.notes && <Text dimColor>{r.plan.notes}</Text>}
         </Box>
       ))}
+      {onDone && <ReturnPrompt onDone={onDone} />}
     </Box>
   );
 }

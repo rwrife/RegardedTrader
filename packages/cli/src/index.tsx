@@ -3,11 +3,13 @@ import React from 'react';
 import { render } from 'ink';
 import meow from 'meow';
 import { App } from './app.js';
+import { MainMenu } from './screens/menu.js';
 
 const cli = meow(
   `
   Usage
-    $ regard <command> [args]
+    $ regard                   Launch interactive menu
+    $ regard <command> [args]  Run a single action
 
   Commands
     add <SYM>...               Validate ticker(s) via web search + LLM and add to watchlist
@@ -24,6 +26,7 @@ const cli = meow(
     --refresh                  (add) Force re-validation, bypassing 7-day cache
 
   Examples
+    $ regard
     $ regard add NVDA AAPL
     $ regard ls
     $ regard rm NVDA
@@ -35,21 +38,26 @@ const cli = meow(
     flags: {
       server: { type: 'string', default: 'http://127.0.0.1:4317' },
       refresh: { type: 'boolean', default: false },
+      help: { type: 'boolean', shortFlag: 'h' },
     },
   },
 );
 
 const [command, ...args] = cli.input;
 
-if (!command) {
+if (cli.flags.help) {
   cli.showHelp(0);
 }
 
-render(
-  <App
-    command={command ?? 'help'}
-    args={args}
-    serverUrl={cli.flags.server}
-    flags={{ refresh: cli.flags.refresh }}
-  />,
-);
+if (!command) {
+  render(<MainMenu serverUrl={cli.flags.server} />);
+} else {
+  render(
+    <App
+      command={command}
+      args={args}
+      serverUrl={cli.flags.server}
+      flags={{ refresh: cli.flags.refresh }}
+    />,
+  );
+}
