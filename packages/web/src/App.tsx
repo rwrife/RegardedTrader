@@ -105,6 +105,7 @@ export function App() {
             onPick={setActive}
             query={query}
             setQuery={setQuery}
+            demo={demo}
           />
           <CalendarStrip />
         </aside>
@@ -186,11 +187,13 @@ function Watchlist({
   onPick,
   query,
   setQuery,
+  demo,
 }: {
   active: string;
   onPick: (s: string) => void;
   query: string;
   setQuery: (s: string) => void;
+  demo: boolean;
 }) {
   const filtered = SAMPLE_TICKERS.filter(
     (t) =>
@@ -209,28 +212,55 @@ function Watchlist({
         />
       </div>
       <ul className="text-xs">
-        {filtered.map((t) => {
-          const up = t.quote.change >= 0;
-          return (
-            <li key={t.symbol}>
-              <button
-                onClick={() => onPick(t.symbol)}
-                className={`w-full text-left px-3 py-2 flex items-baseline gap-2 hover:bg-surface-2 ${
-                  active === t.symbol ? 'bg-surface-2' : ''
-                }`}
-              >
-                <span className="font-semibold tracking-tight w-12">{t.symbol}</span>
-                <span className="num text-fg-secondary">${t.quote.price.toFixed(2)}</span>
-                <span className={`num ml-auto ${up ? 'text-up' : 'text-down'}`}>
-                  {up ? '▲' : '▼'} {up ? '+' : ''}
-                  {t.quote.changePercent.toFixed(2)}%
-                </span>
-              </button>
-            </li>
-          );
-        })}
+        {filtered.map((t) => (
+          <WatchlistRow
+            key={t.symbol}
+            t={t}
+            active={active === t.symbol}
+            onPick={onPick}
+            demo={demo}
+          />
+        ))}
       </ul>
     </div>
+  );
+}
+
+function WatchlistRow({
+  t,
+  active,
+  onPick,
+  demo,
+}: {
+  t: SampleTicker;
+  active: boolean;
+  onPick: (s: string) => void;
+  demo: boolean;
+}) {
+  // Subscribe each row to live quotes when the backend is reachable. The hook
+  // pauses polling when the tab is hidden and adapts cadence to market state,
+  // so N rows == N polls but each one is cheap.
+  const live = useLiveQuote(t.symbol, { enabled: !demo });
+  const price = live.quote?.price ?? t.quote.price;
+  const change = live.quote?.change ?? t.quote.change;
+  const changePercent = live.quote?.changePercent ?? t.quote.changePercent;
+  const up = change >= 0;
+  return (
+    <li>
+      <button
+        onClick={() => onPick(t.symbol)}
+        className={`w-full text-left px-3 py-2 flex items-baseline gap-2 hover:bg-surface-2 ${
+          active ? 'bg-surface-2' : ''
+        }`}
+      >
+        <span className="font-semibold tracking-tight w-12">{t.symbol}</span>
+        <span className="num text-fg-secondary">${price.toFixed(2)}</span>
+        <span className={`num ml-auto ${up ? 'text-up' : 'text-down'}`}>
+          {up ? '▲' : '▼'} {up ? '+' : ''}
+          {changePercent.toFixed(2)}%
+        </span>
+      </button>
+    </li>
   );
 }
 

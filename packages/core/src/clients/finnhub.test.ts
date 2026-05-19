@@ -119,7 +119,6 @@ describe('FinnhubClient', () => {
   });
 
   it('refuses construction without an apiKey', () => {
-    // @ts-expect-error intentionally invalid
     expect(() => new FinnhubClient({ apiKey: '' })).toThrow(/apiKey is required/);
   });
 });
