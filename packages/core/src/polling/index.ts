@@ -32,3 +32,21 @@ export {
   DEFAULT_MENTION_RETENTION,
   type MentionStoreOptions,
 } from './mention-store.js';
+export {
+  pollNews,
+  parseYahooNews,
+  parseNasdaqNews,
+  parseGoogleNews,
+  parseRssItems,
+  yahooNewsUrl,
+  nasdaqNewsUrl,
+  googleNewsUrl,
+  urlHash,
+  NewsSource,
+  NewsSourceToggles,
+  NewsPollerItem,
+  DEFAULT_NEWS_SOURCES,
+  type NewsNewEvent,
+  type PollNewsOptions,
+  type PollNewsResult,
+} from './jobs/news.js';
