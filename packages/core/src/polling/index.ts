@@ -33,6 +33,19 @@ export {
   type MentionStoreOptions,
 } from './mention-store.js';
 export {
+  pollOptions,
+  computeChainMetrics,
+  OptionsChainMetrics,
+  OptionsChainSnapshot,
+  DEFAULT_OPTIONS_CHAINS,
+  type OptionsChainFetch,
+  type OptionsChainFetcher,
+  type OptionsUpdateEvent,
+  type PollOptionsOptions,
+  type PollOptionsResult,
+} from './jobs/options.js';
+export { createYahooOptionsFetcher } from './jobs/options-yahoo.js';
+export {
   pollNews,
   parseYahooNews,
   parseNasdaqNews,
