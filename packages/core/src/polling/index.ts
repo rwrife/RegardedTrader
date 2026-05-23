@@ -46,6 +46,31 @@ export {
 } from './jobs/options.js';
 export { createYahooOptionsFetcher } from './jobs/options-yahoo.js';
 export {
+  pollQuote,
+  QuotePoller,
+  QuoteSnapshot,
+  DEFAULT_INDICATOR_WINDOW_DAYS,
+  DEFAULT_UNHEALTHY_THRESHOLD,
+  type QuoteSource,
+  type QuoteHistoryFetcher,
+  type QuoteUpdateEvent,
+  type QuoteHealthStatus,
+  type QuoteSymbolHealth,
+  type QuotePollerOptions,
+  type QuotePollOutcome,
+  type PollQuoteOptions,
+  type PollQuoteResult,
+} from './jobs/quote.js';
+export {
+  createYahooQuoteSource,
+  createYahooHistoryFetcher,
+} from './jobs/quote-yahoo.js';
+export {
+  createCnbcQuoteSource,
+  DEFAULT_CNBC_QUOTE_URL,
+  type CnbcQuoteSourceOptions,
+} from './jobs/quote-cnbc.js';
+export {
   pollNews,
   parseYahooNews,
   parseNasdaqNews,
