@@ -11,6 +11,7 @@ import { createInterface } from 'node:readline';
 import { z } from 'zod';
 import { configHome } from '../config/index.js';
 import { SentimentSnapshot } from '../schemas/sentiment.js';
+import { Recommendation } from '../schemas/recommendation.js';
 
 /**
  * Snapshot kinds tracked per symbol. Each maps to a separate JSONL stream on disk.
@@ -46,6 +47,12 @@ export const LatestSnapshot = z.object({
    * #31; pre-existing `latest.json` files without this field round-trip fine.
    */
   sentiment: SentimentSnapshot.optional(),
+  /**
+   * Optional latest recommendation block, written by `RecommendationStore`
+   * (#45). Pre-existing `latest.json` files without this field round-trip
+   * fine.
+   */
+  recommendation: Recommendation.optional(),
 });
 export type LatestSnapshot = z.infer<typeof LatestSnapshot>;
 
