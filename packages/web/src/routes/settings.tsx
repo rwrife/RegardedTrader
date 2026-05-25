@@ -83,28 +83,23 @@ export function Settings(props: SettingsProps): JSX.Element {
 
   const onTest = async (id: string): Promise<void> => {
     setTestResults((prev) => ({ ...prev, [id]: undefined }));
-    if (!config || config.activeProvider !== id) {
-      // /config/test is wired to the active provider. Activate first so the
-      // test reflects the row the user clicked.
-      try {
-        const r = await api.activateProvider(id);
-        refresh(r.config);
-      } catch (e) {
-        setTestResults((prev) => ({
-          ...prev,
-          [id]: { ok: false, message: e instanceof Error ? e.message : String(e) },
-        }));
-        return;
-      }
+    // The new /config/test endpoint accepts an explicit providerId, so we no
+    // longer need to activate the row first — the test reflects exactly the
+    // row the user clicked, even if it's not the active provider.
+    const r = await api.testActive(id);
+    if (r.ok) {
+      const detail = r.model ? `${r.model} · ${r.latencyMs}ms` : `${r.latencyMs}ms`;
+      setTestResults((prev) => ({
+        ...prev,
+        [id]: { ok: true, message: `OK · ${detail}` },
+      }));
+    } else {
+      const hint = r.error.hint ? ` — ${r.error.hint}` : '';
+      setTestResults((prev) => ({
+        ...prev,
+        [id]: { ok: false, message: `${r.error.message}${hint}` },
+      }));
     }
-    const r = await api.testActive();
-    setTestResults((prev) => ({
-      ...prev,
-      [id]: {
-        ok: !!r.ok,
-        message: r.ok ? r.sample?.trim() || 'OK' : r.error || 'Test failed',
-      },
-    }));
   };
 
   const onAdd = async (id: string, provider: AiProvider): Promise<void> => {

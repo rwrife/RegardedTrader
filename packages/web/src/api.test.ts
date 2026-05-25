@@ -84,14 +84,44 @@ describe('api client', () => {
     expect(r.config.activeProvider).toBe('local');
   });
 
-  it('testActive surfaces a structured failure response without throwing', async () => {
-    const f = fakeFetch(() =>
-      jsonResponse({ ok: false, error: 'No active provider' }, { status: 503 }),
-    );
+  it('testActive POSTs the providerId and surfaces structured failures without throwing', async () => {
+    const f = fakeFetch((url, init) => {
+      expect(url).toBe('/api/config/test');
+      expect(init?.method).toBe('POST');
+      const body = JSON.parse(String(init?.body));
+      expect(body).toEqual({ providerId: 'openai' });
+      return jsonResponse({
+        ok: false,
+        providerId: 'openai',
+        error: { code: 'no_provider', message: 'No provider', hint: 'add one' },
+      });
+    });
+    const api = createApi({ fetchImpl: f });
+    const r = await api.testActive('openai');
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe('no_provider');
+      expect(r.error.hint).toBe('add one');
+    }
+  });
+
+  it('testActive returns the success payload with latencyMs + model', async () => {
+    const f = fakeFetch((_url, init) => {
+      expect(JSON.parse(String(init?.body))).toEqual({});
+      return jsonResponse({
+        ok: true,
+        latencyMs: 123,
+        model: 'gpt-4o-mini',
+        providerId: 'openai',
+      });
+    });
     const api = createApi({ fetchImpl: f });
     const r = await api.testActive();
-    expect(r.ok).toBe(false);
-    expect(r.error).toBe('No active provider');
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.latencyMs).toBe(123);
+      expect(r.model).toBe('gpt-4o-mini');
+    }
   });
 
   it('throws with a server-provided error message on non-OK config responses', async () => {

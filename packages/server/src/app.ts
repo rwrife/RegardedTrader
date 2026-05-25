@@ -12,6 +12,9 @@ import {
   activeLLM,
   AppConfig,
   AiProvider,
+  ConfigTestResult,
+  buildLLM,
+  type ConfigTestResult as ConfigTestResultT,
   MarketDataProviderConfig,
   createMarketDataRegistry,
   TickerValidator,
@@ -20,6 +23,7 @@ import {
   type WebSearch,
   type LLM,
   type AppConfig as AppConfigT,
+  type AiProvider as AiProviderT,
   type WatchlistEntry,
   type ValidationResult,
   type MarketDataClient,
@@ -36,6 +40,12 @@ export interface AppDeps {
   webSearch: WebSearch;
   /** Build an LLM from current config; returns null if not configured. */
   llmFromConfig: (cfg: AppConfigT) => LLM | null;
+  /**
+   * Build an LLM for a specific provider config — used by the
+   * `POST /config/test` smoke-test endpoint so it can probe any configured
+   * provider, not just the active one. Defaults to `buildLLM` from core.
+   */
+  buildLLMForProvider?: (provider: AiProviderT) => LLM;
   watchlist: WatchlistStore;
   initialConfig: AppConfigT;
   /**
@@ -487,20 +497,123 @@ export function createApp(deps: AppDeps): AppHandle {
     }
   });
 
-  app.post('/config/test', async (_req, res) => {
-    if (!orchestrator) {
-      res.status(503).json({ ok: false, error: 'No active provider' });
+  /**
+   * Provider smoke test (AGENTS.md requirement). Sends a one-token "ping" prompt
+   * to the named provider — or the active one if `providerId` is omitted — and
+   * reports `{ ok, latencyMs, model }` or a structured `{ ok:false, error }`.
+   *
+   * Notes:
+   *  - Always responds 200 with a Zod-validated `ConfigTestResult`. The HTTP
+   *    status mirrors HTTP success; failure is reported in the body so the UI
+   *    can render a toast without dealing with two separate error channels.
+   *  - Never echoes the API key. The `provider` config object never leaves
+   *    this handler.
+   *  - 10s timeout per provider call. CLI backends spawn a subprocess that
+   *    can hang on auth flows; the timeout keeps the UI snappy.
+   */
+  app.post('/config/test', async (req, res) => {
+    const body = z
+      .object({ providerId: z.string().min(1).optional() })
+      .safeParse(req.body ?? {});
+    if (!body.success) {
+      const result: ConfigTestResultT = {
+        ok: false,
+        error: {
+          code: 'provider_error',
+          message: 'Invalid request body',
+          hint: 'Send `{}` or `{ providerId: "<id>" }`.',
+        },
+      };
+      res.json(ConfigTestResult.parse(result));
       return;
     }
+
+    const providerId = body.data.providerId ?? cfg.activeProvider ?? undefined;
+    if (!providerId) {
+      const result: ConfigTestResultT = {
+        ok: false,
+        error: {
+          code: 'no_provider',
+          message: 'No provider id given and no active provider configured.',
+          hint: 'Add a provider with `regard config` or in Settings, then try again.',
+        },
+      };
+      res.json(ConfigTestResult.parse(result));
+      return;
+    }
+
+    const provider = cfg.providers[providerId];
+    if (!provider) {
+      const result: ConfigTestResultT = {
+        ok: false,
+        providerId,
+        error: {
+          code: 'unknown_provider',
+          message: `Provider "${providerId}" is not configured.`,
+          hint: 'Pick a provider that exists in Settings / `regard config show`.',
+        },
+      };
+      res.json(ConfigTestResult.parse(result));
+      return;
+    }
+
+    const model = provider.kind === 'openai-compatible' ? provider.model : provider.model;
+    const TIMEOUT_MS = 10_000;
+    const started = Date.now();
     try {
-      const llm = activeLLM(cfg);
-      const out = await llm.complete({
-        system: 'You are a probe. Reply with the single word OK.',
-        user: 'ping',
-      });
-      res.json({ ok: true, sample: out.slice(0, 200) });
+      const llm = (deps.buildLLMForProvider ?? buildLLM)(provider);
+      const out = await Promise.race<string>([
+        llm.complete({
+          system: 'You are a probe. Reply with the single word OK.',
+          user: 'ping',
+        }),
+        new Promise<string>((_, reject) =>
+          setTimeout(() => reject(new Error('TIMEOUT')), TIMEOUT_MS),
+        ),
+      ]);
+      const latencyMs = Date.now() - started;
+      if (!out || !out.trim()) {
+        const result: ConfigTestResultT = {
+          ok: false,
+          providerId,
+          error: {
+            code: 'empty_response',
+            message: 'Provider returned an empty response.',
+            hint: 'Check that the configured model exists and your key has access to it.',
+          },
+        };
+        res.json(ConfigTestResult.parse(result));
+        return;
+      }
+      const result: ConfigTestResultT = {
+        ok: true,
+        latencyMs,
+        ...(model ? { model } : {}),
+        providerId,
+      };
+      res.json(ConfigTestResult.parse(result));
     } catch (e) {
-      res.status(500).json({ ok: false, error: (e as Error).message });
+      const raw = e instanceof Error ? e.message : String(e);
+      const code = raw === 'TIMEOUT' ? 'timeout' : 'provider_error';
+      // Defensive scrub: in case a provider stuffs the API key into its error
+      // message (some SDKs do), strip anything that looks like a stored key.
+      let message = raw === 'TIMEOUT' ? `Provider did not respond within ${TIMEOUT_MS}ms.` : raw;
+      if (provider.kind === 'openai-compatible' && provider.apiKey) {
+        message = message.split(provider.apiKey).join('***');
+      }
+      const result: ConfigTestResultT = {
+        ok: false,
+        providerId,
+        error: {
+          code,
+          message: message.slice(0, 500),
+          hint:
+            code === 'timeout'
+              ? 'Try again, or check your network / provider status.'
+              : 'Verify the base URL, model id, and API key in Settings.',
+        },
+      };
+      res.json(ConfigTestResult.parse(result));
     }
   });
 

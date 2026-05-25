@@ -7,9 +7,14 @@
  * types from the shared `@regardedtrader/core` schemas so the wire format
  * stays in lockstep with the server.
  */
-import type { AppConfig, AiProvider, MarketDataProviderConfig } from '@regardedtrader/core';
+import type {
+  AppConfig,
+  AiProvider,
+  ConfigTestResult,
+  MarketDataProviderConfig,
+} from '@regardedtrader/core';
 
-export type { AppConfig, AiProvider, MarketDataProviderConfig };
+export type { AppConfig, AiProvider, ConfigTestResult, MarketDataProviderConfig };
 
 export interface ConfigResponse {
   ok: boolean;
@@ -17,11 +22,12 @@ export interface ConfigResponse {
   config: AppConfig;
 }
 
-export interface TestResponse {
-  ok: boolean;
-  sample?: string;
-  error?: string;
-}
+/**
+ * `POST /config/test` response. This is the same Zod-validated
+ * `ConfigTestResult` discriminated union the server emits — always 200, with
+ * success/failure carried in `ok`.
+ */
+export type TestResponse = ConfigTestResult;
 
 export interface MarketDataConfigResponse {
   ok: boolean;
@@ -42,7 +48,7 @@ export interface ApiClient {
   upsertProvider(id: string, provider: AiProvider): Promise<ConfigResponse>;
   removeProvider(id: string): Promise<ConfigResponse>;
   activateProvider(id: string): Promise<ConfigResponse>;
-  testActive(): Promise<TestResponse>;
+  testActive(providerId?: string): Promise<TestResponse>;
   upsertMarketProvider(id: string, provider: MarketDataProviderConfig): Promise<MarketDataConfigResponse>;
   removeMarketProvider(id: string): Promise<MarketDataConfigResponse>;
   activateMarketProvider(id: string | null): Promise<MarketDataConfigResponse>;
@@ -107,15 +113,28 @@ export function createApi(opts: ApiOptions = {}): ApiClient {
       const res = await f(url('/config/activate'), json({ id }));
       return readJson<ConfigResponse>(res);
     },
-    async testActive() {
-      const res = await f(url('/config/test'), { method: 'POST' });
-      // /config/test returns 503/500 with `ok:false` on failure rather than
-      // throwing — surface the structured payload to the caller.
+    async testActive(providerId?: string) {
+      const res = await f(
+        url('/config/test'),
+        json(providerId ? { providerId } : {}),
+      );
+      // /config/test always returns 200 with a `ConfigTestResult` body —
+      // success/failure is carried in `ok`. We still defend against malformed
+      // responses so the caller can surface a useful error.
       const text = await res.text();
       try {
-        return text ? (JSON.parse(text) as TestResponse) : { ok: false, error: 'empty response' };
+        if (!text) {
+          return {
+            ok: false,
+            error: { code: 'provider_error', message: 'empty response' },
+          } satisfies TestResponse;
+        }
+        return JSON.parse(text) as TestResponse;
       } catch {
-        return { ok: false, error: `Invalid JSON from ${res.url}` };
+        return {
+          ok: false,
+          error: { code: 'provider_error', message: `Invalid JSON from ${res.url}` },
+        } satisfies TestResponse;
       }
     },
     async upsertMarketProvider(id, provider) {

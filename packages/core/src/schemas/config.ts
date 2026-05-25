@@ -69,6 +69,53 @@ export type AppConfig = z.infer<typeof AppConfig>;
 
 export const DEFAULT_CONFIG: AppConfig = AppConfig.parse({});
 
+/**
+ * Structured outcome of `POST /config/test` — the provider "smoke test"
+ * required by AGENTS.md. Sends one tiny prompt to the named provider (or the
+ * active one if omitted) and reports success/failure with enough context to
+ * be actionable. Never includes the API key.
+ */
+export const ConfigTestErrorCode = z.enum([
+  /** No provider id was supplied and no provider is currently active. */
+  'no_provider',
+  /** A providerId was supplied but it doesn't exist in the config. */
+  'unknown_provider',
+  /** The LLM call exceeded the smoke-test timeout. */
+  'timeout',
+  /** The provider returned an empty response — likely a model/permission issue. */
+  'empty_response',
+  /** Provider call failed (network, auth, rate-limit, etc.). */
+  'provider_error',
+]);
+export type ConfigTestErrorCode = z.infer<typeof ConfigTestErrorCode>;
+
+export const ConfigTestError = z.object({
+  code: ConfigTestErrorCode,
+  message: z.string(),
+  /** Short, user-actionable hint (e.g. "Check your API key in Settings"). */
+  hint: z.string().optional(),
+});
+export type ConfigTestError = z.infer<typeof ConfigTestError>;
+
+export const ConfigTestResult = z.discriminatedUnion('ok', [
+  z.object({
+    ok: z.literal(true),
+    /** Wall-clock latency of the LLM call in milliseconds. */
+    latencyMs: z.number().int().nonnegative(),
+    /** The model id that was actually probed. May be undefined for CLI backends with no `--model` flag. */
+    model: z.string().optional(),
+    /** The provider id that was tested (the request's providerId, or the active one when omitted). */
+    providerId: z.string(),
+  }),
+  z.object({
+    ok: z.literal(false),
+    error: ConfigTestError,
+    /** Provider id that we tried to test, when known. */
+    providerId: z.string().optional(),
+  }),
+]);
+export type ConfigTestResult = z.infer<typeof ConfigTestResult>;
+
 /** Sanitized view safe to render or send over the wire (no api keys). */
 export function redactConfig(cfg: AppConfig): AppConfig {
   const providers: Record<string, AiProvider> = {};

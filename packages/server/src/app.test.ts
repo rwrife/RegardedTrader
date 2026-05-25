@@ -175,3 +175,126 @@ describe('POST /tickers/validate', () => {
     expect(r.status).toBe(503);
   });
 });
+
+describe('POST /config/test', () => {
+  const baseProvider = {
+    kind: 'openai-compatible' as const,
+    label: 'fake',
+    baseUrl: 'http://x/v1',
+    model: 'gpt-fake',
+    apiKey: 'sk-secret-1234',
+  };
+
+  async function makeServer(opts: {
+    providers?: Record<string, import('@regardedtrader/core').AiProvider>;
+    active?: string | null;
+    buildLLM?: (p: import('@regardedtrader/core').AiProvider) => LLM;
+  }) {
+    const watchlist = new WatchlistStore({ path: join(dir, 'watchlist.json') });
+    const { app } = createApp({
+      market: {
+        quote: async () => ({ symbol: '', price: 0, change: 0, changePercent: 0, volume: 0, asOf: '' }),
+        history: async () => [],
+        news: async () => [],
+        optionsChain: async () => [],
+      },
+      webSearch: fakeWebSearch(),
+      watchlist,
+      initialConfig: {
+        version: 1,
+        providers: opts.providers ?? {},
+        activeProvider: opts.active ?? null,
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true },
+        server: { host: '127.0.0.1', port: 4317 },
+        marketData: { providers: {}, activeProvider: null },
+      },
+      llmFromConfig: () => fakeLLM(goodReply),
+      buildLLMForProvider: opts.buildLLM,
+    });
+    baseUrl = await listen(app);
+  }
+
+  async function postTest(body: unknown): Promise<{ status: number; json: unknown }> {
+    const res = await fetch(`${baseUrl}/config/test`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return { status: res.status, json: await res.json() };
+  }
+
+  it('returns ok=true with latencyMs and model for the active provider', async () => {
+    await makeServer({
+      providers: { p1: baseProvider },
+      active: 'p1',
+      buildLLM: () => ({ async complete() { return 'OK'; } }),
+    });
+    const { status, json } = await postTest({});
+    expect(status).toBe(200);
+    const r = json as { ok: true; latencyMs: number; model: string; providerId: string };
+    expect(r.ok).toBe(true);
+    expect(r.providerId).toBe('p1');
+    expect(r.model).toBe('gpt-fake');
+    expect(typeof r.latencyMs).toBe('number');
+    expect(r.latencyMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('honors an explicit providerId distinct from the active one', async () => {
+    await makeServer({
+      providers: {
+        p1: baseProvider,
+        p2: { ...baseProvider, model: 'other-model' },
+      },
+      active: 'p1',
+      buildLLM: (p) => ({ async complete() { return p.kind === 'openai-compatible' ? p.model : 'OK'; } }),
+    });
+    const { json } = await postTest({ providerId: 'p2' });
+    const r = json as { ok: true; providerId: string; model: string };
+    expect(r.ok).toBe(true);
+    expect(r.providerId).toBe('p2');
+    expect(r.model).toBe('other-model');
+  });
+
+  it('returns ok=false code=no_provider when no providerId and no active', async () => {
+    await makeServer({});
+    const { json } = await postTest({});
+    const r = json as { ok: false; error: { code: string } };
+    expect(r.ok).toBe(false);
+    expect(r.error.code).toBe('no_provider');
+  });
+
+  it('returns ok=false code=unknown_provider for missing ids', async () => {
+    await makeServer({ providers: { p1: baseProvider }, active: 'p1' });
+    const { json } = await postTest({ providerId: 'nope' });
+    const r = json as { ok: false; providerId: string; error: { code: string } };
+    expect(r.ok).toBe(false);
+    expect(r.error.code).toBe('unknown_provider');
+    expect(r.providerId).toBe('nope');
+  });
+
+  it('returns ok=false code=empty_response when provider returns blank', async () => {
+    await makeServer({
+      providers: { p1: baseProvider },
+      active: 'p1',
+      buildLLM: () => ({ async complete() { return '   '; } }),
+    });
+    const { json } = await postTest({});
+    const r = json as { ok: false; error: { code: string } };
+    expect(r.ok).toBe(false);
+    expect(r.error.code).toBe('empty_response');
+  });
+
+  it('returns ok=false code=provider_error and never leaks the API key', async () => {
+    await makeServer({
+      providers: { p1: baseProvider },
+      active: 'p1',
+      buildLLM: () => ({ async complete() { throw new Error('401 from server: bad key sk-secret-1234'); } }),
+    });
+    const { json } = await postTest({});
+    const r = json as { ok: false; error: { code: string; message: string } };
+    expect(r.ok).toBe(false);
+    expect(r.error.code).toBe('provider_error');
+    expect(r.error.message).not.toContain('sk-secret-1234');
+    expect(r.error.message).toContain('***');
+  });
+});
