@@ -43,7 +43,12 @@ function makeApi(overrides: Partial<ApiClient> = {}): ApiClient {
       aiConfigured: true,
       config: makeConfig({ activeProvider: id }),
     })),
-    testActive: vi.fn(async () => ({ ok: true, sample: 'OK' })),
+    testActive: vi.fn(async () => ({
+      ok: true as const,
+      latencyMs: 42,
+      model: 'gpt-4o-mini',
+      providerId: 'openai',
+    })),
     upsertMarketProvider: vi.fn(async (id, provider) => ({
       ok: true,
       activeMarketProvider: id,

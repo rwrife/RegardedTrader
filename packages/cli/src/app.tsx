@@ -26,7 +26,7 @@ export function App({ command, args, serverUrl, flags }: AppProps) {
     case 'dashboard':
       return <DashboardScreen serverUrl={serverUrl} />;
     case 'config':
-      return <ConfigScreen sub={args[0]} />;
+      return <ConfigScreen sub={args[0]} testProviderId={args[1]} serverUrl={serverUrl} />;
     case 'add':
       return (
         <AddScreen

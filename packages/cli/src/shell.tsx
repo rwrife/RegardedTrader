@@ -47,7 +47,7 @@ const COMMANDS: SlashCommand[] = [
   { id: 'add',      name: '/add',      usage: '/add <SYM>...',   blurb: 'Validate ticker(s) and add to watchlist', needsArgs: true },
   { id: 'ls',       name: '/ls',       usage: '/ls',             blurb: 'Show watchlist' },
   { id: 'rm',       name: '/rm',       usage: '/rm <SYM>',       blurb: 'Remove a ticker from watchlist',          needsArgs: true },
-  { id: 'config',   name: '/config',   usage: '/config',         blurb: 'AI providers, risk, server' },
+  { id: 'config',   name: '/config',   usage: '/config [show|test [id]]', blurb: 'AI providers, risk, server' },
   { id: 'dashboard',name: '/dashboard',usage: '/dashboard',      blurb: 'Open local web dashboard' },
   { id: 'help',     name: '/help',     usage: '/help',           blurb: 'List slash commands' },
   { id: 'clear',    name: '/clear',    usage: '/clear',          blurb: 'Clear the screen' },
@@ -286,7 +286,7 @@ function RunningBody({
     case 'rm':
       return <RemoveScreen symbol={(args[0] ?? '').toUpperCase()} serverUrl={serverUrl} onDone={onDone} />;
     case 'config':
-      return <ConfigScreen onDone={onDone} />;
+      return <ConfigScreen sub={args[0]} testProviderId={args[1]} serverUrl={serverUrl} onDone={onDone} />;
     case 'dashboard':
       return <DashboardScreen serverUrl={serverUrl} onDone={onDone} />;
     default:

@@ -8,7 +8,9 @@ import {
   configPath,
   type AppConfig,
   type AiProvider,
+  type ConfigTestResult,
 } from '@regardedtrader/core';
+import { api } from '../api.js';
 
 type Mode =
   | 'menu'
@@ -18,15 +20,28 @@ type Mode =
   | 'pick-active'
   | 'remove'
   | 'show'
+  | 'test'
   | 'done';
 
 type CliBackend = 'codex-cli' | 'claude-cli' | 'copilot-cli';
 
-export function ConfigScreen({ sub, onDone }: { sub?: string; onDone?: () => void }) {
+export function ConfigScreen({
+  sub,
+  testProviderId,
+  serverUrl,
+  onDone,
+}: {
+  sub?: string;
+  testProviderId?: string;
+  serverUrl?: string;
+  onDone?: () => void;
+}) {
   const { exit } = useApp();
   const leave = onDone ?? exit;
   const [cfg, setCfg] = useState<AppConfig | null>(null);
-  const [mode, setMode] = useState<Mode>(sub === 'show' ? 'show' : 'menu');
+  const [mode, setMode] = useState<Mode>(
+    sub === 'show' ? 'show' : sub === 'test' ? 'test' : 'menu',
+  );
   const [msg, setMsg] = useState<string>('');
 
   useEffect(() => {
@@ -58,6 +73,17 @@ export function ConfigScreen({ sub, onDone }: { sub?: string; onDone?: () => voi
     );
   }
 
+  if (mode === 'test') {
+    return (
+      <TestConnection
+        serverUrl={serverUrl ?? 'http://127.0.0.1:4317'}
+        providerId={testProviderId}
+        exit={leave}
+        interactive={!!onDone}
+      />
+    );
+  }
+
   if (mode === 'done') {
     return (
       <Box flexDirection="column">
@@ -77,6 +103,7 @@ export function ConfigScreen({ sub, onDone }: { sub?: string; onDone?: () => voi
           else if (choice === 'active') setMode('pick-active');
           else if (choice === 'remove') setMode('remove');
           else if (choice === 'show') setMode('show');
+          else if (choice === 'test') setMode('test');
           else if (choice === 'quit') leave();
         }}
       />
@@ -180,7 +207,7 @@ function Exit({ exit, interactive }: { exit: () => void; interactive?: boolean }
   return null;
 }
 
-type MenuChoice = 'add' | 'active' | 'remove' | 'show' | 'quit';
+type MenuChoice = 'add' | 'active' | 'remove' | 'show' | 'test' | 'quit';
 
 function Menu({ cfg, onPick }: { cfg: AppConfig; onPick: (c: MenuChoice) => void }) {
   const [i, setI] = useState(0);
@@ -189,6 +216,7 @@ function Menu({ cfg, onPick }: { cfg: AppConfig; onPick: (c: MenuChoice) => void
     { label: 'Choose active provider', value: 'active' },
     { label: 'Remove a provider', value: 'remove' },
     { label: 'Show current config', value: 'show' },
+    { label: 'Test connection (active provider)', value: 'test' },
     { label: 'Quit', value: 'quit' },
   ];
   useInput((input, key) => {
@@ -470,6 +498,86 @@ function Remove({ cfg, onPick }: { cfg: AppConfig; onPick: (id: string) => void 
           {idx === i ? '› ' : '  '}{id}
         </Text>
       ))}
+    </Box>
+  );
+}
+
+/**
+ * `regard config test [providerId]` — pings the configured provider via the
+ * local server's `POST /config/test` endpoint and renders the structured
+ * `ConfigTestResult` (latency + model on success, code/message/hint on
+ * failure). When `providerId` is omitted, the server tests the active
+ * provider.
+ */
+function TestConnection({
+  serverUrl,
+  providerId,
+  exit,
+  interactive,
+}: {
+  serverUrl: string;
+  providerId?: string;
+  exit: () => void;
+  interactive?: boolean;
+}) {
+  const [state, setState] = useState<
+    | { kind: 'loading' }
+    | { kind: 'result'; result: ConfigTestResult }
+    | { kind: 'error'; message: string }
+  >({ kind: 'loading' });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await api<ConfigTestResult>(serverUrl, '/config/test', {
+          method: 'POST',
+          body: JSON.stringify(providerId ? { providerId } : {}),
+        });
+        if (!cancelled) setState({ kind: 'result', result });
+      } catch (e) {
+        if (!cancelled)
+          setState({ kind: 'error', message: e instanceof Error ? e.message : String(e) });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [serverUrl, providerId]);
+
+  if (state.kind === 'loading') {
+    return (
+      <Box flexDirection="column">
+        <Text dimColor>Testing {providerId ?? 'active provider'}…</Text>
+      </Box>
+    );
+  }
+  if (state.kind === 'error') {
+    return (
+      <Box flexDirection="column">
+        <Text color="red">✗ Could not reach server at {serverUrl}</Text>
+        <Text dimColor>{state.message}</Text>
+        <Text dimColor>(is `regard` server running?)</Text>
+        <Exit exit={exit} interactive={interactive} />
+      </Box>
+    );
+  }
+  const r = state.result;
+  if (r.ok) {
+    return (
+      <Box flexDirection="column">
+        <Text color="green">✓ {r.providerId} responded in {r.latencyMs}ms</Text>
+        {r.model && <Text dimColor>model: {r.model}</Text>}
+        <Exit exit={exit} interactive={interactive} />
+      </Box>
+    );
+  }
+  return (
+    <Box flexDirection="column">
+      <Text color="red">✗ {r.error.code}: {r.error.message}</Text>
+      {r.error.hint && <Text dimColor>hint: {r.error.hint}</Text>}
+      {r.providerId && <Text dimColor>provider: {r.providerId}</Text>}
+      <Exit exit={exit} interactive={interactive} />
     </Box>
   );
 }
