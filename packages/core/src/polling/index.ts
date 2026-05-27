@@ -88,3 +88,12 @@ export {
   type PollNewsOptions,
   type PollNewsResult,
 } from './jobs/news.js';
+export {
+  pollStocktwitsMentions,
+  parseStocktwitsMentions,
+  stocktwitsStreamUrl,
+  STOCKTWITS_DEFAULT_LIMIT,
+  type MentionNewEvent,
+  type PollStocktwitsOptions,
+  type PollStocktwitsResult,
+} from './jobs/stocktwits-mentions.js';
