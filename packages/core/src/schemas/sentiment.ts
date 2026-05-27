@@ -42,6 +42,18 @@ export const MentionItem = z.object({
   publishedAt: z.string(),
   /** ISO timestamp when the poller ingested the item. */
   fetchedAt: z.string(),
+  /**
+   * Optional per-source metadata that the AI sentiment scorer can use as a
+   * prior. Kept strictly non-PII: no authors, usernames, or handles. Pollers
+   * may populate `sentimentLabel` when the upstream surface self-declares a
+   * bullish / bearish / neutral tag (e.g. StockTwits messages).
+   */
+  meta: z
+    .object({
+      sentimentLabel: SentimentLabel.optional(),
+    })
+    .partial()
+    .optional(),
 });
 export type MentionItem = z.infer<typeof MentionItem>;
 
