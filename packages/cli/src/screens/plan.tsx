@@ -2,11 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { Box, Text, useApp } from 'ink';
 import TextInput from 'ink-text-input';
 import Spinner from 'ink-spinner';
-import type { TradePlan } from '@regardedtrader/core';
+import type { PlansResponse, ReviewedTradePlan } from '@regardedtrader/core';
 import { api } from '../api.js';
 import { ReturnPrompt } from './menu.js';
 
-type PlanResult = { plan: TradePlan; ok: boolean; violations: string[] };
+type PlanResult = ReviewedTradePlan;
 
 export function PlanScreen({
   symbol,
@@ -24,6 +24,7 @@ export function PlanScreen({
   const [thesis, setThesis] = useState('');
   const [budgetStr, setBudgetStr] = useState('500');
   const [results, setResults] = useState<PlanResult[]>([]);
+  const [noCompliantPlans, setNoCompliantPlans] = useState(false);
   const [err, setErr] = useState<string | null>(symbol ? null : 'Missing symbol. Usage: regard plan NVDA');
 
   useEffect(() => {
@@ -66,7 +67,7 @@ export function PlanScreen({
             }
             setStage('loading');
             try {
-              const data = await api<PlanResult[]>(serverUrl, '/plans', {
+              const data = await api<PlansResponse>(serverUrl, '/plans', {
                 method: 'POST',
                 body: JSON.stringify({
                   symbol: symbol.toUpperCase(),
@@ -74,7 +75,8 @@ export function PlanScreen({
                   maxLossUsd,
                 }),
               });
-              setResults(data);
+              setResults(data.plans);
+              setNoCompliantPlans(Boolean(data.noCompliantPlans));
               setStage('done');
             } catch (e) {
               setErr(String(e));
@@ -99,6 +101,11 @@ export function PlanScreen({
         ━━━ {symbol.toUpperCase()} candidate plans ━━━
       </Text>
       {results.length === 0 && <Text color="yellow">No plans returned.</Text>}
+      {noCompliantPlans && (
+        <Text color="yellow">
+          ⚠ No plans within your configured caps — adjust budget or caps in Settings.
+        </Text>
+      )}
       {results.map((r, i) => (
         <Box key={i} flexDirection="column" borderStyle="round" paddingX={1}>
           <Text bold>{r.plan.name}</Text>
@@ -117,7 +124,12 @@ export function PlanScreen({
               {l.contract.expiry}
             </Text>
           ))}
-          {!r.ok && <Text color="red">Risk: {r.violations.join('; ')}</Text>}
+          {!r.review.ok &&
+            r.review.violations.map((v, k) => (
+              <Text key={k} color="red">
+                ▸ {v}
+              </Text>
+            ))}
           {r.plan.notes && <Text dimColor>{r.plan.notes}</Text>}
         </Box>
       ))}

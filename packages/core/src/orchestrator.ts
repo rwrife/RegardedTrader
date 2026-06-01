@@ -2,7 +2,7 @@ import type { MarketDataClient } from './clients/index.js';
 import { computeIndicators } from './indicators/index.js';
 import { Analyst, OptionsStrategist, RiskOfficer } from './agents/index.js';
 import type { LLM, RiskCaps } from './agents/index.js';
-import type { Briefing, TradePlan } from './schemas/index.js';
+import type { Briefing, PlansResponse, TradePlan } from './schemas/index.js';
 
 export class Orchestrator {
   private readonly analyst: Analyst;
@@ -34,9 +34,17 @@ export class Orchestrator {
     thesis: string;
     maxLossUsd: number;
     expiry?: string;
-  }): Promise<{ plan: TradePlan; ok: boolean; violations: string[] }[]> {
+  }): Promise<PlansResponse> {
     const chain = await this.market.optionsChain(input.symbol, input.expiry);
     const plans = await this.strategist.propose({ ...input, chain });
-    return plans.map((plan) => ({ plan, ...this.risk.review(plan) }));
+    const reviewed = plans.map((plan: TradePlan) => ({
+      plan,
+      review: this.risk.review(plan),
+    }));
+    const noCompliantPlans =
+      reviewed.length > 0 && reviewed.every((r) => !r.review.ok);
+    return noCompliantPlans
+      ? { plans: reviewed, noCompliantPlans: true }
+      : { plans: reviewed };
   }
 }
