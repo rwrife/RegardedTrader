@@ -120,6 +120,12 @@ export const RiskGraphSeries = z.object({
 });
 export type RiskGraphSeries = z.infer<typeof RiskGraphSeries>;
 
+export const RiskReview = z.object({
+  ok: z.boolean(),
+  violations: z.array(z.string()),
+});
+export type RiskReview = z.infer<typeof RiskReview>;
+
 export const TradePlan = z.object({
   name: z.string(),
   thesis: z.string(),
@@ -136,6 +142,26 @@ export const TradePlan = z.object({
   riskGraph: RiskGraphSeries.optional(),
 });
 export type TradePlan = z.infer<typeof TradePlan>;
+
+/**
+ * Wire format for `POST /plans` (issue #115). Each candidate plan is paired
+ * with its `RiskOfficer` review so user-facing surfaces can flag
+ * cap-violating plans instead of silently rendering them. When every
+ * candidate fails review, `noCompliantPlans` is set so the surface can
+ * render a single "no plans within your configured caps" hint instead of
+ * a wall of red.
+ */
+export const ReviewedTradePlan = z.object({
+  plan: TradePlan,
+  review: RiskReview,
+});
+export type ReviewedTradePlan = z.infer<typeof ReviewedTradePlan>;
+
+export const PlansResponse = z.object({
+  plans: z.array(ReviewedTradePlan),
+  noCompliantPlans: z.boolean().optional(),
+});
+export type PlansResponse = z.infer<typeof PlansResponse>;
 
 export const TickerProfile = z.object({
   symbol: Ticker,
