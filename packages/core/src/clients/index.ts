@@ -1,9 +1,56 @@
 import yahooFinance from 'yahoo-finance2';
 import type { OHLCV, Quote, NewsItem, OptionContract } from '../schemas/index.js';
+import { YahooOptionContractRaw } from '../schemas/marketData.js';
 
 export * from './web-search.js';
 export * from './finnhub.js';
 export * from './registry.js';
+
+/**
+ * Coerce Yahoo's `expiration` field (Date | epoch seconds | ISO-ish string)
+ * into a `YYYY-MM-DD` ET-naive date string. We treat the epoch as seconds
+ * (yahoo-finance2 normalizes this) and fall back to `Date.parse` for
+ * strings; on total failure we return an empty string so the caller can
+ * decide whether to drop the leg.
+ */
+function normalizeYahooExpiry(raw: Date | number | string): string {
+  let d: Date;
+  if (raw instanceof Date) {
+    d = raw;
+  } else if (typeof raw === 'number') {
+    // Yahoo emits epoch seconds; multiply if it looks like seconds.
+    d = new Date(raw < 1e12 ? raw * 1000 : raw);
+  } else {
+    d = new Date(raw);
+  }
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Map a single validated Yahoo options-chain leg into our internal
+ * `OptionContract` shape. Exported so the test suite can exercise the
+ * mapper without spinning up a `YahooClient`.
+ */
+export function mapYahooOptionContract(
+  raw: YahooOptionContractRaw,
+  underlying: string,
+  type: 'call' | 'put',
+): OptionContract {
+  return {
+    symbol: raw.contractSymbol,
+    underlying,
+    expiry: normalizeYahooExpiry(raw.expiration),
+    strike: raw.strike,
+    type,
+    bid: raw.bid ?? null,
+    ask: raw.ask ?? null,
+    last: raw.lastPrice ?? null,
+    volume: raw.volume ?? null,
+    openInterest: raw.openInterest ?? null,
+    iv: raw.impliedVolatility ?? null,
+  };
+}
 
 export interface MarketDataClient {
   quote(symbol: string): Promise<Quote>;
@@ -58,23 +105,21 @@ export class YahooClient implements MarketDataClient {
       const opts = await yahooFinance.options(symbol, expiry ? { date: new Date(expiry) } : {});
       const chain = opts.options?.[0];
       if (!chain) return [];
-      const map = (c: any, type: 'call' | 'put'): OptionContract => ({
-        symbol: c.contractSymbol,
-        underlying: symbol,
-        expiry: new Date(c.expiration).toISOString().slice(0, 10),
-        strike: c.strike,
-        type,
-        bid: c.bid ?? null,
-        ask: c.ask ?? null,
-        last: c.lastPrice ?? null,
-        volume: c.volume ?? null,
-        openInterest: c.openInterest ?? null,
-        iv: c.impliedVolatility ?? null,
-      });
-      return [
-        ...(chain.calls ?? []).map((c: any) => map(c, 'call')),
-        ...(chain.puts ?? []).map((c: any) => map(c, 'put')),
-      ];
+      const validate = (legs: unknown[]): YahooOptionContractRaw[] => {
+        const out: YahooOptionContractRaw[] = [];
+        for (const leg of legs) {
+          const parsed = YahooOptionContractRaw.safeParse(leg);
+          if (parsed.success) out.push(parsed.data);
+        }
+        return out;
+      };
+      const calls = validate(chain.calls ?? []).map((leg) =>
+        mapYahooOptionContract(leg, symbol, 'call'),
+      );
+      const puts = validate(chain.puts ?? []).map((leg) =>
+        mapYahooOptionContract(leg, symbol, 'put'),
+      );
+      return [...calls, ...puts];
     } catch {
       return [];
     }
