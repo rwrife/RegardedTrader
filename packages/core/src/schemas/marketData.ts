@@ -38,6 +38,36 @@ export const MarketDataProviderConfig = z.discriminatedUnion('kind', [
 ]);
 export type MarketDataProviderConfig = z.infer<typeof MarketDataProviderConfig>;
 
+/**
+ * Raw shape of a single Yahoo Finance options-chain leg (call or put) as
+ * returned by `yahoo-finance2`'s `options()` call.
+ *
+ * `yahoo-finance2` types these as `{ [key: string]: any }` (its `CallOrPut`
+ * interface), which forces unjustified `: any` casts at the consumption
+ * site (issue #100). This schema captures the subset of fields the
+ * `YahooClient.optionsChain` mapper actually consumes, so we can validate
+ * upstream rows once and pass through a typed value the rest of `core`
+ * (OptionsStrategist, risk-graph #76) can trust.
+ *
+ * Optional / nullable fields mirror Yahoo's actual behaviour — bid/ask,
+ * volume, open-interest and IV are routinely missing on thin chains.
+ * `expiration` is accepted as Date, number (epoch seconds), or string
+ * because Yahoo has shipped all three over the years; we coerce to a
+ * `YYYY-MM-DD` ISO date in the mapper.
+ */
+export const YahooOptionContractRaw = z.object({
+  contractSymbol: z.string().min(1),
+  strike: z.number(),
+  expiration: z.union([z.date(), z.number(), z.string()]),
+  bid: z.number().nullish(),
+  ask: z.number().nullish(),
+  lastPrice: z.number().nullish(),
+  volume: z.number().int().nonnegative().nullish(),
+  openInterest: z.number().int().nonnegative().nullish(),
+  impliedVolatility: z.number().nullish(),
+});
+export type YahooOptionContractRaw = z.infer<typeof YahooOptionContractRaw>;
+
 export const MarketDataConfig = z
   .object({
     /** Map of provider id (user-chosen) -> config. */
