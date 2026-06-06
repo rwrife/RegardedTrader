@@ -18,11 +18,41 @@ export interface MarketCalendar {
   readonly earlyCloses: ReadonlyMap<string, string>;
 }
 
+/**
+ * Minimal structural contract MarketClock needs from a CalendarStore so the
+ * polling package doesn't import `calendar/store` directly (and so tests can
+ * inject a fake without spinning up the JSON-backed store).
+ */
+export interface CalendarStoreLike {
+  eventsBetween(
+    fromUtc: string,
+    toUtc: string,
+    query?: {
+      symbol?: string | null;
+      kinds?: ReadonlyArray<'market_holiday' | 'market_early_close' | string>;
+    },
+  ): Promise<
+    ReadonlyArray<{
+      readonly kind: string;
+      readonly startUtc: string;
+      readonly details?: { readonly closeTimeEt?: string } | undefined;
+    }>
+  >;
+}
+
+export type CalendarUpdateListener = () => void;
+
 export interface MarketClockOptions {
   /** Override the calendar (mostly for tests). */
   readonly calendar?: MarketCalendar;
   /** Override the time source (mostly for tests). */
   readonly now?: () => Date;
+  /**
+   * Optional CalendarStore-like source. When provided, callers can invoke
+   * `refreshFromStore()` to swap the active calendar for one derived from the
+   * store; the bundled list remains the last-known-good fallback.
+   */
+  readonly store?: CalendarStoreLike;
 }
 
 interface RawCalendar {
@@ -91,12 +121,18 @@ function cmpTime(a: string, b: string): number {
 }
 
 export class MarketClock {
-  private readonly calendar: MarketCalendar;
+  /** Last-known-good calendar used when the store is empty/unavailable. */
+  private readonly bundled: MarketCalendar;
+  private calendar: MarketCalendar;
   private readonly now: () => Date;
+  private readonly store?: CalendarStoreLike;
+  private readonly listeners = new Set<CalendarUpdateListener>();
 
   constructor(options: MarketClockOptions = {}) {
-    this.calendar = options.calendar ?? loadDefaultCalendar();
+    this.bundled = options.calendar ?? loadDefaultCalendar();
+    this.calendar = this.bundled;
     this.now = options.now ?? (() => new Date());
+    this.store = options.store;
   }
 
   /** Current market state, derived purely from the wall clock + calendar. */
@@ -135,4 +171,122 @@ export class MarketClock {
   getCalendar(): MarketCalendar {
     return this.calendar;
   }
+
+  /**
+   * Replace the active calendar with one derived from the configured store.
+   *
+   * Falls back to the bundled (last-known-good) list when:
+   *   - no store was configured
+   *   - the store returns no events (e.g. first boot before the cron runs)
+   *   - the store throws (transient IO error / schema fallback)
+   *
+   * Notifies `onCalendarUpdate` listeners only when the active calendar
+   * actually changes, so the scheduler doesn't reapply cadences on a no-op
+   * refresh.
+   */
+  async refreshFromStore(): Promise<MarketCalendar> {
+    if (!this.store) return this.calendar;
+
+    let events: ReadonlyArray<{
+      readonly kind: string;
+      readonly startUtc: string;
+      readonly details?: { readonly closeTimeEt?: string } | undefined;
+    }> = [];
+    try {
+      events = await this.store.eventsBetween(
+        '1970-01-01T00:00:00.000Z',
+        '9999-12-31T23:59:59.999Z',
+        { symbol: null, kinds: ['market_holiday', 'market_early_close'] },
+      );
+    } catch {
+      // Schema/IO failure — keep the active calendar (which may already be the
+      // bundled fallback). Never throw out of a clock refresh.
+      return this.calendar;
+    }
+
+    if (events.length === 0) {
+      const next = this.bundled;
+      this.swapCalendar(next);
+      return next;
+    }
+
+    const holidays = new Set<string>();
+    const earlyCloses = new Map<string, string>();
+    for (const ev of events) {
+      const etDate = etDateFromUtc(ev.startUtc);
+      if (etDate === null) continue;
+      if (ev.kind === 'market_holiday') {
+        holidays.add(etDate);
+      } else if (ev.kind === 'market_early_close') {
+        const time = ev.details?.closeTimeEt;
+        if (typeof time === 'string' && /^\d{2}:\d{2}$/.test(time)) {
+          earlyCloses.set(etDate, time);
+        }
+      }
+    }
+
+    const next: MarketCalendar = {
+      timezone: this.bundled.timezone,
+      regularHours: this.bundled.regularHours,
+      holidays,
+      earlyCloses,
+    };
+    this.swapCalendar(next);
+    return next;
+  }
+
+  /**
+   * Subscribe to calendar updates. Returns an unsubscribe function. The
+   * scheduler uses this hook to reapply cadences when an early-close /
+   * holiday boundary moves underneath an in-flight job.
+   */
+  onCalendarUpdate(listener: CalendarUpdateListener): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private swapCalendar(next: MarketCalendar): void {
+    if (calendarsEqual(this.calendar, next)) return;
+    this.calendar = next;
+    for (const l of this.listeners) {
+      try {
+        l();
+      } catch {
+        // Listener errors are swallowed; the clock is not in the business of
+        // policing scheduler/observer bugs.
+      }
+    }
+  }
+}
+
+function etDateFromUtc(iso: string): string | null {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const parts = ET_FORMATTER.formatToParts(d);
+  let year = '';
+  let month = '';
+  let day = '';
+  for (const p of parts) {
+    if (p.type === 'year') year = p.value;
+    else if (p.type === 'month') month = p.value;
+    else if (p.type === 'day') day = p.value;
+  }
+  if (!year || !month || !day) return null;
+  return `${year}-${month}-${day}`;
+}
+
+function calendarsEqual(a: MarketCalendar, b: MarketCalendar): boolean {
+  if (a === b) return true;
+  if (a.timezone !== b.timezone) return false;
+  if (a.regularHours.open !== b.regularHours.open) return false;
+  if (a.regularHours.close !== b.regularHours.close) return false;
+  if (a.holidays.size !== b.holidays.size) return false;
+  for (const h of a.holidays) if (!b.holidays.has(h)) return false;
+  if (a.earlyCloses.size !== b.earlyCloses.size) return false;
+  for (const [k, v] of a.earlyCloses) {
+    if (b.earlyCloses.get(k) !== v) return false;
+  }
+  return true;
 }

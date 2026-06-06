@@ -85,6 +85,7 @@ export class Scheduler {
   private readonly jobs = new Map<string, JobRecord>();
   private globallyPaused = false;
   private started = false;
+  private unsubscribeCalendar: (() => void) | null = null;
 
   constructor(options: SchedulerOptions) {
     this.clock = options.clock;
@@ -100,6 +101,29 @@ export class Scheduler {
         clearTimeout(handle as ReturnType<typeof setTimeout>);
       });
     this.onError = options.onError;
+    if (typeof (this.clock as { onCalendarUpdate?: unknown }).onCalendarUpdate === 'function') {
+      this.unsubscribeCalendar = this.clock.onCalendarUpdate(() => {
+        this.reapplyCadences();
+      });
+    }
+  }
+
+  /**
+   * Reschedule the next tick for every idle / backing-off job using the
+   * current `MarketClock.state`. Inflight runs are left alone (they'll
+   * reschedule themselves when they complete). Paused jobs stay paused.
+   *
+   * Wired automatically to `MarketClock.onCalendarUpdate` when the clock
+   * exposes one, so a `calendar.update` (e.g. early close at 13:00 ET
+   * lands mid-session) reapplies cadences across the boundary.
+   */
+  reapplyCadences(): void {
+    if (!this.started || this.globallyPaused) return;
+    for (const rec of this.jobs.values()) {
+      if (rec.status === 'paused') continue;
+      if (rec.inflight) continue;
+      this.scheduleNext(rec);
+    }
   }
 
   /** Add a job to the registry. Idempotent on `id`: re-registering replaces. */
@@ -148,6 +172,10 @@ export class Scheduler {
     this.started = false;
     for (const rec of this.jobs.values()) {
       this.cancelTimer(rec);
+    }
+    if (this.unsubscribeCalendar) {
+      this.unsubscribeCalendar();
+      this.unsubscribeCalendar = null;
     }
   }
 
