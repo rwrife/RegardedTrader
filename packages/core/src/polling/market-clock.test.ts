@@ -69,4 +69,137 @@ describe('MarketClock', () => {
     expect(cal.holidays.size).toBeGreaterThan(0);
     expect(cal.regularHours.open).toBe('09:30');
   });
+
+  describe('CalendarStore integration (issue #61)', () => {
+    type StoreEvent = {
+      readonly kind: string;
+      readonly startUtc: string;
+      readonly details?: { readonly closeTimeEt?: string } | undefined;
+    };
+    function fakeStore(events: ReadonlyArray<StoreEvent>): {
+      eventsBetween: (
+        fromUtc: string,
+        toUtc: string,
+        query?: { symbol?: string | null; kinds?: ReadonlyArray<string> },
+      ) => Promise<ReadonlyArray<StoreEvent>>;
+      calls: number;
+    } {
+      const obj = {
+        calls: 0,
+        async eventsBetween(
+          _fromUtc: string,
+          _toUtc: string,
+          _query?: { symbol?: string | null; kinds?: ReadonlyArray<string> },
+        ): Promise<ReadonlyArray<StoreEvent>> {
+          obj.calls += 1;
+          return events;
+        },
+      };
+      return obj;
+    }
+
+    it('regular trading day: store with no events for the day leaves rth intact', async () => {
+      const store = fakeStore([
+        // Some other day's holiday — unrelated to the queried date.
+        { kind: 'market_holiday', startUtc: '2025-12-25T05:00:00.000Z' },
+      ]);
+      const c = new MarketClock({
+        calendar: fixedCalendar(),
+        store,
+        now: () => new Date('2025-06-10T14:30:00Z'), // Tue 10:30 ET
+      });
+      await c.refreshFromStore();
+      expect(c.state()).toBe('rth');
+      expect(c.isHoliday('2025-12-25')).toBe(true);
+    });
+
+    it('full holiday from store: state goes to "holiday" on that ET date', async () => {
+      // 2026-01-19 = MLK Day. 09:30 ET = 14:30 UTC (EST).
+      const store = fakeStore([
+        { kind: 'market_holiday', startUtc: '2026-01-19T05:00:00.000Z' },
+      ]);
+      const c = new MarketClock({
+        calendar: fixedCalendar(),
+        store,
+        now: () => new Date('2026-01-19T14:30:00Z'),
+      });
+      await c.refreshFromStore();
+      expect(c.state()).toBe('holiday');
+      expect(c.isHoliday('2026-01-19')).toBe(true);
+    });
+
+    it('early close from store is applied (closeTimeEt drives the cutoff)', async () => {
+      // 2026-07-03 is a Friday — commonly early-close in real life.
+      const store = fakeStore([
+        {
+          kind: 'market_early_close',
+          startUtc: '2026-07-03T04:00:00.000Z',
+          details: { closeTimeEt: '13:00' },
+        },
+      ]);
+      const c = new MarketClock({
+        calendar: fixedCalendar(),
+        store,
+        // 13:30 ET = 17:30 UTC. After early close — should be post.
+        now: () => new Date('2026-07-03T17:30:00Z'),
+      });
+      await c.refreshFromStore();
+      expect(c.closeTimeFor('2026-07-03')).toBe('13:00');
+      expect(c.state()).toBe('post');
+    });
+
+    it('day after schema fallback: store throws -> keeps active calendar', async () => {
+      const throwing = {
+        async eventsBetween(): Promise<never> {
+          throw new Error('disk corrupted');
+        },
+      };
+      const c = new MarketClock({
+        calendar: fixedCalendar(),
+        store: throwing,
+        now: () => new Date('2025-12-25T19:30:00Z'),
+      });
+      // Refresh swallows the error and keeps the bundled fixture.
+      const cal = await c.refreshFromStore();
+      expect(cal.holidays.has('2025-12-25')).toBe(true);
+      expect(c.state()).toBe('holiday');
+    });
+
+    it('store empty -> bundled fallback is used (first boot before cron)', async () => {
+      const store = fakeStore([]);
+      const c = new MarketClock({
+        calendar: fixedCalendar(),
+        store,
+        now: () => new Date('2025-12-25T19:30:00Z'),
+      });
+      await c.refreshFromStore();
+      // Bundled fixture still has 2025-12-25 as a holiday.
+      expect(c.state()).toBe('holiday');
+      expect(c.isHoliday('2025-12-25')).toBe(true);
+    });
+
+    it('refreshFromStore notifies onCalendarUpdate listeners only on change', async () => {
+      const store = fakeStore([
+        { kind: 'market_holiday', startUtc: '2026-01-19T05:00:00.000Z' },
+      ]);
+      const c = new MarketClock({ calendar: fixedCalendar(), store });
+      let calls = 0;
+      const off = c.onCalendarUpdate(() => {
+        calls += 1;
+      });
+      await c.refreshFromStore();
+      expect(calls).toBe(1);
+      // Second refresh with identical store payload: no-op.
+      await c.refreshFromStore();
+      expect(calls).toBe(1);
+      off();
+    });
+
+    it('refreshFromStore is a no-op when no store is configured', async () => {
+      const c = new MarketClock({ calendar: fixedCalendar() });
+      const before = c.getCalendar();
+      const after = await c.refreshFromStore();
+      expect(after).toBe(before);
+    });
+  });
 });

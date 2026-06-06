@@ -310,4 +310,67 @@ describe('Scheduler', () => {
     expect(errors.length).toBe(1);
     sched.stop();
   });
+
+  it('reapplyCadences reschedules idle jobs to the current cadence', async () => {
+    let state: 'rth' | 'closed' = 'rth';
+    let listener: (() => void) | null = null;
+    const clock = {
+      state: () => state,
+      isOpen: () => state === 'rth',
+      isHoliday: () => false,
+      closeTimeFor: () => '16:00',
+      getCalendar: () => ({
+        timezone: 'America/New_York',
+        regularHours: { open: '09:30', close: '16:00' },
+        holidays: new Set<string>(),
+        earlyCloses: new Map<string, string>(),
+      }),
+      onCalendarUpdate: (cb: () => void) => {
+        listener = cb;
+        return () => {
+          listener = null;
+        };
+      },
+      _trigger(): void {
+        const cb = listener;
+        if (cb) cb();
+      },
+    };
+
+    const calls: number[] = [];
+    const sched = new Scheduler({
+      clock: clock as unknown as MarketClock,
+      jitterRatio: 0,
+      random: () => 0.5,
+    });
+    sched.register({
+      id: 'cadence-swap',
+      // 1s while RTH; 60s when closed. After a calendar update flips state,
+      // reapplyCadences should reschedule the next tick to the closed cadence.
+      cadence: (s) => (s === 'rth' ? 1_000 : 60_000),
+      run: () => {
+        calls.push(Date.now());
+      },
+    });
+    sched.start();
+
+    // Two RTH ticks at 1s cadence.
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(calls.length).toBe(2);
+
+    // Flip state and fire the calendar-update listener; the scheduler should
+    // reapply cadences and the next tick should NOT fire within 1s.
+    state = 'closed';
+    clock._trigger();
+
+    const before = calls.length;
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(calls.length).toBe(before);
+
+    // ...but it should fire by the new 60s cadence.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(calls.length).toBe(before + 1);
+
+    sched.stop();
+  });
 });

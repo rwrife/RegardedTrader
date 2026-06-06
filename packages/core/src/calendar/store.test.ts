@@ -197,7 +197,7 @@ describe('CalendarStore', () => {
       { kinds: ['market_holiday'] },
     );
     expect(onlyHolidays).toHaveLength(1);
-    expect(onlyHolidays[0].title).toBe('Christmas');
+    expect(onlyHolidays[0]?.title).toBe('Christmas');
 
     // Half-open: an event whose start == toUtc is excluded.
     const excludeBoundary = await store.eventsBetween(
