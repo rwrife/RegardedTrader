@@ -1,11 +1,18 @@
 import 'dotenv/config';
 import { loadConfig } from '@regardedtrader/core';
 import { createDefaultApp } from './app.js';
+import { assertLoopbackHost } from './bind-guard.js';
 
 const cfg = await loadConfig();
 
-if (cfg.server.host !== '127.0.0.1' && cfg.server.host !== 'localhost') {
-  console.error(`Refusing to bind to non-local host. RegardedTrader is local-only.`);
+// Defence-in-depth: validate the bind host at runtime (AGENTS.md rule #1).
+// The config layer also enforces this, but env-var overrides or programmatic
+// callers could bypass it. We refuse to call `listen` on anything that isn't
+// a loopback address.
+try {
+  await assertLoopbackHost(cfg.server.host);
+} catch (e) {
+  console.error((e as Error).message);
   process.exit(1);
 }
 

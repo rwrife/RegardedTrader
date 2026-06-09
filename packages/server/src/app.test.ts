@@ -298,3 +298,63 @@ describe('POST /config/test', () => {
     expect(r.error.message).toContain('***');
   });
 });
+
+describe('Origin loopback guard (#128)', () => {
+  function makeMinimalApp() {
+    return createApp({
+      market: {
+        quote: async () => ({ symbol: 'X', price: 0, change: 0, changePercent: 0, volume: 0, asOf: '' }),
+        history: async () => [],
+        news: async () => [],
+        optionsChain: async () => [],
+      },
+      webSearch: fakeWebSearch(),
+      watchlist: new WatchlistStore({ path: join(dir, 'watchlist.json') }),
+      initialConfig: {
+        version: 1,
+        providers: {},
+        activeProvider: null,
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true },
+        server: { host: '127.0.0.1', port: 4317 },
+        marketData: { providers: {}, activeProvider: null },
+      },
+      llmFromConfig: () => null,
+    });
+  }
+
+  it('allows requests with no Origin header', async () => {
+    const { app } = makeMinimalApp();
+    baseUrl = await listen(app);
+    const r = await fetch(`${baseUrl}/health`);
+    expect(r.status).toBe(200);
+  });
+
+  it('allows loopback Origin', async () => {
+    const { app } = makeMinimalApp();
+    baseUrl = await listen(app);
+    const r = await fetch(`${baseUrl}/health`, {
+      headers: { Origin: 'http://127.0.0.1:5173' },
+    });
+    expect(r.status).toBe(200);
+  });
+
+  it('rejects non-loopback Origin with 403', async () => {
+    const { app } = makeMinimalApp();
+    baseUrl = await listen(app);
+    const r = await fetch(`${baseUrl}/health`, {
+      headers: { Origin: 'http://evil.com' },
+    });
+    expect(r.status).toBe(403);
+    const j = (await r.json()) as { error: string };
+    expect(j.error).toMatch(/Non-loopback Origin/);
+  });
+
+  it('rejects 0.0.0.0 Origin with 403', async () => {
+    const { app } = makeMinimalApp();
+    baseUrl = await listen(app);
+    const r = await fetch(`${baseUrl}/health`, {
+      headers: { Origin: 'http://0.0.0.0:3000' },
+    });
+    expect(r.status).toBe(403);
+  });
+});

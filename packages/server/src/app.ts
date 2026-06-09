@@ -30,6 +30,7 @@ import {
   type LiveQuote,
 } from '@regardedtrader/core';
 import { liveQuote, type LiveQuoteSource, type YahooQuoteLike } from './liveQuote.js';
+import { isLoopbackOrigin } from './bind-guard.js';
 
 export interface AppDeps {
   /**
@@ -110,8 +111,24 @@ export function createApp(deps: AppDeps): AppHandle {
 
   const app = express();
   app.use(express.json({ limit: '1mb' }));
+  // Defence-in-depth Origin guard (AGENTS.md rule #1, issue #128):
+  // hard-reject any cross-origin request whose `Origin` header is not a
+  // loopback URL. Runs BEFORE the `cors` middleware so a non-loopback caller
+  // never sees a permissive preflight reply. Same-origin requests (no
+  // `Origin` header) and tooling like curl are unaffected.
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (typeof origin === 'string' && origin.length > 0 && !isLoopbackOrigin(origin)) {
+      res.status(403).json({
+        error: 'Non-loopback Origin rejected. RegardedTrader is local-only.',
+        hint: 'Open the dashboard via http://127.0.0.1 or http://localhost.',
+      });
+      return;
+    }
+    next();
+  });
   app.use(
-    cors({ origin: [/^http:\/\/127\.0\.0\.1:\d+$/, /^http:\/\/localhost:\d+$/] }),
+    cors({ origin: [/^http:\/\/127\.0\.0\.1:\d+$/, /^http:\/\/localhost:\d+$/, /^http:\/\/\[::1\]:\d+$/] }),
   );
 
   app.get('/health', (_req, res) => {
