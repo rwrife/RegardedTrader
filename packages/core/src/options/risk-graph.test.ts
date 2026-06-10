@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { riskGraph, type RiskGraphLeg } from './risk-graph.js';
+import { riskGraph, computeRiskGraph, type RiskGraphLeg } from './risk-graph.js';
+import { RiskGraphResult } from '../schemas/index.js';
 
 describe('riskGraph — single legs', () => {
   it('long call: bounded loss = premium, unbounded gain, breakeven = K + premium', () => {
@@ -120,6 +121,85 @@ describe('riskGraph — validation', () => {
         uLo: 100,
         uHi: 100,
       }),
+    ).toThrow();
+  });
+});
+
+describe('computeRiskGraph — spec-named wrapper (issue #127)', () => {
+  it('long call: returns points[], breakEvens, maxProfit=null, maxLoss=-premium', () => {
+    const legs: RiskGraphLeg[] = [
+      { side: 'long', type: 'call', strike: 100, qty: 1, premium: 5 },
+    ];
+    const r = computeRiskGraph(legs, { uLo: 50, uHi: 200, steps: 151 });
+    expect(r.maxLoss).toBeCloseTo(-500, 6);
+    expect(r.maxProfit).toBeNull();
+    expect(r.breakEvens.length).toBe(1);
+    expect(r.breakEvens[0]).toBeCloseTo(105, 6);
+    expect(r.netDebit).toBeCloseTo(500, 6);
+    expect(r.points.length).toBeGreaterThan(0);
+    for (let i = 1; i < r.points.length; i++) {
+      expect(r.points[i]!.underlying).toBeGreaterThan(r.points[i - 1]!.underlying);
+    }
+  });
+
+  it('bull call vertical: matches hand-computed breakeven=103, maxProfit=700, maxLoss=-300', () => {
+    const legs: RiskGraphLeg[] = [
+      { side: 'long', type: 'call', strike: 100, qty: 1, premium: 5 },
+      { side: 'short', type: 'call', strike: 110, qty: 1, premium: 2 },
+    ];
+    const r = computeRiskGraph(legs, { uLo: 80, uHi: 130, steps: 51 });
+    expect(r.maxLoss).toBeCloseTo(-300, 4);
+    expect(r.maxProfit).toBeCloseTo(700, 4);
+    expect(r.breakEvens).toHaveLength(1);
+    expect(r.breakEvens[0]).toBeCloseTo(103, 4);
+  });
+
+  it('iron condor: two breakevens, defined risk both wings', () => {
+    const legs: RiskGraphLeg[] = [
+      { side: 'short', type: 'put', strike: 95, qty: 1, premium: 1.5 },
+      { side: 'long', type: 'put', strike: 90, qty: 1, premium: 0.75 },
+      { side: 'short', type: 'call', strike: 105, qty: 1, premium: 1.5 },
+      { side: 'long', type: 'call', strike: 110, qty: 1, premium: 0.75 },
+    ];
+    const r = computeRiskGraph(legs, { uLo: 70, uHi: 130, steps: 121 });
+    expect(r.maxProfit).toBeCloseTo(150, 4);
+    expect(r.maxLoss).toBeCloseTo(-350, 4);
+    expect(r.breakEvens).toHaveLength(2);
+    expect(r.breakEvens[0]).toBeCloseTo(93.5, 4);
+    expect(r.breakEvens[1]).toBeCloseTo(106.5, 4);
+  });
+
+  it('result passes the RiskGraphResult Zod schema', () => {
+    const legs: RiskGraphLeg[] = [
+      { side: 'long', type: 'put', strike: 50, qty: 2, premium: 1.25 },
+      { side: 'short', type: 'put', strike: 45, qty: 2, premium: 0.5 },
+    ];
+    const r = computeRiskGraph(legs);
+    const parsed = RiskGraphResult.safeParse(r);
+    expect(parsed.success).toBe(true);
+  });
+
+  it('points are zipped from the same data riskGraph() emits', () => {
+    const legs: RiskGraphLeg[] = [
+      { side: 'long', type: 'call', strike: 100, qty: 1, premium: 5 },
+      { side: 'short', type: 'call', strike: 110, qty: 1, premium: 2 },
+    ];
+    const raw = riskGraph(legs, { uLo: 80, uHi: 130, steps: 21 });
+    const r = computeRiskGraph(legs, { uLo: 80, uHi: 130, steps: 21 });
+    expect(r.points).toHaveLength(raw.underlying.length);
+    for (let i = 0; i < r.points.length; i++) {
+      expect(r.points[i]!.underlying).toBe(raw.underlying[i]);
+      expect(r.points[i]!.pnl).toBe(raw.pnl[i]);
+    }
+    expect(r.maxProfit).toBe(raw.maxGain);
+    expect(r.maxLoss).toBe(raw.maxLoss);
+    expect(r.breakEvens).toEqual(raw.breakevens);
+  });
+
+  it('validation errors from riskGraph propagate through the wrapper', () => {
+    expect(() => computeRiskGraph([])).toThrow();
+    expect(() =>
+      computeRiskGraph([{ side: 'long', type: 'call', strike: 100, qty: 1, premium: -1 }]),
     ).toThrow();
   });
 });

@@ -240,3 +240,65 @@ export function riskGraph(legs: RiskGraphLeg[], opts: RiskGraphOptions = {}): Ri
     netDebit,
   };
 }
+
+/**
+ * Per-point payoff sample emitted by {@link computeRiskGraph}. The shape
+ * (`{ underlying, pnl }`) is what the dashboard payoff chart and the CLI
+ * ASCII-plot iterate over.
+ */
+export interface RiskGraphResultPoint {
+  underlying: number;
+  pnl: number;
+}
+
+/**
+ * Spec-named result shape for issue #127. Wraps the lower-level {@link
+ * RiskGraph} into the API the issue's acceptance criteria specify:
+ * `{ points, breakEvens, maxProfit, maxLoss }`. Use this from agents and
+ * route handlers; use {@link riskGraph} when you need the raw parallel
+ * `underlying` / `pnl` arrays (e.g. for direct plotting).
+ */
+export interface ComputeRiskGraphResult {
+  /** Sampled payoff series at expiry, sorted by underlying price ascending. */
+  points: RiskGraphResultPoint[];
+  /** Underlying prices where pnl crosses zero. May be empty. */
+  breakEvens: number[];
+  /** Best-case gain in dollars (positive number) or null if unbounded. */
+  maxProfit: number | null;
+  /** Worst-case loss in dollars (negative number) or null if unbounded. */
+  maxLoss: number | null;
+  /** Positive = net debit, negative = net credit, in dollars. */
+  netDebit: number;
+}
+
+/**
+ * Compute the risk graph for a multi-leg option structure using the API
+ * shape required by issue #127. This is a thin, deterministic wrapper around
+ * {@link riskGraph} that zips the parallel `underlying`/`pnl` arrays into
+ * `{ underlying, pnl }` points and renames the bound fields to match the
+ * spec (`breakEvens`, `maxProfit`). The wrapped function is pure and
+ * performs no I/O.
+ *
+ * Supports the structures called out in the issue: long/short call,
+ * long/short put, verticals, calendars (single-expiry; multi-expiry is
+ * tracked as follow-up), and iron condors.
+ */
+export function computeRiskGraph(
+  legs: RiskGraphLeg[],
+  opts: RiskGraphOptions = {},
+): ComputeRiskGraphResult {
+  const raw = riskGraph(legs, opts);
+  const points: RiskGraphResultPoint[] = new Array(raw.underlying.length);
+  for (let i = 0; i < raw.underlying.length; i++) {
+    const u = raw.underlying[i] as number;
+    const y = raw.pnl[i] as number;
+    points[i] = { underlying: u, pnl: y };
+  }
+  return {
+    points,
+    breakEvens: raw.breakevens,
+    maxProfit: raw.maxGain,
+    maxLoss: raw.maxLoss,
+    netDebit: raw.netDebit,
+  };
+}

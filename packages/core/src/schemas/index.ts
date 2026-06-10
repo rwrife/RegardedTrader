@@ -120,6 +120,29 @@ export const RiskGraphSeries = z.object({
 });
 export type RiskGraphSeries = z.infer<typeof RiskGraphSeries>;
 
+/**
+ * Spec-shaped result of `computeRiskGraph` (issue #127). Mirrors
+ * `RiskGraphSeries` semantically but with the field names called out in the
+ * acceptance criteria (`points`, `breakEvens`, `maxProfit`, `maxLoss`).
+ * Validated at the wire/storage boundary; in-process callers can use the
+ * `ComputeRiskGraphResult` TS interface directly.
+ */
+export const RiskGraphResult = z.object({
+  points: z.array(
+    z.object({
+      underlying: z.number(),
+      pnl: z.number(),
+    }),
+  ),
+  breakEvens: z.array(z.number()),
+  /** null = unbounded gain. */
+  maxProfit: z.number().nullable(),
+  /** null = unbounded loss. */
+  maxLoss: z.number().nullable(),
+  netDebit: z.number(),
+});
+export type RiskGraphResult = z.infer<typeof RiskGraphResult>;
+
 export const RiskReview = z.object({
   ok: z.boolean(),
   violations: z.array(z.string()),
