@@ -32,26 +32,32 @@ export interface WebSearch {
 export class DuckDuckGoSearch implements WebSearch {
   constructor(
     private readonly endpoint = 'https://html.duckduckgo.com/html/',
-    private readonly userAgent = 'Mozilla/5.0 (X11; Linux x86_64) RegardedTrader/0.1 (research)',
+    // DuckDuckGo serves a JS-only stub (HTTP 202) when the User-Agent looks
+    // like a bot. Use a current desktop-browser UA so we get the real HTML
+    // result page that our parser understands. This is what unblocks
+    // "add stock" — with the old UA + POST the validator always saw zero
+    // search results and reported the ticker as not found.
+    private readonly userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     private readonly timeoutMs = 8_000,
   ) {}
 
   async search(query: string, opts: { limit?: number } = {}): Promise<WebSearchResult[]> {
     const limit = Math.max(1, Math.min(opts.limit ?? 8, 25));
-    const body = new URLSearchParams({ q: query }).toString();
 
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), this.timeoutMs);
+    // GET html.duckduckgo.com returns the full result page; POST currently
+    // returns a JS-only shell. Empirically GET is also more cache-friendly.
+    const url = `${this.endpoint}${this.endpoint.includes('?') ? '&' : '?'}q=${encodeURIComponent(query)}`;
     let html: string;
     try {
-      const res = await fetch(this.endpoint, {
-        method: 'POST',
+      const res = await fetch(url, {
+        method: 'GET',
         headers: {
-          'content-type': 'application/x-www-form-urlencoded',
           'user-agent': this.userAgent,
-          accept: 'text/html',
+          accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'accept-language': 'en-US,en;q=0.9',
         },
-        body,
         signal: ctl.signal,
       });
       if (!res.ok) {
