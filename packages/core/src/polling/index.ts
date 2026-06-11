@@ -118,3 +118,14 @@ export {
   type PollRedditOptions,
   type PollRedditResult,
 } from './jobs/reddit-mentions.js';
+export {
+  aggregateSentiment,
+  aggregateScoredMentions,
+  SentimentAggregatorWeights,
+  DEFAULT_SOURCE_WEIGHTS,
+  DEFAULT_WINDOW_MS,
+  DEFAULT_CADENCE_MS,
+  type AggregateSentimentOptions,
+  type AggregateSentimentResult,
+  type SentimentUpdateEvent,
+} from './jobs/sentiment-aggregate.js';
