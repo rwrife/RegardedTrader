@@ -1,4 +1,12 @@
 export {
+  AIRecommender,
+  RECOMMENDER_RULE_VERSION,
+  RecommenderLLMOutput,
+  type AIRecommenderOptions,
+  type Recommender,
+  type RecommenderStamp,
+} from './recommender.js';
+export {
   RecommendationStore,
   RecommendationRetentionPolicy,
   DEFAULT_RECOMMENDATION_RETENTION,
