@@ -7,6 +7,12 @@ export {
   type RecommenderStamp,
 } from './recommender.js';
 export {
+  RecommenderOrchestrator,
+  type RecommendationUpdateEvent,
+  type RecommenderOrchestratorOptions,
+  type RunOnceResult,
+} from './orchestrator.js';
+export {
   RecommendationStore,
   RecommendationRetentionPolicy,
   DEFAULT_RECOMMENDATION_RETENTION,
