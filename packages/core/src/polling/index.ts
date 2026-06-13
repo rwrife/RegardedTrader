@@ -129,3 +129,9 @@ export {
   type AggregateSentimentResult,
   type SentimentUpdateEvent,
 } from './jobs/sentiment-aggregate.js';
+export {
+  createRecommendationsJob,
+  DEFAULT_RECOMMENDATIONS_CADENCES,
+  type CreateRecommendationsJobOptions,
+  type RecommendationsCadenceConfig,
+} from './jobs/recommendations.js';
