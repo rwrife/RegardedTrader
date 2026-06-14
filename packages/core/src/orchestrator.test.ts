@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Orchestrator } from './orchestrator.js';
-import type { LLM } from './agents/index.js';
+import type { LLM, TechnicianAgent, NewsScoutAgent } from './agents/index.js';
 import type { MarketDataClient } from './clients/index.js';
 import type { OptionContract, TradePlan } from './schemas/index.js';
 
@@ -8,6 +8,9 @@ import type { OptionContract, TradePlan } from './schemas/index.js';
  * Coverage for issue #115: `POST /plans` wire format must surface
  * `RiskOfficer` violations on every plan, and flag `noCompliantPlans` when
  * every candidate fails review.
+ *
+ * Also covers issue #126: full briefing pipeline (analyst + optional
+ * Technician/NewsScout + strategist + RiskOfficer aggregate verdict).
  */
 
 const chain: OptionContract[] = [
@@ -141,5 +144,113 @@ describe('Orchestrator.proposePlans (#115)', () => {
     expect(res.noCompliantPlans).toBeUndefined();
     expect(res.plans[0]?.review.ok).toBe(true);
     expect(res.plans[1]?.review.ok).toBe(false);
+  });
+});
+
+describe('Orchestrator.briefing (#126)', () => {
+  const analystReply = JSON.stringify({
+    bullCase: 'bull',
+    bearCase: 'bear',
+    catalysts: ['c1'],
+    risks: ['r1'],
+  });
+  function analystLLM(): LLM {
+    return {
+      async complete() {
+        return analystReply;
+      },
+    };
+  }
+
+  it('produces a valid analyst-only briefing when no optional agents are registered', async () => {
+    const o = new Orchestrator(fakeMarket(), analystLLM());
+    const b = await o.briefing('NVDA');
+    expect(b.symbol).toBe('NVDA');
+    expect(b.bullCase).toBe('bull');
+    expect(b.ta).toBeUndefined();
+    expect(b.newsScout).toBeUndefined();
+    expect(b.strategist).toBeUndefined();
+    expect(b.riskVerdict).toBeUndefined();
+    expect(b.disclaimer).toMatch(/Not financial advice/i);
+    expect(Array.isArray(b.sourcesUsed)).toBe(true);
+  });
+
+  it('skips missing optional agents without breaking the briefing', async () => {
+    // Only Technician registered; NewsScout absent.
+    const technician: TechnicianAgent = {
+      async analyze() {
+        return {
+          trend: 'up',
+          momentum: 'positive',
+          volatility: 'normal',
+          keyLevels: [500],
+          commentary: 'looks fine',
+          sourcesUsed: ['indicators'],
+        };
+      },
+    };
+    const o = new Orchestrator(
+      fakeMarket(),
+      analystLLM(),
+      undefined,
+      { technician },
+    );
+    const b = await o.briefing('NVDA');
+    expect(b.ta?.trend).toBe('up');
+    expect(b.newsScout).toBeUndefined();
+    expect(b.sourcesUsed).toContain('indicators');
+  });
+
+  it('composes Technician + NewsScout + strategist and applies RiskOfficer last', async () => {
+    const technician: TechnicianAgent = {
+      async analyze() {
+        return {
+          trend: 'up',
+          momentum: 'pos',
+          volatility: 'low',
+          keyLevels: [],
+          commentary: 'ok',
+          sourcesUsed: ['ta:rsi'],
+        };
+      },
+    };
+    const scout: NewsScoutAgent = {
+      async scout() {
+        return {
+          headlines: [],
+          summary: 'no fresh news',
+          sourcesUsed: ['news:yahoo'],
+        };
+      },
+    };
+    const o = new Orchestrator(
+      fakeMarket(),
+      planJson([compliantPlan]),
+      { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true },
+      { technician, newsScout: scout },
+    );
+    const b = await o.briefing('NVDA', { thesis: 'bullish', maxLossUsd: 500 });
+    expect(b.ta?.commentary).toBe('ok');
+    expect(b.newsScout?.summary).toBe('no fresh news');
+    expect(b.strategist?.candidates).toHaveLength(1);
+    expect(b.strategist?.candidates[0]?.review.ok).toBe(true);
+    expect(b.riskVerdict?.ok).toBe(true);
+    expect(b.sourcesUsed).toEqual(
+      expect.arrayContaining(['ta:rsi', 'news:yahoo']),
+    );
+  });
+
+  it('surfaces RiskOfficer-violation path in the aggregate verdict', async () => {
+    const o = new Orchestrator(
+      fakeMarket(),
+      planJson([violatingPlan]),
+      { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true },
+    );
+    const b = await o.briefing('NVDA', { thesis: 'bullish', maxLossUsd: 500 });
+    expect(b.strategist?.noCompliantPlans).toBe(true);
+    expect(b.riskVerdict?.ok).toBe(false);
+    expect(b.riskVerdict?.violations.length).toBeGreaterThan(0);
+    // Violation strings are prefixed with the plan name for traceability.
+    expect(b.riskVerdict?.violations[0]).toMatch(/^Big long call: /);
   });
 });
