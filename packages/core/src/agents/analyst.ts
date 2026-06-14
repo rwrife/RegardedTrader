@@ -51,6 +51,7 @@ ${JSON.stringify(input, null, 2)}`;
       risks: parsed.risks ?? [],
       news: input.news,
       disclaimer: DISCLAIMER,
+      sourcesUsed: [],
     };
   }
 }

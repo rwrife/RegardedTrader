@@ -236,6 +236,46 @@ export const ValidationErr = z.object({
 export const ValidationResult = z.discriminatedUnion('ok', [ValidationOk, ValidationErr]);
 export type ValidationResult = z.infer<typeof ValidationResult>;
 
+/**
+ * Output of an optional `Technician` agent slot in the briefing pipeline
+ * (issue #126; full Technician agent is #74). Kept loose-schema here so a
+ * future PR can swap in the real Technician payload without churning the
+ * briefing surface.
+ */
+export const BriefingTechnical = z.object({
+  trend: z.string().min(1),
+  momentum: z.string().min(1),
+  volatility: z.string().min(1),
+  keyLevels: z.array(z.number()).default([]),
+  commentary: z.string().min(1),
+  sourcesUsed: z.array(z.string()).default([]),
+});
+export type BriefingTechnical = z.infer<typeof BriefingTechnical>;
+
+/**
+ * Output of an optional `NewsScout` agent slot (issue #126; full NewsScout
+ * agent is #75). Same rationale as `BriefingTechnical`.
+ */
+export const BriefingNews = z.object({
+  headlines: z.array(NewsItem),
+  summary: z.string().min(1),
+  sourcesUsed: z.array(z.string()).default([]),
+});
+export type BriefingNews = z.infer<typeof BriefingNews>;
+
+/**
+ * Aggregated options-strategist section produced when a caller supplies a
+ * thesis + max-loss budget to `Orchestrator.briefing`. Each candidate has
+ * already passed through `RiskOfficer.review` so surfaces never render an
+ * un-vetted plan.
+ */
+export const BriefingStrategist = z.object({
+  thesis: z.string().min(1),
+  candidates: z.array(ReviewedTradePlan),
+  noCompliantPlans: z.boolean().default(false),
+});
+export type BriefingStrategist = z.infer<typeof BriefingStrategist>;
+
 export const Briefing = z.object({
   symbol: Ticker,
   asOf: z.string(),
@@ -247,5 +287,36 @@ export const Briefing = z.object({
   risks: z.array(z.string()),
   news: z.array(NewsItem),
   disclaimer: z.string(),
+  /**
+   * Optional Technician section. Populated when an Orchestrator was
+   * constructed with a `technician` agent (issue #126). Absent otherwise so
+   * existing CLI/web consumers keep working unchanged.
+   */
+  ta: BriefingTechnical.optional(),
+  /**
+   * Optional NewsScout section. Populated when an Orchestrator was
+   * constructed with a `newsScout` agent.
+   */
+  newsScout: BriefingNews.optional(),
+  /**
+   * Optional strategist section. Populated only when the briefing call
+   * includes a `thesis` + `maxLossUsd` budget so the strategist can produce
+   * candidate structures.
+   */
+  strategist: BriefingStrategist.optional(),
+  /**
+   * Aggregated `RiskOfficer` verdict for the briefing as a whole. When a
+   * strategist section is present and *any* candidate fails review, `ok` is
+   * false and `violations` summarises why. When there is no strategist
+   * section (briefing-only call) this is omitted.
+   */
+  riskVerdict: RiskReview.optional(),
+  /**
+   * Flat list of source labels used to assemble this briefing (market data,
+   * indicator inputs, agent sources). Mirrors the AGENTS.md "sources used"
+   * requirement. Empty by default so existing fixtures don't have to be
+   * regenerated.
+   */
+  sourcesUsed: z.array(z.string()).default([]),
 });
 export type Briefing = z.infer<typeof Briefing>;
