@@ -180,6 +180,21 @@ export const ReviewedTradePlan = z.object({
 });
 export type ReviewedTradePlan = z.infer<typeof ReviewedTradePlan>;
 
+/**
+ * Request body for `POST /briefing/:symbol` (issue #138). When `thesis` and
+ * `maxLossUsd` are both present the server runs the full strategist pipeline
+ * (#126); otherwise the briefing is analyst-only. Unknown fields are
+ * rejected so clients can't smuggle in extra params.
+ */
+export const BriefingRequest = z
+  .object({
+    thesis: z.string().min(3).optional(),
+    maxLossUsd: z.number().positive().max(100_000).optional(),
+    expiry: z.string().min(1).optional(),
+  })
+  .strict();
+export type BriefingRequest = z.infer<typeof BriefingRequest>;
+
 export const PlansResponse = z.object({
   plans: z.array(ReviewedTradePlan),
   noCompliantPlans: z.boolean().optional(),
