@@ -358,3 +358,89 @@ describe('Origin loopback guard (#128)', () => {
     expect(r.status).toBe(403);
   });
 });
+
+describe('POST /briefing/:symbol (#138)', () => {
+  async function makeBriefingApp(): Promise<void> {
+    const watchlist = new WatchlistStore({ path: join(dir, 'watchlist.json') });
+    // Pre-seed NVDA so requireKnownSymbol succeeds without going through the
+    // validator (which would also hit our fake LLM).
+    await watchlist.upsert({
+      symbol: 'NVDA',
+      name: 'NVIDIA Corporation',
+      exchange: 'NASDAQ',
+      sector: 'Technology',
+      industry: 'Semiconductors',
+      description: 'GPUs.',
+      sources: ['https://example.com/nvda'],
+      validatedAt: new Date().toISOString(),
+    });
+    const { app } = createApp({
+      market: {
+        quote: async () => ({ symbol: 'NVDA', price: 100, change: 0, changePercent: 0, volume: 0, asOf: new Date().toISOString() }),
+        history: async () => [],
+        news: async () => [],
+        optionsChain: async () => [],
+      },
+      webSearch: fakeWebSearch(),
+      watchlist,
+      initialConfig: {
+        version: 1,
+        providers: { fake: { kind: 'openai-compatible', label: 'fake', baseUrl: 'http://x/v1', model: 'm' } },
+        activeProvider: 'fake',
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true },
+        server: { host: '127.0.0.1', port: 4317 },
+        marketData: { providers: {}, activeProvider: null },
+      },
+      // Analyst tolerates missing fields, strategist returns []; both safe.
+      llmFromConfig: () => fakeLLM({ bullCase: 'b', bearCase: 'b', catalysts: [], risks: [], plans: [] }),
+    });
+    baseUrl = await listen(app);
+  }
+
+  it('analyst-only path: empty body returns a Briefing without strategist', async () => {
+    await makeBriefingApp();
+    const r = await fetch(`${baseUrl}/briefing/NVDA`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(r.status).toBe(200);
+    const j = (await r.json()) as { symbol: string; strategist?: unknown };
+    expect(j.symbol).toBe('NVDA');
+    expect(j.strategist).toBeUndefined();
+  });
+
+  it('full-strategist path: thesis+maxLossUsd populates strategist section', async () => {
+    await makeBriefingApp();
+    const r = await fetch(`${baseUrl}/briefing/NVDA`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ thesis: 'bullish into earnings', maxLossUsd: 500 }),
+    });
+    expect(r.status).toBe(200);
+    const j = (await r.json()) as { strategist?: { thesis: string; candidates: unknown[] } };
+    expect(j.strategist).toBeDefined();
+    expect(j.strategist?.thesis).toBe('bullish into earnings');
+    expect(Array.isArray(j.strategist?.candidates)).toBe(true);
+  });
+
+  it('rejects invalid body (unknown field) with 400', async () => {
+    await makeBriefingApp();
+    const r = await fetch(`${baseUrl}/briefing/NVDA`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ thesis: 'x', maxLossUsd: 500, sneaky: true }),
+    });
+    expect(r.status).toBe(400);
+  });
+
+  it('rejects unknown symbol with 422', async () => {
+    await makeBriefingApp();
+    const r = await fetch(`${baseUrl}/briefing/TSLA`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(r.status).toBe(422);
+  });
+});

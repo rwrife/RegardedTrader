@@ -12,6 +12,7 @@ import {
   activeLLM,
   AppConfig,
   AiProvider,
+  BriefingRequest,
   ConfigTestResult,
   buildLLM,
   type ConfigTestResult as ConfigTestResultT,
@@ -338,6 +339,24 @@ export function createApp(deps: AppDeps): AppHandle {
       const known = await requireKnownSymbol(res, symbol);
       if (!known) return;
       res.json(await o.briefing(symbol));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // POST variant (#138): allow the strategist pipeline (#126) to be invoked
+  // from the HTTP surface. Body is Zod-validated and rejects unknown fields
+  // so clients can't smuggle in extra params. With an empty body this
+  // collapses to the same behaviour as GET (analyst-only).
+  app.post('/briefing/:symbol', async (req, res, next) => {
+    try {
+      const o = requireOrchestrator(res);
+      if (!o) return;
+      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+      const known = await requireKnownSymbol(res, symbol);
+      if (!known) return;
+      const body = BriefingRequest.parse(req.body ?? {});
+      res.json(await o.briefing(symbol, body));
     } catch (e) {
       next(e);
     }
