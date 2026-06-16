@@ -16,6 +16,7 @@ const cli = meow(
     ls                         List validated tickers
     rm <SYM>                   Remove a ticker from the watchlist
     briefing <SYMBOL>          Generate an AI briefing for a ticker
+    brief <SYMBOL>             Full briefing pipeline (analyst + TA + news + strategist)
     quote <SYMBOL>             Quick quote
     plan <SYMBOL>              Interactive options trade-plan wizard
     config [show|test [id]]    Configure AI providers, risk caps, server
@@ -24,6 +25,9 @@ const cli = meow(
   Options
     --server <url>             Override server URL (default http://127.0.0.1:4317)
     --refresh                  (add) Force re-validation, bypassing 7-day cache
+    --thesis <text>            (brief) Trade thesis to run strategist arm
+    --max-loss <usd>           (brief) Max-loss budget in USD for strategist
+    --expiry <YYYY-MM-DD>      (brief) Target option expiry for strategist
 
   Examples
     $ regard
@@ -38,6 +42,9 @@ const cli = meow(
     flags: {
       server: { type: 'string', default: 'http://127.0.0.1:4317' },
       refresh: { type: 'boolean', default: false },
+      thesis: { type: 'string' },
+      maxLoss: { type: 'number' },
+      expiry: { type: 'string' },
       help: { type: 'boolean', shortFlag: 'h' },
     },
   },
@@ -57,7 +64,12 @@ if (!command) {
       command={command}
       args={args}
       serverUrl={cli.flags.server}
-      flags={{ refresh: cli.flags.refresh }}
+      flags={{
+        refresh: cli.flags.refresh,
+        thesis: cli.flags.thesis,
+        maxLoss: cli.flags.maxLoss,
+        expiry: cli.flags.expiry,
+      }}
     />,
   );
 }

@@ -8,6 +8,7 @@ import {
   type SampleVerdict,
 } from './sample-data';
 import { Settings } from './routes/settings.js';
+import { Brief } from './routes/brief.js';
 import { useLiveQuote } from './hooks/useLiveQuote.js';
 import { useHistory } from './hooks/useHistory.js';
 import { computeRating } from '@regardedtrader/core/rating';
@@ -15,18 +16,26 @@ import { RatingBadge } from './components/RatingBadge.js';
 import { CandleChart, type Candle } from './components/CandleChart.js';
 
 // Tiny hash-based router so the dashboard stays a single bundle without
-// pulling in react-router. Routes: `#/` (default) and `#/settings`.
-type Route = 'home' | 'settings';
+// pulling in react-router. Routes: `#/` (default), `#/settings`, and
+// `#/brief/:symbol` (full Orchestrator briefing pipeline, issue #139).
+type Route =
+  | { kind: 'home' }
+  | { kind: 'settings' }
+  | { kind: 'brief'; symbol: string };
 
 function parseRoute(hash: string): Route {
-  return hash.replace(/^#/, '').replace(/^\/+/, '').startsWith('settings')
-    ? 'settings'
-    : 'home';
+  const raw = hash.replace(/^#/, '').replace(/^\/+/, '');
+  if (raw.startsWith('settings')) return { kind: 'settings' };
+  const briefMatch = raw.match(/^brief\/([^/?#]+)/);
+  if (briefMatch) return { kind: 'brief', symbol: decodeURIComponent(briefMatch[1]!).toUpperCase() };
+  return { kind: 'home' };
 }
 
-function useHashRoute(): [Route, (r: Route) => void] {
+type NavTarget = 'home' | 'settings' | { kind: 'brief'; symbol: string };
+
+function useHashRoute(): [Route, (r: NavTarget) => void] {
   const [route, setRoute] = useState<Route>(() =>
-    typeof window === 'undefined' ? 'home' : parseRoute(window.location.hash),
+    typeof window === 'undefined' ? { kind: 'home' } : parseRoute(window.location.hash),
   );
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -34,9 +43,15 @@ function useHashRoute(): [Route, (r: Route) => void] {
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
-  const navigate = useCallback((r: Route): void => {
+  const navigate = useCallback((r: NavTarget): void => {
     if (typeof window === 'undefined') return;
-    window.location.hash = r === 'settings' ? '#/settings' : '#/';
+    if (r === 'settings') {
+      window.location.hash = '#/settings';
+    } else if (r === 'home') {
+      window.location.hash = '#/';
+    } else {
+      window.location.hash = `#/brief/${encodeURIComponent(r.symbol)}`;
+    }
   }, []);
   return [route, navigate];
 }
@@ -71,8 +86,11 @@ export function App() {
   // Demo mode is on whenever the backend is unreachable or ?demo=1 is set.
   const demoForced = typeof window !== 'undefined' && /[?&]demo=1\b/.test(window.location.search);
   const [demo, setDemo] = useState<boolean>(demoForced || true);
-  if (route === 'settings') {
+  if (route.kind === 'settings') {
     return <Settings onClose={() => navigate('home')} />;
+  }
+  if (route.kind === 'brief') {
+    return <Brief symbol={route.symbol} onClose={() => navigate('home')} />;
   }
   const [active, setActive] = useState<string>(SAMPLE_TICKERS[0]!.symbol);
   const [tab, setTab] = useState<Tab>('briefing');
@@ -501,8 +519,18 @@ function ListSection({ title, items }: { title: string; items: string[] }) {
 }
 
 function BriefingTab({ t }: { t: SampleTicker }) {
+  const briefHref = `#/brief/${encodeURIComponent(t.symbol)}`;
   return (
     <AiCard>
+      <div className="flex justify-end mb-3">
+        <a
+          href={briefHref}
+          className="text-xs underline text-fg-secondary hover:text-fg"
+          aria-label={`Open full briefing pipeline for ${t.symbol}`}
+        >
+          Open full briefing pipeline →
+        </a>
+      </div>
       <div className="grid md:grid-cols-2 gap-6">
         <Section title="Bull case" tone="up" body={t.briefing.bullCase} />
         <Section title="Bear case" tone="down" body={t.briefing.bearCase} />
