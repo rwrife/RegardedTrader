@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import { BriefingScreen } from './screens/briefing.js';
+import { BriefScreen } from './screens/brief.js';
 import { QuoteScreen } from './screens/quote.js';
 import { PlanScreen } from './screens/plan.js';
 import { DashboardScreen } from './screens/dashboard.js';
@@ -12,13 +13,28 @@ export interface AppProps {
   command: string;
   args: string[];
   serverUrl: string;
-  flags?: { refresh?: boolean };
+  flags?: {
+    refresh?: boolean;
+    thesis?: string;
+    maxLoss?: number;
+    expiry?: string;
+  };
 }
 
 export function App({ command, args, serverUrl, flags }: AppProps) {
   switch (command) {
     case 'briefing':
       return <BriefingScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
+    case 'brief':
+      return (
+        <BriefScreen
+          symbol={args[0] ?? ''}
+          serverUrl={serverUrl}
+          thesis={flags?.thesis}
+          maxLossUsd={flags?.maxLoss}
+          expiry={flags?.expiry}
+        />
+      );
     case 'quote':
       return <QuoteScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
     case 'plan':
