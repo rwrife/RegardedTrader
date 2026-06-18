@@ -1,0 +1,57 @@
+{
+  "quoteSummary": {
+    "result": [
+      {
+        "calendarEvents": {
+          "earnings": {
+            "earningsDate": [
+              { "raw": 1793145600, "fmt": "2026-10-27" },
+              { "raw": 1793491200, "fmt": "2026-10-31" }
+            ],
+            "earningsAverage": { "raw": 1.31, "fmt": "1.31" },
+            "earningsLow": { "raw": 1.2, "fmt": "1.20" },
+            "earningsHigh": { "raw": 1.42, "fmt": "1.42" },
+            "revenueAverage": { "raw": 60000000000, "fmt": "60B" }
+          }
+        },
+        "earningsHistory": {
+          "history": [
+            {
+              "epsActual": { "raw": 1.29, "fmt": "1.29" },
+              "epsEstimate": { "raw": 1.2, "fmt": "1.20" },
+              "epsDifference": { "raw": 0.09, "fmt": "0.09" },
+              "surprisePercent": { "raw": 0.075, "fmt": "7.5%" },
+              "quarter": { "raw": 1769472000, "fmt": "2026-01-27" },
+              "period": "-4q"
+            },
+            {
+              "epsActual": { "raw": 1.1, "fmt": "1.10" },
+              "epsEstimate": { "raw": 1.05, "fmt": "1.05" },
+              "epsDifference": { "raw": 0.05, "fmt": "0.05" },
+              "surprisePercent": { "raw": 0.0476, "fmt": "4.76%" },
+              "quarter": { "raw": 1777248000, "fmt": "2026-04-27" },
+              "period": "-3q"
+            },
+            {
+              "epsActual": { "raw": 1.18, "fmt": "1.18" },
+              "epsEstimate": { "raw": 1.12, "fmt": "1.12" },
+              "epsDifference": { "raw": 0.06, "fmt": "0.06" },
+              "surprisePercent": { "raw": 0.0535, "fmt": "5.35%" },
+              "quarter": { "raw": 1785283200, "fmt": "2026-07-28" },
+              "period": "-2q"
+            },
+            {
+              "epsActual": { "raw": 1.25, "fmt": "1.25" },
+              "epsEstimate": { "raw": 1.22, "fmt": "1.22" },
+              "epsDifference": { "raw": 0.03, "fmt": "0.03" },
+              "surprisePercent": { "raw": 0.0245, "fmt": "2.45%" },
+              "quarter": { "raw": 1787097600, "fmt": "2026-08-18" },
+              "period": "-1q"
+            }
+          ]
+        }
+      }
+    ],
+    "error": null
+  }
+}

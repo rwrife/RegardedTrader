@@ -1,0 +1,53 @@
+{
+  "data": {
+    "asOf": "Mon, Oct 26, 2026",
+    "rows": [
+      {
+        "lastYearRptDt": "10/27/2025",
+        "lastYearEPS": "$1.10",
+        "time": "time-after-hours",
+        "symbol": "NVDA",
+        "name": "NVIDIA Corp",
+        "fiscalQuarterEnding": "Oct/2026",
+        "epsForecast": "$1.31",
+        "noOfEsts": "32",
+        "marketCap": "$2,800,000,000,000"
+      },
+      {
+        "lastYearRptDt": "10/27/2025",
+        "lastYearEPS": "$2.20",
+        "time": "time-pre-market",
+        "symbol": "MSFT",
+        "name": "Microsoft Corporation",
+        "fiscalQuarterEnding": "Sep/2026",
+        "epsForecast": "$3.10",
+        "noOfEsts": "28",
+        "marketCap": "$3,200,000,000,000"
+      },
+      {
+        "lastYearRptDt": "10/27/2025",
+        "lastYearEPS": "$0.45",
+        "time": "time-not-supplied",
+        "symbol": "ZZZNOT",
+        "name": "Not In Watchlist",
+        "fiscalQuarterEnding": "Sep/2026",
+        "epsForecast": "$0.50",
+        "noOfEsts": "5",
+        "marketCap": "$1,000,000,000"
+      },
+      {
+        "lastYearRptDt": "10/27/2025",
+        "lastYearEPS": "($0.10)",
+        "time": "time-not-supplied",
+        "symbol": "LOSS",
+        "name": "Negative EPS Co",
+        "fiscalQuarterEnding": "Sep/2026",
+        "epsForecast": "($0.25)",
+        "noOfEsts": "3",
+        "marketCap": "$500,000,000"
+      }
+    ]
+  },
+  "message": null,
+  "status": { "rCode": 200, "bCodeMessage": null, "developerMessage": null }
+}
