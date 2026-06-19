@@ -18,7 +18,7 @@ without filing a tracking issue should be rejected in review.
 | Quick quote                   | `regard quote <SYM>`       | `/quote/:sym`         | ✅     |
 | Full AI briefing              | `regard briefing <SYM>`    | `/` (home)            | ✅     |
 | Full briefing pipeline (analyst + TA + news + strategist) | `regard brief <SYM> [--thesis ... --max-loss N]` | `#/brief/:symbol` | ✅     |
-| Options trade-plan wizard     | `regard plan <SYM>`        | `/plan/:sym`          | 🚧 web pending |
+| Options trade-plan wizard     | `regard plan <SYM>`        | `#/plan/:sym`         | ✅     |
 | Options chain explorer        | `regard options <SYM>`     | `/options/:sym`       | 🚧 both pending |
 | Watchlist                     | `regard watch [add\|ls\|rm]` | `/watchlist`        | 🚧 both pending |
 | Open the other surface        | `regard dashboard`         | "Open CLI help" link  | ✅ / 🚧 |
