@@ -9,6 +9,7 @@ import {
 } from './sample-data';
 import { Settings } from './routes/settings.js';
 import { Brief } from './routes/brief.js';
+import { Plan } from './routes/plan.js';
 import { useLiveQuote } from './hooks/useLiveQuote.js';
 import { useHistory } from './hooks/useHistory.js';
 import { computeRating } from '@regardedtrader/core/rating';
@@ -18,20 +19,28 @@ import { CandleChart, type Candle } from './components/CandleChart.js';
 // Tiny hash-based router so the dashboard stays a single bundle without
 // pulling in react-router. Routes: `#/` (default), `#/settings`, and
 // `#/brief/:symbol` (full Orchestrator briefing pipeline, issue #139).
+// `#/plan/:symbol` (OptionsStrategist trade-plan view, issue #113).
 type Route =
   | { kind: 'home' }
   | { kind: 'settings' }
-  | { kind: 'brief'; symbol: string };
+  | { kind: 'brief'; symbol: string }
+  | { kind: 'plan'; symbol: string };
 
 function parseRoute(hash: string): Route {
   const raw = hash.replace(/^#/, '').replace(/^\/+/, '');
   if (raw.startsWith('settings')) return { kind: 'settings' };
   const briefMatch = raw.match(/^brief\/([^/?#]+)/);
   if (briefMatch) return { kind: 'brief', symbol: decodeURIComponent(briefMatch[1]!).toUpperCase() };
+  const planMatch = raw.match(/^plan\/([^/?#]+)/);
+  if (planMatch) return { kind: 'plan', symbol: decodeURIComponent(planMatch[1]!).toUpperCase() };
   return { kind: 'home' };
 }
 
-type NavTarget = 'home' | 'settings' | { kind: 'brief'; symbol: string };
+type NavTarget =
+  | 'home'
+  | 'settings'
+  | { kind: 'brief'; symbol: string }
+  | { kind: 'plan'; symbol: string };
 
 function useHashRoute(): [Route, (r: NavTarget) => void] {
   const [route, setRoute] = useState<Route>(() =>
@@ -49,6 +58,8 @@ function useHashRoute(): [Route, (r: NavTarget) => void] {
       window.location.hash = '#/settings';
     } else if (r === 'home') {
       window.location.hash = '#/';
+    } else if (r.kind === 'plan') {
+      window.location.hash = `#/plan/${encodeURIComponent(r.symbol)}`;
     } else {
       window.location.hash = `#/brief/${encodeURIComponent(r.symbol)}`;
     }
@@ -91,6 +102,9 @@ export function App() {
   }
   if (route.kind === 'brief') {
     return <Brief symbol={route.symbol} onClose={() => navigate('home')} />;
+  }
+  if (route.kind === 'plan') {
+    return <Plan symbol={route.symbol} onClose={() => navigate('home')} />;
   }
   const [active, setActive] = useState<string>(SAMPLE_TICKERS[0]!.symbol);
   const [tab, setTab] = useState<Tab>('briefing');
@@ -520,9 +534,17 @@ function ListSection({ title, items }: { title: string; items: string[] }) {
 
 function BriefingTab({ t }: { t: SampleTicker }) {
   const briefHref = `#/brief/${encodeURIComponent(t.symbol)}`;
+  const planHref = `#/plan/${encodeURIComponent(t.symbol)}`;
   return (
     <AiCard>
-      <div className="flex justify-end mb-3">
+      <div className="flex justify-end mb-3 gap-3">
+        <a
+          href={planHref}
+          className="text-xs underline text-fg-secondary hover:text-fg"
+          aria-label={`Open trade plan view for ${t.symbol}`}
+        >
+          Build trade plan →
+        </a>
         <a
           href={briefHref}
           className="text-xs underline text-fg-secondary hover:text-fg"
