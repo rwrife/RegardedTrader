@@ -90,7 +90,7 @@ type ValidationResult =
   | { ok: true; profile: TickerProfile; cached?: boolean }
   | { ok: false; symbol: string; error: string; suggestions?: { symbol: string; name?: string; reason?: string }[] };
 
-type Tab = 'briefing' | 'sentiment' | 'news' | 'recommendation' | 'calendar' | 'chart';
+type Tab = 'briefing' | 'sentiment' | 'news' | 'recommendation' | 'calendar' | 'chart' | 'tech';
 
 export function App() {
   const [route, navigate] = useHashRoute();
@@ -154,6 +154,7 @@ export function App() {
               {tab === 'recommendation' && <RecommendationTab t={ticker} />}
               {tab === 'calendar' && <CalendarTab t={ticker} />}
               {tab === 'chart' && <ChartTab t={ticker} demo={demo} />}
+              {tab === 'tech' && <TechTab t={ticker} demo={demo} />}
             </>
           ) : (
             <div className="text-fg-muted text-sm">No ticker selected.</div>
@@ -467,6 +468,7 @@ function TabBar({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
     { id: 'briefing', label: 'Briefing' },
     { id: 'recommendation', label: 'Recommendation' },
     { id: 'chart', label: 'Chart' },
+    { id: 'tech', label: 'Tech' },
     { id: 'sentiment', label: 'Sentiment' },
     { id: 'news', label: 'News' },
     { id: 'calendar', label: 'Calendar' },
@@ -784,6 +786,102 @@ function NewsTab({ t }: { t: SampleTicker }) {
         ))}
       </ul>
     </div>
+  );
+}
+
+function TechTab({ t, demo }: { t: SampleTicker; demo: boolean }) {
+  const [data, setData] = useState<{
+    trend: string;
+    momentum: string;
+    volatility: string;
+    keyLevels: number[];
+    commentary: string;
+  } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    setData(null);
+    setErr(null);
+    if (demo) return;
+    let cancelled = false;
+    setLoading(true);
+    fetch(`/api/technician/${encodeURIComponent(t.symbol)}`)
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = (await r.json()) as {
+          trend: string;
+          momentum: string;
+          volatility: string;
+          keyLevels: number[];
+          commentary: string;
+        };
+        if (!cancelled) setData(j);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [t.symbol, demo]);
+
+  if (demo) {
+    return (
+      <AiCard label="TECH">
+        <p className="text-sm text-fg-secondary">
+          Live Technician analysis is unavailable in demo mode.
+        </p>
+        <p className="mt-6 text-[11px] text-fg-muted italic">{DISCLAIMER}</p>
+      </AiCard>
+    );
+  }
+
+  return (
+    <AiCard label="TECH">
+      {loading && <p className="text-sm text-fg-muted">Analysing {t.symbol}…</p>}
+      {err && (
+        <p className="text-sm text-down">
+          Could not load Technician output: {err}
+        </p>
+      )}
+      {data && (
+        <div className="space-y-4">
+          <div className="grid md:grid-cols-3 gap-4">
+            <Section title="Trend" tone="up" body={data.trend} />
+            <Section title="Momentum" tone="up" body={data.momentum} />
+            <Section title="Volatility" tone="up" body={data.volatility} />
+          </div>
+          {data.keyLevels.length > 0 && (
+            <div>
+              <div className="text-[10px] font-mono tracking-wider text-fg-muted uppercase mb-1.5">
+                Key levels
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {data.keyLevels.map((n, i) => (
+                  <span
+                    key={i}
+                    className="px-2 py-0.5 rounded bg-surface-2 text-xs font-mono num"
+                  >
+                    {n.toFixed(2)}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          <div>
+            <div className="text-[10px] font-mono tracking-wider text-fg-muted uppercase mb-1.5">
+              Commentary
+            </div>
+            <p className="text-sm leading-relaxed">{data.commentary}</p>
+          </div>
+        </div>
+      )}
+      <p className="mt-6 text-[11px] text-fg-muted italic">{DISCLAIMER}</p>
+    </AiCard>
   );
 }
 

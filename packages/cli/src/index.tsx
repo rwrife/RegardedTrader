@@ -18,6 +18,7 @@ const cli = meow(
     briefing <SYMBOL>          Generate an AI briefing for a ticker
     brief <SYMBOL>             Full briefing pipeline (analyst + TA + news + strategist)
     quote <SYMBOL>             Quick quote
+    tech <SYMBOL>              Technician (TA) commentary for a ticker
     plan <SYMBOL>              Interactive options trade-plan wizard
     config [show|test [id]]    Configure AI providers, risk caps, server
     dashboard                  Open the local web dashboard
