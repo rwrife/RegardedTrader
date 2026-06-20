@@ -3,6 +3,7 @@ import cors from 'cors';
 import { z } from 'zod';
 import {
   Orchestrator,
+  Technician,
   YahooClient,
   Ticker,
   QuoteSchema,
@@ -95,11 +96,18 @@ export function createApp(deps: AppDeps): AppHandle {
   function makeOrchestrator(): Orchestrator | null {
     const llm = deps.llmFromConfig(cfg);
     if (!llm) return null;
-    return new Orchestrator(registry.client, llm, {
-      maxLossUsd: cfg.risk.maxLossUsd,
-      maxLegs: cfg.risk.maxLegs,
-      forbidNakedShorts: cfg.risk.forbidNakedShorts,
-    });
+    return new Orchestrator(
+      registry.client,
+      llm,
+      {
+        maxLossUsd: cfg.risk.maxLossUsd,
+        maxLegs: cfg.risk.maxLegs,
+        forbidNakedShorts: cfg.risk.forbidNakedShorts,
+      },
+      // Wire the Technician agent (issue #74) by default so /briefing
+      // includes a TA section whenever an LLM is configured.
+      { technician: new Technician(llm) },
+    );
   }
 
   let orchestrator = makeOrchestrator();
@@ -330,6 +338,25 @@ export function createApp(deps: AppDeps): AppHandle {
     }
     return entry;
   }
+
+  // Technician agent surface (issue #74). Standalone endpoint so the CLI
+  // `regard tech <SYM>` and the web `Chart` tab can render TA commentary
+  // without rerunning the full briefing pipeline.
+  app.get('/technician/:symbol', async (req, res, next) => {
+    try {
+      const llm = deps.llmFromConfig(cfg);
+      if (!llm) {
+        res.status(503).json({ error: 'AI provider not configured' });
+        return;
+      }
+      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+      const known = await requireKnownSymbol(res, symbol);
+      if (!known) return;
+      res.json(await Technician.fromMarket(llm, registry.client, symbol));
+    } catch (e) {
+      next(e);
+    }
+  });
 
   app.get('/briefing/:symbol', async (req, res, next) => {
     try {

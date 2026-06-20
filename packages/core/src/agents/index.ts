@@ -1,4 +1,6 @@
 export { Analyst } from './analyst.js';
+export { Technician } from './technician.js';
+export type { TechnicianInput } from './technician.js';
 export { OptionsStrategist } from './options-strategist.js';
 export { RiskOfficer } from './risk-officer.js';
 export type { RiskCaps } from './risk-officer.js';
