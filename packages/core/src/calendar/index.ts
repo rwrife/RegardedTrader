@@ -1,5 +1,31 @@
 export * from './store.js';
 export {
+  CalendarOrchestrator,
+  DEFAULT_EARNINGS_WEIGHTS,
+  DEFAULT_HOLIDAY_WEIGHTS,
+  DEFAULT_UNKNOWN_WEIGHT,
+  type CalendarOrchestratorOptions,
+  type CalendarSourceWeights,
+  type CalendarUpdateEvent,
+  type EarningsSource,
+  type EarningsSourceId,
+  type HolidaySource,
+  type HolidaySourceId,
+  type RefreshResult,
+} from './orchestrator.js';
+export {
+  createCalendarEarningsJob,
+  createCalendarHolidaysJob,
+  msUntilNextEt,
+  CALENDAR_EARNINGS_JOB_ID,
+  CALENDAR_HOLIDAYS_JOB_ID,
+  DEFAULT_EARNINGS_CADENCE_MS,
+  DEFAULT_HOLIDAYS_DAILY_ET,
+  DEFAULT_HOLIDAYS_WEEKLY_FALLBACK_MS,
+  type CalendarEarningsJobOptions,
+  type CalendarHolidaysJobOptions,
+} from './jobs.js';
+export {
   fetchNyseHolidays,
   parseNyseHolidaysHtml,
   NYSE_HOLIDAYS_URL,
