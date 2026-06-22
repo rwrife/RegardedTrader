@@ -12,9 +12,10 @@ import type {
   AiProvider,
   ConfigTestResult,
   MarketDataProviderConfig,
+  RiskConfig,
 } from '@regardedtrader/core';
 
-export type { AppConfig, AiProvider, ConfigTestResult, MarketDataProviderConfig };
+export type { AppConfig, AiProvider, ConfigTestResult, MarketDataProviderConfig, RiskConfig };
 
 export interface ConfigResponse {
   ok: boolean;
@@ -53,6 +54,8 @@ export interface ApiClient {
   removeMarketProvider(id: string): Promise<MarketDataConfigResponse>;
   activateMarketProvider(id: string | null): Promise<MarketDataConfigResponse>;
   testMarketProvider(symbol?: string): Promise<MarketDataTestResponse>;
+  /** Update risk caps (#152). Hot-applies to the in-process Orchestrator. */
+  updateRiskCaps(risk: RiskConfig): Promise<ConfigResponse>;
 }
 
 export interface ApiOptions {
@@ -164,6 +167,10 @@ export function createApi(opts: ApiOptions = {}): ApiClient {
       } catch {
         return { ok: false, error: `Invalid JSON from ${res.url}` };
       }
+    },
+    async updateRiskCaps(risk) {
+      const res = await f(url('/config/risk'), json(risk));
+      return readJson<ConfigResponse>(res);
     },
   };
 }

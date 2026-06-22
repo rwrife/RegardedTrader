@@ -444,3 +444,66 @@ describe('POST /briefing/:symbol (#138)', () => {
     expect(r.status).toBe(422);
   });
 });
+
+describe('POST /config/risk', () => {
+  let prevHome: string | undefined;
+  beforeEach(() => {
+    prevHome = process.env.REGARDEDTRADER_HOME;
+    process.env.REGARDEDTRADER_HOME = dir;
+  });
+  afterEach(() => {
+    if (prevHome === undefined) delete process.env.REGARDEDTRADER_HOME;
+    else process.env.REGARDEDTRADER_HOME = prevHome;
+  });
+
+  async function makeApp(): Promise<{ baseUrl: string }> {
+    const watchlist = new WatchlistStore({ path: join(dir, 'watchlist.json') });
+    const { app } = createApp({
+      market: {
+        quote: async () => ({ symbol: 'X', price: 0, change: 0, changePercent: 0, volume: 0, asOf: '' }),
+        history: async () => [],
+        news: async () => [],
+        optionsChain: async () => [],
+      },
+      webSearch: fakeWebSearch(),
+      watchlist,
+      initialConfig: {
+        version: 1,
+        providers: { fake: { kind: 'openai-compatible', label: 'fake', baseUrl: 'http://x/v1', model: 'm' } },
+        activeProvider: 'fake',
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true },
+        server: { host: '127.0.0.1', port: 4317 },
+        marketData: { providers: {}, activeProvider: null },
+      },
+      llmFromConfig: () => fakeLLM(goodReply),
+    });
+    return { baseUrl: await listen(app) };
+  }
+
+  it('updates risk caps and reflects them in GET /config', async () => {
+    const { baseUrl } = await makeApp();
+    const r = await fetch(`${baseUrl}/config/risk`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ maxLossUsd: 250, maxLegs: 2, forbidNakedShorts: false }),
+    });
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { ok: boolean; config: { risk: { maxLossUsd: number; maxLegs: number; forbidNakedShorts: boolean } } };
+    expect(body.ok).toBe(true);
+    expect(body.config.risk).toEqual({ maxLossUsd: 250, maxLegs: 2, forbidNakedShorts: false });
+
+    const cur = await fetch(`${baseUrl}/config`);
+    const curJson = (await cur.json()) as { risk: { maxLossUsd: number; maxLegs: number; forbidNakedShorts: boolean } };
+    expect(curJson.risk).toEqual({ maxLossUsd: 250, maxLegs: 2, forbidNakedShorts: false });
+  });
+
+  it('rejects invalid risk caps with 400', async () => {
+    const { baseUrl } = await makeApp();
+    const r = await fetch(`${baseUrl}/config/risk`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ maxLossUsd: -1, maxLegs: 0, forbidNakedShorts: 'no' }),
+    });
+    expect(r.status).toBe(400);
+  });
+});

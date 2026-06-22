@@ -13,6 +13,7 @@ import {
   activeLLM,
   AppConfig,
   AiProvider,
+  RiskConfig,
   BriefingRequest,
   ConfigTestResult,
   buildLLM,
@@ -422,6 +423,22 @@ export function createApp(deps: AppDeps): AppHandle {
       cfg = next;
       orchestrator = makeOrchestrator();
       rebuildRegistry();
+      res.json({ ok: true, aiConfigured: orchestrator !== null, config: redactConfig(cfg) });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // --- Risk caps editor (#152, CLI/web parity) ---
+  // Accepts the same Zod shape as `AppConfig.risk` and hot-applies the new
+  // caps to the in-process Orchestrator by rebuilding it. No restart needed;
+  // `RiskOfficer` is constructed inside `makeOrchestrator()` from `cfg.risk`.
+  app.post('/config/risk', async (req, res, next) => {
+    try {
+      const risk = RiskConfig.parse(req.body);
+      cfg.risk = risk;
+      await saveConfig(cfg);
+      orchestrator = makeOrchestrator();
       res.json({ ok: true, aiConfigured: orchestrator !== null, config: redactConfig(cfg) });
     } catch (e) {
       next(e);
