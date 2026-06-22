@@ -65,6 +65,11 @@ function makeApi(overrides: Partial<ApiClient> = {}): ApiClient {
       config: makeConfig({ marketData: { providers: {}, activeProvider: id } }),
     })),
     testMarketProvider: vi.fn(async () => ({ ok: true, provider: 'finnhub', symbol: 'AAPL', price: 100 })),
+    updateRiskCaps: vi.fn(async (risk) => ({
+      ok: true,
+      aiConfigured: true,
+      config: makeConfig({ risk }),
+    })),
     ...overrides,
   };
 }
@@ -87,6 +92,13 @@ async function mount(api: ApiClient): Promise<{ container: HTMLDivElement; root:
 function unmount({ container, root }: { container: HTMLDivElement; root: Root }): void {
   act(() => root.unmount());
   container.remove();
+}
+
+function setInputValue(input: HTMLInputElement, value: string): void {
+  const proto = Object.getPrototypeOf(input);
+  const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+  setter?.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 describe('<Settings>', () => {
@@ -167,6 +179,90 @@ describe('<Settings>', () => {
     const harness = await mount(makeApi());
     try {
       expect(harness.container.textContent).toMatch(/Not financial advice/);
+    } finally {
+      unmount(harness);
+    }
+  });
+
+  it('renders the risk-caps editor with current values', async () => {
+    const harness = await mount(makeApi());
+    try {
+      expect(harness.container.textContent).toContain('Risk caps');
+      const lossInput = harness.container.querySelector(
+        'input[aria-label="Max loss USD"]',
+      ) as HTMLInputElement | null;
+      const legsInput = harness.container.querySelector(
+        'input[aria-label="Max legs"]',
+      ) as HTMLInputElement | null;
+      const forbid = harness.container.querySelector(
+        'input[aria-label="Forbid naked shorts"]',
+      ) as HTMLInputElement | null;
+      expect(lossInput?.value).toBe('500');
+      expect(legsInput?.value).toBe('4');
+      expect(forbid?.checked).toBe(true);
+    } finally {
+      unmount(harness);
+    }
+  });
+
+  it('saves edited risk caps via updateRiskCaps', async () => {
+    const api = makeApi();
+    const harness = await mount(api);
+    try {
+      const lossInput = harness.container.querySelector(
+        'input[aria-label="Max loss USD"]',
+      ) as HTMLInputElement;
+      const legsInput = harness.container.querySelector(
+        'input[aria-label="Max legs"]',
+      ) as HTMLInputElement;
+      const forbid = harness.container.querySelector(
+        'input[aria-label="Forbid naked shorts"]',
+      ) as HTMLInputElement;
+      await act(async () => {
+        setInputValue(lossInput, '750');
+        setInputValue(legsInput, '2');
+        forbid.click();
+      });
+      const saveBtn = Array.from(harness.container.querySelectorAll('button')).find(
+        (b) => b.textContent?.trim().startsWith('Save risk caps'),
+      ) as HTMLButtonElement | undefined;
+      expect(saveBtn).toBeTruthy();
+      const form = saveBtn!.closest('form') as HTMLFormElement;
+      await act(async () => {
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(api.updateRiskCaps).toHaveBeenCalledWith({
+        maxLossUsd: 750,
+        maxLegs: 2,
+        forbidNakedShorts: false,
+      });
+    } finally {
+      unmount(harness);
+    }
+  });
+
+  it('rejects invalid risk-cap inputs client-side', async () => {
+    const api = makeApi();
+    const harness = await mount(api);
+    try {
+      const lossInput = harness.container.querySelector(
+        'input[aria-label="Max loss USD"]',
+      ) as HTMLInputElement;
+      await act(async () => {
+        setInputValue(lossInput, '-1');
+      });
+      const saveBtn = Array.from(harness.container.querySelectorAll('button')).find(
+        (b) => b.textContent?.trim().startsWith('Save risk caps'),
+      ) as HTMLButtonElement;
+      const form = saveBtn.closest('form') as HTMLFormElement;
+      await act(async () => {
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        await Promise.resolve();
+      });
+      expect(api.updateRiskCaps).not.toHaveBeenCalled();
+      expect(harness.container.textContent).toMatch(/Max loss must be a positive number/);
     } finally {
       unmount(harness);
     }

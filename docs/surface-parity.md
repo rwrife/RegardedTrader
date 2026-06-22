@@ -13,6 +13,7 @@ without filing a tracking issue should be rejected in review.
 | Capability                    | CLI (`regard ...`)         | Web route             | Status |
 | ----------------------------- | -------------------------- | --------------------- | ------ |
 | **Configuration / AI providers**  | `regard config` / `regard config show` | `/settings`           | ✅     |
+| Risk caps editor              | `regard config` (risk fields)             | `/settings` → Risk caps | ✅     |
 | Provider smoke test           | `regard config test [id]`  | `/settings` “Test” button | ✅     |
 | **Ticker intake & validation** (M1) | `regard add <SYM>...` / `regard ls` / `regard rm <SYM>` | ticker input bar + validated list on `/` | ✅ |
 | Quick quote                   | `regard quote <SYM>`       | `/quote/:sym`         | ✅     |

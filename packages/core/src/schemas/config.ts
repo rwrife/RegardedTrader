@@ -40,6 +40,19 @@ export type CliProvider = z.infer<typeof CliProvider>;
 export const AiProvider = z.discriminatedUnion('kind', [OpenAICompatibleProvider, CliProvider]);
 export type AiProvider = z.infer<typeof AiProvider>;
 
+/**
+ * Risk-cap subset of `AppConfig.risk`. Exported separately so the server's
+ * `POST /config/risk` endpoint and the web Settings risk-caps editor can
+ * validate the same shape used by `RiskOfficer` without reaching for `any`.
+ * (Issue #152 — CLI/web parity for risk caps.)
+ */
+export const RiskConfig = z.object({
+  maxLossUsd: z.number().positive().default(500),
+  maxLegs: z.number().int().positive().default(4),
+  forbidNakedShorts: z.boolean().default(true),
+});
+export type RiskConfig = z.infer<typeof RiskConfig>;
+
 export const AppConfig = z.object({
   /** Schema version for safe migrations */
   version: z.literal(1).default(1),
@@ -48,13 +61,7 @@ export const AppConfig = z.object({
   /** Which provider id is active for AI calls */
   activeProvider: z.string().nullable().default(null),
   /** Risk caps applied by RiskOfficer */
-  risk: z
-    .object({
-      maxLossUsd: z.number().positive().default(500),
-      maxLegs: z.number().int().positive().default(4),
-      forbidNakedShorts: z.boolean().default(true),
-    })
-    .default({ maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true }),
+  risk: RiskConfig.default({ maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true }),
   /** Local server bind. Validated to localhost only. */
   server: z
     .object({

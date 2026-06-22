@@ -178,6 +178,8 @@ export function Settings(props: SettingsProps): JSX.Element {
 
         {config && <MarketDataSection api={api} config={config} onConfigChange={refresh} />}
 
+        {config && <RiskCapsSection api={api} config={config} onConfigChange={refresh} />}
+
         <p className="pt-4 text-[10px] text-fg-muted">{DISCLAIMER}</p>
       </div>
     </div>
@@ -947,5 +949,142 @@ function AddMarketProviderModal({
         </div>
       </form>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Risk caps editor (#152, CLI/web parity)
+// ---------------------------------------------------------------------------
+
+interface RiskCapsSectionProps {
+  api: ApiClient;
+  config: AppConfig;
+  onConfigChange: (next: AppConfig) => void;
+}
+
+function RiskCapsSection(props: RiskCapsSectionProps): JSX.Element {
+  const { api, config, onConfigChange } = props;
+  const [maxLossUsd, setMaxLossUsd] = useState<string>(String(config.risk.maxLossUsd));
+  const [maxLegs, setMaxLegs] = useState<string>(String(config.risk.maxLegs));
+  const [forbidNakedShorts, setForbidNakedShorts] = useState<boolean>(
+    config.risk.forbidNakedShorts,
+  );
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [okMsg, setOkMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    setMaxLossUsd(String(config.risk.maxLossUsd));
+    setMaxLegs(String(config.risk.maxLegs));
+    setForbidNakedShorts(config.risk.forbidNakedShorts);
+  }, [config.risk.maxLossUsd, config.risk.maxLegs, config.risk.forbidNakedShorts]);
+
+  const onSubmit = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault();
+    setErr(null);
+    setOkMsg(null);
+    const loss = Number(maxLossUsd);
+    const legs = Number(maxLegs);
+    if (!Number.isFinite(loss) || loss <= 0) {
+      setErr('Max loss must be a positive number');
+      return;
+    }
+    if (!Number.isInteger(legs) || legs <= 0) {
+      setErr('Max legs must be a positive integer');
+      return;
+    }
+    setSaving(true);
+    try {
+      const r = await api.updateRiskCaps({
+        maxLossUsd: loss,
+        maxLegs: legs,
+        forbidNakedShorts,
+      });
+      onConfigChange(r.config);
+      setOkMsg('Risk caps saved');
+    } catch (e2) {
+      setErr(e2 instanceof Error ? e2.message : String(e2));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <section
+      aria-labelledby="risk-caps-heading"
+      className="pt-6 mt-6 border-t border-border-subtle space-y-3"
+    >
+      <div>
+        <h2 id="risk-caps-heading" className="text-lg font-semibold tracking-tight">
+          Risk caps
+        </h2>
+        <p className="text-xs text-fg-muted mt-1">
+          RiskOfficer rejects any proposed trade plan that violates these caps.
+          Changes apply immediately to /plan/:sym and briefings — no restart needed.
+        </p>
+      </div>
+
+      <form
+        onSubmit={onSubmit}
+        className="border border-border-subtle rounded p-4 bg-surface space-y-3 max-w-xl"
+      >
+        <label className="block text-xs">
+          <span className="text-fg-secondary">Max loss (USD)</span>
+          <input
+            type="number"
+            inputMode="decimal"
+            min="1"
+            step="1"
+            value={maxLossUsd}
+            onChange={(e) => setMaxLossUsd(e.target.value)}
+            aria-label="Max loss USD"
+            className="mt-1 w-full px-2 py-1.5 text-sm bg-surface-2 border border-border-subtle rounded font-mono"
+          />
+        </label>
+        <label className="block text-xs">
+          <span className="text-fg-secondary">Max legs per structure</span>
+          <input
+            type="number"
+            inputMode="numeric"
+            min="1"
+            step="1"
+            value={maxLegs}
+            onChange={(e) => setMaxLegs(e.target.value)}
+            aria-label="Max legs"
+            className="mt-1 w-full px-2 py-1.5 text-sm bg-surface-2 border border-border-subtle rounded font-mono"
+          />
+        </label>
+        <label className="flex items-center gap-2 text-xs">
+          <input
+            type="checkbox"
+            checked={forbidNakedShorts}
+            onChange={(e) => setForbidNakedShorts(e.target.checked)}
+            aria-label="Forbid naked shorts"
+          />
+          <span className="text-fg-secondary">Forbid naked short options</span>
+        </label>
+
+        {err && (
+          <div role="alert" className="text-down text-xs">
+            {err}
+          </div>
+        )}
+        {okMsg && !err && (
+          <div className="text-up text-xs" role="status">
+            {okMsg}
+          </div>
+        )}
+
+        <div className="flex justify-end">
+          <button
+            type="submit"
+            disabled={saving}
+            className="px-3 py-1.5 text-xs rounded border border-ai text-ai hover:bg-ai/10 disabled:opacity-50"
+          >
+            {saving ? 'Saving…' : 'Save risk caps'}
+          </button>
+        </div>
+      </form>
+    </section>
   );
 }
