@@ -20,6 +20,7 @@ const cli = meow(
     quote <SYMBOL>             Quick quote
     tech <SYMBOL>              Technician (TA) commentary for a ticker
     plan <SYMBOL>              Interactive options trade-plan wizard
+    options <SYMBOL>           Options-chain explorer (calls/puts/greeks)
     config [show|test [id]]    Configure AI providers, risk caps, server
     dashboard                  Open the local web dashboard
 
@@ -28,7 +29,7 @@ const cli = meow(
     --refresh                  (add) Force re-validation, bypassing 7-day cache
     --thesis <text>            (brief) Trade thesis to run strategist arm
     --max-loss <usd>           (brief) Max-loss budget in USD for strategist
-    --expiry <YYYY-MM-DD>      (brief) Target option expiry for strategist
+    --expiry <YYYY-MM-DD>      (brief/options) Target option expiry
 
   Examples
     $ regard

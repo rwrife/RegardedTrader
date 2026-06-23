@@ -21,7 +21,7 @@ without filing a tracking issue should be rejected in review.
 | Full briefing pipeline (analyst + TA + news + strategist) | `regard brief <SYM> [--thesis ... --max-loss N]` | `#/brief/:symbol` | ✅     |
 | Technician (TA) commentary    | `regard tech <SYM>`        | `Tech` tab on `/` | ✅     |
 | Options trade-plan wizard     | `regard plan <SYM>`        | `#/plan/:sym`         | ✅     |
-| Options chain explorer        | `regard options <SYM>`     | `/options/:sym`       | 🚧 both pending |
+| Options chain explorer        | `regard options <SYM>`     | `#/options/:sym`      | ✅     |
 | Watchlist                     | `regard watch [add\|ls\|rm]` | `/watchlist`        | 🚧 both pending |
 | Open the other surface        | `regard dashboard`         | "Open CLI help" link  | ✅ / 🚧 |
 
