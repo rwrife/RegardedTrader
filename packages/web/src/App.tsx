@@ -10,6 +10,7 @@ import {
 import { Settings } from './routes/settings.js';
 import { Brief } from './routes/brief.js';
 import { Plan } from './routes/plan.js';
+import { Options } from './routes/options.js';
 import { useLiveQuote } from './hooks/useLiveQuote.js';
 import { useHistory } from './hooks/useHistory.js';
 import { computeRating } from '@regardedtrader/core/rating';
@@ -24,7 +25,8 @@ type Route =
   | { kind: 'home' }
   | { kind: 'settings' }
   | { kind: 'brief'; symbol: string }
-  | { kind: 'plan'; symbol: string };
+  | { kind: 'plan'; symbol: string }
+  | { kind: 'options'; symbol: string };
 
 function parseRoute(hash: string): Route {
   const raw = hash.replace(/^#/, '').replace(/^\/+/, '');
@@ -33,6 +35,9 @@ function parseRoute(hash: string): Route {
   if (briefMatch) return { kind: 'brief', symbol: decodeURIComponent(briefMatch[1]!).toUpperCase() };
   const planMatch = raw.match(/^plan\/([^/?#]+)/);
   if (planMatch) return { kind: 'plan', symbol: decodeURIComponent(planMatch[1]!).toUpperCase() };
+  const optionsMatch = raw.match(/^options\/([^/?#]+)/);
+  if (optionsMatch)
+    return { kind: 'options', symbol: decodeURIComponent(optionsMatch[1]!).toUpperCase() };
   return { kind: 'home' };
 }
 
@@ -40,7 +45,8 @@ type NavTarget =
   | 'home'
   | 'settings'
   | { kind: 'brief'; symbol: string }
-  | { kind: 'plan'; symbol: string };
+  | { kind: 'plan'; symbol: string }
+  | { kind: 'options'; symbol: string };
 
 function useHashRoute(): [Route, (r: NavTarget) => void] {
   const [route, setRoute] = useState<Route>(() =>
@@ -60,6 +66,8 @@ function useHashRoute(): [Route, (r: NavTarget) => void] {
       window.location.hash = '#/';
     } else if (r.kind === 'plan') {
       window.location.hash = `#/plan/${encodeURIComponent(r.symbol)}`;
+    } else if (r.kind === 'options') {
+      window.location.hash = `#/options/${encodeURIComponent(r.symbol)}`;
     } else {
       window.location.hash = `#/brief/${encodeURIComponent(r.symbol)}`;
     }
@@ -105,6 +113,9 @@ export function App() {
   }
   if (route.kind === 'plan') {
     return <Plan symbol={route.symbol} onClose={() => navigate('home')} />;
+  }
+  if (route.kind === 'options') {
+    return <Options symbol={route.symbol} onClose={() => navigate('home')} />;
   }
   const [active, setActive] = useState<string>(SAMPLE_TICKERS[0]!.symbol);
   const [tab, setTab] = useState<Tab>('briefing');

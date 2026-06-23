@@ -10,7 +10,8 @@
     "./schemas": "./dist/schemas/index.js",
     "./agents": "./dist/agents/index.js",
     "./marketHours": "./dist/marketHours.js",
-    "./rating": "./dist/rating.js"
+    "./rating": "./dist/rating.js",
+    "./options": "./dist/options/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

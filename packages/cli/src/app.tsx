@@ -9,6 +9,7 @@ import { DashboardScreen } from './screens/dashboard.js';
 import { ConfigScreen } from './screens/config.js';
 import { AddScreen } from './screens/add.js';
 import { ListScreen, RemoveScreen } from './screens/watchlist.js';
+import { OptionsScreen } from './screens/options.js';
 
 export interface AppProps {
   command: string;
@@ -24,6 +25,14 @@ export interface AppProps {
 
 export function App({ command, args, serverUrl, flags }: AppProps) {
   switch (command) {
+    case 'options':
+      return (
+        <OptionsScreen
+          symbol={args[0] ?? ''}
+          serverUrl={serverUrl}
+          expiry={flags?.expiry}
+        />
+      );
     case 'briefing':
       return <BriefingScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
     case 'brief':
