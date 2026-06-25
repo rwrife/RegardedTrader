@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { DISCLAIMER } from '../constants.js';
+export { AiOutputEnvelope, envelope, type AiEnvelope } from './envelope.js';
 
 export const Ticker = z.string().regex(/^[A-Z.\-]{1,10}$/);
 export type Ticker = z.infer<typeof Ticker>;
@@ -264,6 +266,12 @@ export const BriefingTechnical = z.object({
   keyLevels: z.array(z.number()).default([]),
   commentary: z.string().min(1),
   sourcesUsed: z.array(z.string()).default([]),
+  /**
+   * Required non-empty 'not financial advice' disclaimer (issue #77).
+   * Defaults to the canonical `DISCLAIMER` constant so older callers /
+   * fixtures keep validating; new code should pass it explicitly.
+   */
+  disclaimer: z.string().min(1).default(DISCLAIMER),
 });
 export type BriefingTechnical = z.infer<typeof BriefingTechnical>;
 
@@ -275,6 +283,12 @@ export const BriefingNews = z.object({
   headlines: z.array(NewsItem),
   summary: z.string().min(1),
   sourcesUsed: z.array(z.string()).default([]),
+  /**
+   * Required non-empty 'not financial advice' disclaimer (issue #77).
+   * Defaults to the canonical `DISCLAIMER` constant so older callers /
+   * fixtures keep validating; new code should pass it explicitly.
+   */
+  disclaimer: z.string().min(1).default(DISCLAIMER),
 });
 export type BriefingNews = z.infer<typeof BriefingNews>;
 
@@ -301,7 +315,12 @@ export const Briefing = z.object({
   catalysts: z.array(z.string()),
   risks: z.array(z.string()),
   news: z.array(NewsItem),
-  disclaimer: z.string(),
+  /**
+   * Required non-empty 'not financial advice' disclaimer (issue #77).
+   * Enforced at the schema boundary — a Briefing with a missing/empty
+   * disclaimer fails Zod validation and the server refuses to emit it.
+   */
+  disclaimer: z.string().min(1, 'disclaimer must be non-empty'),
   /**
    * Optional Technician section. Populated when an Orchestrator was
    * constructed with a `technician` agent (issue #126). Absent otherwise so

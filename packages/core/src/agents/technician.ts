@@ -79,6 +79,7 @@ Indicators: ${JSON.stringify(indicators)}`;
         `Technical read for ${symbol} based on provided indicators. ${DISCLAIMER}`,
       ),
       sourcesUsed: ['indicators', 'quote'],
+      disclaimer: DISCLAIMER,
     };
 
     // Validate at the seam. If the LLM produced something nonsensical the

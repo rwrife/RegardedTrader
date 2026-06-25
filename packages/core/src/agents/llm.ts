@@ -23,5 +23,7 @@ export class OpenAILLM implements LLM {
   }
 }
 
-export const DISCLAIMER =
-  'Educational/research output. Not financial advice. You are responsible for your own trades.';
+// Re-exported from the canonical project-wide constants module (issue #77)
+// so existing consumers of `core/agents` keep working while new code can
+// import directly from `core/constants`.
+export { DISCLAIMER } from '../constants.js';

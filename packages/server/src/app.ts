@@ -15,6 +15,7 @@ import {
   AiProvider,
   RiskConfig,
   BriefingRequest,
+  PlansResponse,
   ConfigTestResult,
   buildLLM,
   type ConfigTestResult as ConfigTestResultT,
@@ -404,7 +405,11 @@ export function createApp(deps: AppDeps): AppHandle {
       const body = PlansReq.parse({ ...req.body, symbol: String(req.body.symbol).toUpperCase() });
       const known = await requireKnownSymbol(res, body.symbol);
       if (!known) return;
-      res.json(await o.proposePlans(body));
+      const out = await o.proposePlans(body);
+      // Validate the wire payload before emitting (issue #77). Each plan's
+      // `notes` carries the canonical disclaimer via `attachRiskGraph`; this
+      // .parse() defends against future refactors that might drop it.
+      res.json(PlansResponse.parse(out));
     } catch (e) {
       next(e);
     }
