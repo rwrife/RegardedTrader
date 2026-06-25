@@ -3,6 +3,7 @@ import { Orchestrator } from './orchestrator.js';
 import type { LLM, TechnicianAgent, NewsScoutAgent } from './agents/index.js';
 import type { MarketDataClient } from './clients/index.js';
 import type { OptionContract, TradePlan } from './schemas/index.js';
+import { DISCLAIMER } from './constants.js';
 
 /**
  * Coverage for issue #115: `POST /plans` wire format must surface
@@ -186,6 +187,7 @@ describe('Orchestrator.briefing (#126)', () => {
           keyLevels: [500],
           commentary: 'looks fine',
           sourcesUsed: ['indicators'],
+          disclaimer: DISCLAIMER,
         };
       },
     };
@@ -211,6 +213,7 @@ describe('Orchestrator.briefing (#126)', () => {
           keyLevels: [],
           commentary: 'ok',
           sourcesUsed: ['ta:rsi'],
+          disclaimer: DISCLAIMER,
         };
       },
     };
@@ -220,6 +223,7 @@ describe('Orchestrator.briefing (#126)', () => {
           headlines: [],
           summary: 'no fresh news',
           sourcesUsed: ['news:yahoo'],
+          disclaimer: DISCLAIMER,
         };
       },
     };
