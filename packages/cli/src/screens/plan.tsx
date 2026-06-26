@@ -5,6 +5,7 @@ import Spinner from 'ink-spinner';
 import type { PlansResponse, ReviewedTradePlan } from '@regardedtrader/core';
 import { api } from '../api.js';
 import { ReturnPrompt } from './menu.js';
+import { aiDisclaimerLine } from '../aiDisclaimer.js';
 
 type PlanResult = ReviewedTradePlan;
 
@@ -133,6 +134,11 @@ export function PlanScreen({
           {r.plan.notes && <Text dimColor>{r.plan.notes}</Text>}
         </Box>
       ))}
+      <Box marginTop={1}>
+        <Text dimColor italic>
+          {aiDisclaimerLine()}
+        </Text>
+      </Box>
       {onDone && <ReturnPrompt onDone={onDone} />}
     </Box>
   );

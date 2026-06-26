@@ -16,6 +16,7 @@ import { useHistory } from './hooks/useHistory.js';
 import { computeRating } from '@regardedtrader/core/rating';
 import { RatingBadge } from './components/RatingBadge.js';
 import { CandleChart, type Candle } from './components/CandleChart.js';
+import { AiDisclaimer } from './components/AiDisclaimer.js';
 
 // Tiny hash-based router so the dashboard stays a single bundle without
 // pulling in react-router. Routes: `#/` (default), `#/settings`, and
@@ -75,8 +76,9 @@ function useHashRoute(): [Route, (r: NavTarget) => void] {
   return [route, navigate];
 }
 
-const DISCLAIMER =
-  'Not financial advice. AI-generated analysis based on public data. Verify everything before trading.';
+// `DISCLAIMER` text now lives in <AiDisclaimer /> (issue #154), which pulls
+// the canonical `DISCLAIMER` string from `@regardedtrader/core/constants`
+// (single source of truth from issue #77).
 
 // ---- M1: ticker intake & validation surface ------------------------------
 
@@ -574,7 +576,7 @@ function BriefingTab({ t }: { t: SampleTicker }) {
         <ListSection title="Catalysts" items={t.briefing.catalysts} />
         <ListSection title="Risks" items={t.briefing.risks} />
       </div>
-      <p className="mt-6 text-[11px] text-fg-muted italic">{DISCLAIMER}</p>
+      <AiDisclaimer marginTop="md" />
     </AiCard>
   );
 }
@@ -676,7 +678,7 @@ function RecommendationTab({ t }: { t: SampleTicker }) {
           })}
         </div>
       </div>
-      <p className="mt-6 text-[11px] text-fg-muted italic">{DISCLAIMER}</p>
+      <AiDisclaimer marginTop="md" />
     </AiCard>
   );
 }
@@ -741,7 +743,7 @@ function SentimentTab({ t }: { t: SampleTicker }) {
           </li>
         ))}
       </ul>
-      <p className="mt-6 text-[11px] text-fg-muted italic">{DISCLAIMER}</p>
+      <AiDisclaimer marginTop="md" />
     </AiCard>
   );
 }
@@ -846,7 +848,7 @@ function TechTab({ t, demo }: { t: SampleTicker; demo: boolean }) {
         <p className="text-sm text-fg-secondary">
           Live Technician analysis is unavailable in demo mode.
         </p>
-        <p className="mt-6 text-[11px] text-fg-muted italic">{DISCLAIMER}</p>
+        <AiDisclaimer marginTop="md" />
       </AiCard>
     );
   }
@@ -891,7 +893,7 @@ function TechTab({ t, demo }: { t: SampleTicker; demo: boolean }) {
           </div>
         </div>
       )}
-      <p className="mt-6 text-[11px] text-fg-muted italic">{DISCLAIMER}</p>
+      <AiDisclaimer marginTop="md" />
     </AiCard>
   );
 }
@@ -1016,7 +1018,7 @@ function ChartTab({ t, demo }: { t: SampleTicker; demo: boolean }) {
         <CandleChart candles={candles} className="w-full h-[340px]" />
       </div>
 
-      <p className="text-[11px] text-fg-muted italic">{DISCLAIMER}</p>
+      <AiDisclaimer marginTop="none" />
     </div>
   );
 }
@@ -1182,7 +1184,7 @@ function TickerIntake({ demo }: { demo: boolean }) {
           {results.map((r, i) => (
             <ResultRow key={i} r={r} />
           ))}
-          <p className="text-[10px] text-fg-muted italic">{DISCLAIMER}</p>
+          <AiDisclaimer marginTop="none" className="text-[10px] text-fg-muted italic" />
         </div>
       )}
 

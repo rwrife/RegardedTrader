@@ -1,8 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import type { Briefing, BriefingRequest } from '@regardedtrader/core';
-
-const DISCLAIMER =
-  'Not financial advice. AI-generated analysis based on public data. Verify everything before trading.';
+import { AiDisclaimer } from '../components/AiDisclaimer.js';
 
 export interface BriefRouteProps {
   symbol: string;
@@ -199,7 +197,9 @@ export function Brief(props: BriefRouteProps): JSX.Element {
         {status.kind === 'ok' && <BriefingView data={status.data} />}
       </section>
 
-      <footer style={{ marginTop: 24, fontStyle: 'italic', opacity: 0.7 }}>{DISCLAIMER}</footer>
+      <footer style={{ marginTop: 24 }}>
+        <AiDisclaimer marginTop="none" className="italic opacity-70" />
+      </footer>
     </div>
   );
 }

@@ -10,8 +10,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import type { OptionContract, Quote } from '@regardedtrader/core';
 import { fillGreeks, groupChainByStrike, type ChainRow } from '@regardedtrader/core/options';
 
-const DISCLAIMER =
-  'Not financial advice. Educational data only — verify everything before trading.';
+import { AiDisclaimer } from '../components/AiDisclaimer.js';
 
 export interface OptionsRouteProps {
   symbol: string;
@@ -201,7 +200,9 @@ export function Options(props: OptionsRouteProps): JSX.Element {
         <ChainTable rows={rows} spot={status.quote?.price ?? null} />
       )}
 
-      <p style={{ marginTop: 16, fontSize: 11, opacity: 0.7 }}>{DISCLAIMER}</p>
+      <div style={{ marginTop: 16 }}>
+        <AiDisclaimer marginTop="none" className="italic opacity-70 text-[11px]" />
+      </div>
     </div>
   );
 }

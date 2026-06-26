@@ -11,8 +11,7 @@ import {
   type MarketProviderPreset,
 } from '../api.js';
 
-const DISCLAIMER =
-  'Not financial advice. AI-generated analysis based on public data. Verify everything before trading.';
+import { AiDisclaimer } from '../components/AiDisclaimer.js';
 
 interface SettingsProps {
   /** Inject a fake API client in tests. */
@@ -180,7 +179,9 @@ export function Settings(props: SettingsProps): JSX.Element {
 
         {config && <RiskCapsSection api={api} config={config} onConfigChange={refresh} />}
 
-        <p className="pt-4 text-[10px] text-fg-muted">{DISCLAIMER}</p>
+        <div className="pt-4">
+          <AiDisclaimer marginTop="none" className="text-[10px] text-fg-muted italic" />
+        </div>
       </div>
     </div>
   );
