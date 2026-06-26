@@ -4,6 +4,7 @@ import Spinner from 'ink-spinner';
 import type { BriefingTechnical } from '@regardedtrader/core';
 import { api } from '../api.js';
 import { ReturnPrompt } from './menu.js';
+import { aiDisclaimerLine } from '../aiDisclaimer.js';
 
 /**
  * `regard tech <SYM>` — Technician agent surface (issue #74). Renders the
@@ -84,9 +85,7 @@ export function TechScreen({
         <Text>{data.commentary}</Text>
       </Box>
       <Box marginTop={1}>
-        <Text dimColor>
-          Educational/research output. Not financial advice.
-        </Text>
+        <Text dimColor>{aiDisclaimerLine()}</Text>
       </Box>
       {onDone && finished && <ReturnPrompt onDone={onDone} />}
     </Box>

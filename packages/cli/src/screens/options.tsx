@@ -13,9 +13,9 @@ import type { OptionContract, Quote } from '@regardedtrader/core';
 import { fillGreeks, groupChainByStrike, type ChainRow } from '@regardedtrader/core';
 import { api } from '../api.js';
 import { ReturnPrompt } from './menu.js';
+import { aiDisclaimerLine } from '../aiDisclaimer.js';
 
-const DISCLAIMER =
-  'Not financial advice. Educational data only — verify everything before trading.';
+const DISCLAIMER = aiDisclaimerLine();
 
 export interface OptionsScreenProps {
   symbol: string;
