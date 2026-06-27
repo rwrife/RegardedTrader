@@ -14,12 +14,20 @@ import { dirname, resolve } from 'node:path';
 
 const srcRoot = dirname(fileURLToPath(import.meta.url));
 
+// After #112, the home dashboard's AI panels live in `routes/tabs/*` and the
+// `TickerIntake` sidebar; `App.tsx` is a thin routing/layout shell that
+// renders them but doesn't emit AI prose of its own.
 const SURFACES = [
-  'App.tsx',
   'routes/brief.tsx',
   'routes/plan.tsx',
   'routes/options.tsx',
   'routes/settings.tsx',
+  'routes/tabs/BriefingTab.tsx',
+  'routes/tabs/RecommendationTab.tsx',
+  'routes/tabs/SentimentTab.tsx',
+  'routes/tabs/ChartTab.tsx',
+  'routes/tabs/TechTab.tsx',
+  'components/TickerIntake.tsx',
 ];
 
 function read(rel: string): string {
