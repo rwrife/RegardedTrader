@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { z } from 'zod';
+import { logger } from './logging.js';
 import {
   Orchestrator,
   Technician,
@@ -705,7 +706,7 @@ export function createApp(deps: AppDeps): AppHandle {
   app.use(
     (err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
       const message = err instanceof Error ? err.message : 'unknown error';
-      console.error('[server] error:', message);
+      logger.error('error:', message);
       res.status(400).json({ error: message });
     },
   );
@@ -741,7 +742,7 @@ export function createDefaultApp(cfg: AppConfigT): AppHandle {
       try {
         return activeLLM(c);
       } catch (e) {
-        console.warn('[server]', (e as Error).message);
+        logger.warn((e as Error).message);
         return null;
       }
     },
