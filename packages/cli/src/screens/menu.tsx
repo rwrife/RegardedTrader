@@ -7,6 +7,7 @@ import { PlanScreen } from './plan.js';
 import { ConfigScreen } from './config.js';
 import { AddScreen } from './add.js';
 import { ListScreen, RemoveScreen } from './watchlist.js';
+import { WatchScreen } from './watch.js';
 import { DashboardScreen } from './dashboard.js';
 
 /**
@@ -21,7 +22,8 @@ type View =
   | { kind: 'menu' }
   | { kind: 'prompt-symbol'; for: SymbolAction }
   | { kind: 'add-input' }
-  | { kind: 'action'; action: MenuAction; symbol?: string; symbols?: string[] };
+  | { kind: 'watch-input' }
+  | { kind: 'action'; action: MenuAction; symbol?: string; symbols?: string[]; watchArgs?: string[] };
 
 type SymbolAction = 'briefing' | 'quote' | 'plan' | 'rm';
 type MenuAction =
@@ -29,7 +31,8 @@ type MenuAction =
   | 'add'
   | 'ls'
   | 'config'
-  | 'dashboard';
+  | 'dashboard'
+  | 'watch';
 
 interface MenuItem {
   label: string;
@@ -43,6 +46,7 @@ const ITEMS: MenuItem[] = [
   { label: 'Add — validate & add tickers to watchlist', value: 'add' },
   { label: 'List — show watchlist', value: 'ls' },
   { label: 'Remove — drop a ticker from watchlist', value: 'rm' },
+  { label: 'Watch — managed watchlist (ls/add/rm)', value: 'watch' },
   { label: 'Config — AI providers, risk, server', value: 'config' },
   { label: 'Dashboard — open web UI', value: 'dashboard' },
   { label: 'Quit', value: 'quit' },
@@ -72,6 +76,10 @@ export function MainMenu({ serverUrl }: { serverUrl: string }) {
             setView({ kind: 'add-input' });
             return;
           }
+          if (value === 'watch') {
+            setView({ kind: 'watch-input' });
+            return;
+          }
           setView({ kind: 'action', action: value });
         }}
       />
@@ -96,6 +104,17 @@ export function MainMenu({ serverUrl }: { serverUrl: string }) {
         onCancel={returnToMenu}
         onSubmit={(symbols) =>
           setView({ kind: 'action', action: 'add', symbols })
+        }
+      />
+    );
+  }
+
+  if (view.kind === 'watch-input') {
+    return (
+      <WatchPrompt
+        onCancel={returnToMenu}
+        onSubmit={(watchArgs) =>
+          setView({ kind: 'action', action: 'watch', watchArgs })
         }
       />
     );
@@ -151,6 +170,14 @@ export function MainMenu({ serverUrl }: { serverUrl: string }) {
       return <ConfigScreen onDone={returnToMenu} />;
     case 'dashboard':
       return <DashboardScreen serverUrl={serverUrl} onDone={returnToMenu} />;
+    case 'watch':
+      return (
+        <WatchScreen
+          args={view.watchArgs ?? []}
+          serverUrl={serverUrl}
+          onDone={returnToMenu}
+        />
+      );
   }
 }
 
@@ -236,6 +263,45 @@ function SymbolsPrompt({
             .map((s) => s.trim().toUpperCase())
             .filter(Boolean);
           if (syms.length > 0) onSubmit(syms);
+        }}
+      />
+    </Box>
+  );
+}
+
+/**
+ * Free-form prompt for `regard watch <ls|add|rm> [SYM...]`. Hands the raw
+ * tokens to `WatchScreen`, which owns the actual subcommand dispatch.
+ */
+function WatchPrompt({
+  onSubmit,
+  onCancel,
+}: {
+  onSubmit: (args: string[]) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState('');
+  useInput((_, key) => {
+    if (key.escape) onCancel();
+  });
+  return (
+    <Box flexDirection="column">
+      <Text>
+        <Text bold color="cyan">watch</Text>
+        <Text> — type subcommand: </Text>
+        <Text>ls</Text>
+        <Text dimColor> | </Text>
+        <Text>add SYM...</Text>
+        <Text dimColor> | </Text>
+        <Text>rm SYM</Text>
+        <Text dimColor> (esc to cancel)</Text>
+      </Text>
+      <TextInput
+        value={value}
+        onChange={setValue}
+        onSubmit={(v) => {
+          const parts = v.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+          if (parts.length > 0) onSubmit(parts);
         }}
       />
     </Box>

@@ -8,6 +8,7 @@ import { PlanScreen } from './screens/plan.js';
 import { ConfigScreen } from './screens/config.js';
 import { AddScreen } from './screens/add.js';
 import { ListScreen, RemoveScreen } from './screens/watchlist.js';
+import { WatchScreen } from './screens/watch.js';
 import { DashboardScreen } from './screens/dashboard.js';
 
 /**
@@ -28,6 +29,7 @@ type SlashId =
   | 'add'
   | 'ls'
   | 'rm'
+  | 'watch'
   | 'config'
   | 'dashboard'
   | 'help'
@@ -50,6 +52,7 @@ const COMMANDS: SlashCommand[] = [
   { id: 'add',      name: '/add',      usage: '/add <SYM>...',   blurb: 'Validate ticker(s) and add to watchlist', needsArgs: true },
   { id: 'ls',       name: '/ls',       usage: '/ls',             blurb: 'Show watchlist' },
   { id: 'rm',       name: '/rm',       usage: '/rm <SYM>',       blurb: 'Remove a ticker from watchlist',          needsArgs: true },
+  { id: 'watch',    name: '/watch',    usage: '/watch <ls|add|rm> [SYM...]', blurb: 'Managed watchlist (parity twin of /watchlist)', needsArgs: true },
   { id: 'config',   name: '/config',   usage: '/config [show|test [id]]', blurb: 'AI providers, risk, server' },
   { id: 'dashboard',name: '/dashboard',usage: '/dashboard',      blurb: 'Open local web dashboard' },
   { id: 'help',     name: '/help',     usage: '/help',           blurb: 'List slash commands' },
@@ -290,6 +293,8 @@ function RunningBody({
       return <ListScreen serverUrl={serverUrl} onDone={onDone} />;
     case 'rm':
       return <RemoveScreen symbol={(args[0] ?? '').toUpperCase()} serverUrl={serverUrl} onDone={onDone} />;
+    case 'watch':
+      return <WatchScreen args={args} serverUrl={serverUrl} onDone={onDone} />;
     case 'config':
       return <ConfigScreen sub={args[0]} testProviderId={args[1]} serverUrl={serverUrl} onDone={onDone} />;
     case 'dashboard':
