@@ -22,7 +22,7 @@ without filing a tracking issue should be rejected in review.
 | Technician (TA) commentary    | `regard tech <SYM>`        | `Tech` tab on `/` | ✅     |
 | Options trade-plan wizard     | `regard plan <SYM>`        | `#/plan/:sym`         | ✅     |
 | Options chain explorer        | `regard options <SYM>`     | `#/options/:sym`      | ✅     |
-| Watchlist                     | `regard watch [add\|ls\|rm]` | `/watchlist`        | 🚧 both pending |
+| Watchlist                     | `regard watch [add\|ls\|rm]` | `/watchlist`        | ✅     |
 | Open the other surface        | `regard dashboard`         | "Open CLI help" link  | ✅ / 🚧 |
 
 Legend: ✅ implemented · 🚧 planned · ❌ explicitly out of scope.

@@ -9,9 +9,12 @@ import { MarketPill } from './MarketPill.js';
 export function TopBar({
   demo,
   onOpenSettings,
+  onOpenWatchlist,
 }: {
   demo: boolean;
   onOpenSettings: () => void;
+  /** Optional: navigate to the dedicated `/watchlist` surface (#167). */
+  onOpenWatchlist?: () => void;
 }): JSX.Element {
   return (
     <header className="border-b border-border-subtle bg-surface">
@@ -31,6 +34,17 @@ export function TopBar({
         )}
         <div className="ml-auto flex items-center gap-3 text-fg-muted">
           <span className="num">{new Date().toUTCString().slice(17, 25)} UTC</span>
+          {onOpenWatchlist && (
+            <button
+              type="button"
+              onClick={onOpenWatchlist}
+              aria-label="Open watchlist"
+              title="Watchlist"
+              className="px-1.5 py-0.5 rounded border border-border-subtle text-[11px] hover:text-ai hover:border-ai"
+            >
+              Watchlist
+            </button>
+          )}
           <button
             type="button"
             onClick={onOpenSettings}

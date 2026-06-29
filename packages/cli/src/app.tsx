@@ -9,6 +9,7 @@ import { DashboardScreen } from './screens/dashboard.js';
 import { ConfigScreen } from './screens/config.js';
 import { AddScreen } from './screens/add.js';
 import { ListScreen, RemoveScreen } from './screens/watchlist.js';
+import { WatchScreen } from './screens/watch.js';
 import { OptionsScreen } from './screens/options.js';
 
 export interface AppProps {
@@ -67,6 +68,8 @@ export function App({ command, args, serverUrl, flags }: AppProps) {
       return <ListScreen serverUrl={serverUrl} />;
     case 'rm':
       return <RemoveScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
+    case 'watch':
+      return <WatchScreen args={args} serverUrl={serverUrl} />;
     default:
       return (
         <Box flexDirection="column">

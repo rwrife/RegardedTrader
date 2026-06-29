@@ -15,6 +15,7 @@ const cli = meow(
     add <SYM>...               Validate ticker(s) via web search + LLM and add to watchlist
     ls                         List validated tickers
     rm <SYM>                   Remove a ticker from the watchlist
+    watch <ls|add|rm> [SYM...] Managed watchlist surface (parity twin of /watchlist)
     briefing <SYMBOL>          Generate an AI briefing for a ticker
     brief <SYMBOL>             Full briefing pipeline (analyst + TA + news + strategist)
     quote <SYMBOL>             Quick quote
