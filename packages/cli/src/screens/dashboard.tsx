@@ -1,6 +1,34 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import { spawn } from 'node:child_process';
+
+/**
+ * Compute the URL the `regard dashboard` command should open.
+ *
+ * In production (the common case — Express serves the built web bundle on
+ * the same port as the API), this is just `serverUrl`. Hard-coding the Vite
+ * dev port `5173` is wrong because nothing is listening there outside of
+ * `npm run dev:web`.
+ *
+ * In development, if the caller passes an explicit dev URL (or
+ * `REGARDEDTRADER_WEB_DEV_URL` is set), prefer it. Otherwise we still fall
+ * back to the running server URL so the screen never opens a dead port.
+ *
+ * Exported for tests; pure (no I/O).
+ */
+export function resolveDashboardUrl(opts: {
+  serverUrl: string;
+  nodeEnv?: string | undefined;
+  devUrl?: string | undefined;
+}): string {
+  const { serverUrl } = opts;
+  const env = opts.nodeEnv ?? 'production';
+  if (env !== 'production') {
+    const dev = opts.devUrl?.trim();
+    if (dev) return dev;
+  }
+  return serverUrl;
+}
 
 export function DashboardScreen({
   serverUrl,
@@ -10,7 +38,15 @@ export function DashboardScreen({
   onDone?: () => void;
 }) {
   const { exit } = useApp();
-  const webUrl = 'http://127.0.0.1:5173';
+  const webUrl = useMemo(
+    () =>
+      resolveDashboardUrl({
+        serverUrl,
+        nodeEnv: process.env.NODE_ENV,
+        devUrl: process.env.REGARDEDTRADER_WEB_DEV_URL,
+      }),
+    [serverUrl],
+  );
 
   useEffect(() => {
     const opener =
@@ -21,7 +57,7 @@ export function DashboardScreen({
       /* ignore */
     }
     if (!onDone) setTimeout(() => exit(), 100);
-  }, [exit, onDone]);
+  }, [exit, onDone, webUrl]);
 
   useInput(
     (input, key) => {
