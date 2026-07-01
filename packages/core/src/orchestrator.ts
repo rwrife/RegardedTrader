@@ -4,6 +4,7 @@ import {
   Analyst,
   OptionsStrategist,
   RiskOfficer,
+  AgentParseError,
   DISCLAIMER,
 } from './agents/index.js';
 import type {
@@ -139,12 +140,27 @@ export class Orchestrator {
   ): Promise<BriefingStrategist | undefined> {
     if (!opts.thesis || typeof opts.maxLossUsd !== 'number') return undefined;
     const chain = await this.market.optionsChain(symbol, opts.expiry);
-    const plans = await this.strategist.propose({
-      symbol,
-      thesis: opts.thesis,
-      maxLossUsd: opts.maxLossUsd,
-      chain,
-    });
+    let plans;
+    try {
+      plans = await this.strategist.propose({
+        symbol,
+        thesis: opts.thesis,
+        maxLossUsd: opts.maxLossUsd,
+        chain,
+      });
+    } catch (err) {
+      if (err instanceof AgentParseError) {
+        // Surface the parse failure as a distinct signal on the briefing
+        // instead of aborting the whole pipeline (issue #165).
+        return {
+          thesis: opts.thesis,
+          candidates: [],
+          noCompliantPlans: false,
+          parseError: err.message,
+        };
+      }
+      throw err;
+    }
     const candidates: ReviewedTradePlan[] = plans.map((plan) => ({
       plan,
       review: this.risk.review(plan),

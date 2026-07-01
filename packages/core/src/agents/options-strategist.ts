@@ -1,6 +1,8 @@
 import type { LLM } from './llm.js';
 import { DISCLAIMER } from './llm.js';
 import type { OptionContract, TradePlan, RiskGraphSeries } from '../schemas/index.js';
+import { StrategistOutputSchema } from '../schemas/index.js';
+import { AgentParseError } from './errors.js';
 import { riskGraph, type RiskGraphLeg } from '../options/index.js';
 
 const SYSTEM = `You are an options strategist. Given an underlying, a directional
@@ -30,13 +32,24 @@ ${JSON.stringify(input.chain.slice(0, 60), null, 2)}
 
 Return JSON: { "plans": TradePlan[] }`;
     const raw = await this.llm.complete({ system: SYSTEM, user, json: true });
+    let jsonValue: unknown;
     try {
-      const obj = JSON.parse(raw);
-      const plans: TradePlan[] = Array.isArray(obj.plans) ? obj.plans : [];
-      return plans.map((p) => attachRiskGraph(p));
-    } catch {
-      return [];
+      jsonValue = JSON.parse(raw);
+    } catch (err) {
+      throw new AgentParseError(
+        'OptionsStrategist',
+        [(err as Error).message ?? 'invalid JSON'],
+        raw,
+      );
     }
+    const result = StrategistOutputSchema.safeParse(jsonValue);
+    if (!result.success) {
+      const issues = result.error.issues.map(
+        (i) => `${i.path.join('.') || '<root>'}: ${i.message}`,
+      );
+      throw new AgentParseError('OptionsStrategist', issues, raw);
+    }
+    return result.data.plans.map((p) => attachRiskGraph(p));
   }
 }
 

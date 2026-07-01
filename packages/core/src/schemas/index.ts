@@ -302,6 +302,13 @@ export const BriefingStrategist = z.object({
   thesis: z.string().min(1),
   candidates: z.array(ReviewedTradePlan),
   noCompliantPlans: z.boolean().default(false),
+  /**
+   * Populated when the strategist agent's LLM reply failed Zod validation
+   * (malformed JSON, missing keys, wrong types — issue #165). Distinguishes
+   * a real parse failure from a strategist that ran and produced no
+   * candidates. Absent on happy paths.
+   */
+  parseError: z.string().min(1).optional(),
 });
 export type BriefingStrategist = z.infer<typeof BriefingStrategist>;
 
@@ -354,3 +361,48 @@ export const Briefing = z.object({
   sourcesUsed: z.array(z.string()).default([]),
 });
 export type Briefing = z.infer<typeof Briefing>;
+
+/* ------------------------------------------------------------------ */
+/* Raw LLM agent output schemas (issue #165).                         */
+/*                                                                    */
+/* These are the *wire* shapes each agent asks the model to produce.  */
+/* They are validated at the seam and are separate from the enriched  */
+/* outward schemas (`Briefing`, `BriefingTechnical`, `TradePlan`)     */
+/* which the agent constructs after successful parse. Every agent     */
+/* must validate its LLM response against one of these schemas and    */
+/* raise `AgentParseError` on failure — no silent empty briefings.    */
+/* ------------------------------------------------------------------ */
+
+export const AnalystOutputSchema = z.object({
+  bullCase: z.string().min(1),
+  bearCase: z.string().min(1),
+  catalysts: z.array(z.string()).default([]),
+  risks: z.array(z.string()).default([]),
+});
+export type AnalystOutput = z.infer<typeof AnalystOutputSchema>;
+
+/**
+ * Technician output schema. Fields are optional at parse time because
+ * the agent already has deterministic fallbacks derived from `Indicators`;
+ * partial-but-well-typed responses succeed and are filled in from those
+ * fallbacks. `keyLevels` is filtered to finite numbers to preserve the
+ * historical Technician contract while enforcing a schema at the seam.
+ */
+export const TechnicianOutputSchema = z.object({
+  trend: z.string().optional(),
+  momentum: z.string().optional(),
+  volatility: z.string().optional(),
+  keyLevels: z
+    .array(z.unknown())
+    .transform((arr) =>
+      arr.filter((n): n is number => typeof n === 'number' && Number.isFinite(n)),
+    )
+    .optional(),
+  commentary: z.string().optional(),
+});
+export type TechnicianOutput = z.infer<typeof TechnicianOutputSchema>;
+
+export const StrategistOutputSchema = z.object({
+  plans: z.array(TradePlan),
+});
+export type StrategistOutput = z.infer<typeof StrategistOutputSchema>;

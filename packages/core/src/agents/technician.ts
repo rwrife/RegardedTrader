@@ -4,10 +4,12 @@ import type { MarketDataClient } from '../clients/index.js';
 import { computeIndicators } from '../indicators/index.js';
 import {
   BriefingTechnical,
+  TechnicianOutputSchema,
   type BriefingTechnical as BriefingTechnicalT,
   type Indicators,
   type OHLCV,
   type Quote,
+  type TechnicianOutput,
 } from '../schemas/index.js';
 
 /**
@@ -29,13 +31,7 @@ produce a concise, plain-English chart read. You ONLY use the numbers the user
 provides — never invent price levels, news, or earnings dates. You never
 recommend specific trades. Output strict JSON matching the schema requested.`;
 
-interface LLMReply {
-  trend?: unknown;
-  momentum?: unknown;
-  volatility?: unknown;
-  keyLevels?: unknown;
-  commentary?: unknown;
-}
+
 
 /**
  * `Technician` — TA-driven chart/indicator commentary agent (issue #74).
@@ -73,7 +69,7 @@ Indicators: ${JSON.stringify(indicators)}`;
       trend: stringOrFallback(parsed.trend, fallbackTrend(indicators)),
       momentum: stringOrFallback(parsed.momentum, fallbackMomentum(indicators)),
       volatility: stringOrFallback(parsed.volatility, fallbackVolatility(indicators)),
-      keyLevels: numericArray(parsed.keyLevels),
+      keyLevels: parsed.keyLevels ?? [],
       commentary: stringOrFallback(
         parsed.commentary,
         `Technical read for ${symbol} based on provided indicators. ${DISCLAIMER}`,
@@ -106,22 +102,25 @@ Indicators: ${JSON.stringify(indicators)}`;
   }
 }
 
-function safeParse(raw: string): LLMReply {
+/**
+ * Parse + Zod-validate the LLM JSON reply (issue #165). Malformed JSON,
+ * wrong-typed fields, or non-object bodies collapse to an empty output
+ * so the deterministic fallbacks below take over. Numeric filtering on
+ * `keyLevels` happens inside the schema (only finite numbers survive).
+ */
+function safeParse(raw: string): TechnicianOutput {
+  let v: unknown;
   try {
-    const v = JSON.parse(raw);
-    return typeof v === 'object' && v !== null ? (v as LLMReply) : {};
+    v = JSON.parse(raw);
   } catch {
     return {};
   }
+  const result = TechnicianOutputSchema.safeParse(v);
+  return result.success ? result.data : {};
 }
 
 function stringOrFallback(v: unknown, fallback: string): string {
   return typeof v === 'string' && v.trim().length > 0 ? v.trim() : fallback;
-}
-
-function numericArray(v: unknown): number[] {
-  if (!Array.isArray(v)) return [];
-  return v.filter((n): n is number => typeof n === 'number' && Number.isFinite(n));
 }
 
 function fallbackTrend(i: Indicators): string {
