@@ -67,6 +67,28 @@ function planJson(plans: TradePlan[]): LLM {
   };
 }
 
+/**
+ * Fake LLM that returns a valid Analyst JSON when the system prompt looks
+ * like the Analyst's, and a `{ plans: [...] }` StrategistOutput otherwise.
+ * Post-#165 the Analyst validates its reply via Zod and throws on mismatch,
+ * so tests that exercise both agents need per-agent replies.
+ */
+function analystAndPlanJson(plans: TradePlan[]): LLM {
+  return {
+    async complete({ system }) {
+      if (/equity research analyst/i.test(system)) {
+        return JSON.stringify({
+          bullCase: 'bull',
+          bearCase: 'bear',
+          catalysts: ['c1'],
+          risks: ['r1'],
+        });
+      }
+      return JSON.stringify({ plans });
+    },
+  };
+}
+
 const compliantPlan: TradePlan = {
   name: 'Long call',
   thesis: 'bullish',
@@ -229,7 +251,7 @@ describe('Orchestrator.briefing (#126)', () => {
     };
     const o = new Orchestrator(
       fakeMarket(),
-      planJson([compliantPlan]),
+      analystAndPlanJson([compliantPlan]),
       { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true },
       { technician, newsScout: scout },
     );
@@ -247,7 +269,7 @@ describe('Orchestrator.briefing (#126)', () => {
   it('surfaces RiskOfficer-violation path in the aggregate verdict', async () => {
     const o = new Orchestrator(
       fakeMarket(),
-      planJson([violatingPlan]),
+      analystAndPlanJson([violatingPlan]),
       { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true },
     );
     const b = await o.briefing('NVDA', { thesis: 'bullish', maxLossUsd: 500 });
@@ -256,5 +278,39 @@ describe('Orchestrator.briefing (#126)', () => {
     expect(b.riskVerdict?.violations.length).toBeGreaterThan(0);
     // Violation strings are prefixed with the plan name for traceability.
     expect(b.riskVerdict?.violations[0]).toMatch(/^Big long call: /);
+  });
+
+  /**
+   * Issue #165: strategist LLM parse failures must surface on the briefing
+   * as a distinct `parseError`, not silently as `candidates: []`. This lets
+   * CLI/web render “AI failed to produce valid plans” instead of “no
+   * candidates” and keeps the analyst/technician sections intact.
+   */
+  it('surfaces a strategist parseError on the briefing when the LLM reply is unparseable', async () => {
+    let call = 0;
+    const llm: LLM = {
+      async complete() {
+        call += 1;
+        // First call = Analyst (valid), second call = Strategist (junk).
+        if (call === 1) {
+          return JSON.stringify({
+            bullCase: 'bull',
+            bearCase: 'bear',
+            catalysts: [],
+            risks: [],
+          });
+        }
+        return 'not json at all';
+      },
+    };
+    const o = new Orchestrator(fakeMarket(), llm, {
+      maxLossUsd: 500,
+      maxLegs: 4,
+      forbidNakedShorts: true,
+    });
+    const b = await o.briefing('NVDA', { thesis: 'bullish', maxLossUsd: 500 });
+    expect(b.bullCase).toBe('bull');
+    expect(b.strategist?.candidates).toEqual([]);
+    expect(b.strategist?.parseError).toMatch(/OptionsStrategist/);
   });
 });

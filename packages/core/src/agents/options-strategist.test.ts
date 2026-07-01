@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { OptionsStrategist, attachRiskGraph } from './options-strategist.js';
+import { AgentParseError } from './errors.js';
 import type { LLM } from './llm.js';
 import { DISCLAIMER } from './llm.js';
 import { makeContract, definedRiskPlan } from './__fixtures__/option-contracts.js';
@@ -39,40 +40,43 @@ describe('OptionsStrategist', () => {
     expect(llm.complete).toHaveBeenCalledOnce();
   });
 
-  it('returns an empty array on malformed JSON without throwing', async () => {
+  it('throws AgentParseError on malformed JSON instead of silently returning []', async () => {
     const llm = fakeLLM('this is not json');
     const s = new OptionsStrategist(llm);
-    const out = await s.propose({
-      symbol: 'NVDA',
-      thesis: 'bullish',
-      maxLossUsd: 500,
-      chain: SAMPLE_CHAIN,
-    });
-    expect(out).toEqual([]);
+    await expect(
+      s.propose({
+        symbol: 'NVDA',
+        thesis: 'bullish',
+        maxLossUsd: 500,
+        chain: SAMPLE_CHAIN,
+      }),
+    ).rejects.toBeInstanceOf(AgentParseError);
   });
 
-  it('returns an empty array when "plans" is not an array', async () => {
+  it('throws AgentParseError when "plans" is not an array', async () => {
     const llm = fakeLLM(JSON.stringify({ plans: { not: 'an array' } }));
     const s = new OptionsStrategist(llm);
-    const out = await s.propose({
-      symbol: 'NVDA',
-      thesis: 'bullish',
-      maxLossUsd: 500,
-      chain: SAMPLE_CHAIN,
-    });
-    expect(out).toEqual([]);
+    await expect(
+      s.propose({
+        symbol: 'NVDA',
+        thesis: 'bullish',
+        maxLossUsd: 500,
+        chain: SAMPLE_CHAIN,
+      }),
+    ).rejects.toBeInstanceOf(AgentParseError);
   });
 
-  it('returns an empty array when "plans" key is missing entirely', async () => {
+  it('throws AgentParseError when "plans" key is missing entirely', async () => {
     const llm = fakeLLM(JSON.stringify({ other: 'shape' }));
     const s = new OptionsStrategist(llm);
-    const out = await s.propose({
-      symbol: 'NVDA',
-      thesis: 'bullish',
-      maxLossUsd: 500,
-      chain: SAMPLE_CHAIN,
-    });
-    expect(out).toEqual([]);
+    await expect(
+      s.propose({
+        symbol: 'NVDA',
+        thesis: 'bullish',
+        maxLossUsd: 500,
+        chain: SAMPLE_CHAIN,
+      }),
+    ).rejects.toBeInstanceOf(AgentParseError);
   });
 
   it('does not call the network — LLM is fully injectable', async () => {

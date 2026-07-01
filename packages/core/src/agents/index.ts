@@ -1,4 +1,5 @@
 export { Analyst } from './analyst.js';
+export { AgentParseError, isAgentParseError } from './errors.js';
 export { Technician } from './technician.js';
 export type { TechnicianInput } from './technician.js';
 export { OptionsStrategist } from './options-strategist.js';
