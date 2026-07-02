@@ -119,6 +119,19 @@ export {
   type PollRedditResult,
 } from './jobs/reddit-mentions.js';
 export {
+  pollHnMentions,
+  parseHnMentions,
+  hnSearchUrl,
+  hnItemUrl,
+  HN_DEFAULT_HITS_PER_PAGE,
+  HN_DEFAULT_LOOKBACK_MS,
+  HN_ITEM_BASE_URL,
+  HN_SEARCH_BASE_URL,
+  HN_USER_AGENT,
+  type PollHnOptions,
+  type PollHnResult,
+} from './jobs/hn-mentions.js';
+export {
   aggregateSentiment,
   aggregateScoredMentions,
   SentimentAggregatorWeights,
