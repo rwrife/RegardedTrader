@@ -68,6 +68,24 @@ export const Indicators = z.object({
   macd: z.number().nullable(),
   macdSignal: z.number().nullable(),
   atr14: z.number().nullable(),
+  /**
+   * Bollinger Bands (issue #140). `middle` is the 20-period SMA of close;
+   * `upper` / `lower` are 2 population standard deviations above/below.
+   * All three fields are `nullish` so pre-#140 callers, fixtures, and
+   * literal `Indicators` values keep validating and type-checking without
+   * being touched.
+   */
+  bbMiddle: z.number().nullish(),
+  bbUpper: z.number().nullish(),
+  bbLower: z.number().nullish(),
+  /**
+   * Stochastic Oscillator (issue #140). `stochK` is the fast %K over a
+   * 14-bar window (0-100); `stochD` is the 3-period SMA of %K. Both fields
+   * are `nullish` for the same additive-compatibility reason as the
+   * Bollinger fields.
+   */
+  stochK: z.number().nullish(),
+  stochD: z.number().nullish(),
 });
 export type Indicators = z.infer<typeof Indicators>;
 
