@@ -1,0 +1,77 @@
+{
+  "quoteSummary": {
+    "result": [
+      {
+        "assetProfile": {
+          "address1": "One Apple Park Way",
+          "city": "Cupertino",
+          "state": "CA",
+          "zip": "95014",
+          "country": "United States",
+          "phone": "408 996 1010",
+          "website": "https://www.apple.com",
+          "industry": "Consumer Electronics",
+          "industryKey": "consumer-electronics",
+          "industryDisp": "Consumer Electronics",
+          "sector": "Technology",
+          "sectorKey": "technology",
+          "sectorDisp": "Technology",
+          "longBusinessSummary": "Apple Inc. designs, manufactures, and markets smartphones, personal computers, tablets, wearables, and accessories worldwide. It offers iPhone, Mac, iPad, and wearables, home, and accessories, and also sells a variety of related services.",
+          "fullTimeEmployees": 164000,
+          "auditRisk": 6,
+          "boardRisk": 1,
+          "compensationRisk": 3,
+          "shareHolderRightsRisk": 1,
+          "overallRisk": 1,
+          "governanceEpochDate": 1748649600,
+          "compensationAsOfEpochDate": 1735603200,
+          "irWebsite": "https://investor.apple.com/investor-relations/default.aspx",
+          "maxAge": 86400
+        },
+        "summaryDetail": {
+          "maxAge": 1,
+          "priceHint": { "raw": 2, "fmt": "2", "longFmt": "2" },
+          "previousClose": { "raw": 189.95, "fmt": "189.95" },
+          "open": { "raw": 190.5, "fmt": "190.50" },
+          "dayLow": { "raw": 189.1, "fmt": "189.10" },
+          "dayHigh": { "raw": 192.4, "fmt": "192.40" },
+          "regularMarketPreviousClose": { "raw": 189.95, "fmt": "189.95" },
+          "currency": "USD",
+          "exchangeDataDelayedBy": 0
+        },
+        "price": {
+          "maxAge": 1,
+          "preMarketChangePercent": { "raw": 0.0021, "fmt": "0.21%" },
+          "regularMarketChangePercent": { "raw": 0.0058, "fmt": "0.58%" },
+          "regularMarketChange": { "raw": 1.1, "fmt": "1.10" },
+          "regularMarketTime": 1720195200,
+          "priceHint": 2,
+          "regularMarketPrice": { "raw": 191.05, "fmt": "191.05" },
+          "regularMarketDayHigh": { "raw": 192.4, "fmt": "192.40" },
+          "regularMarketDayLow": { "raw": 189.1, "fmt": "189.10" },
+          "regularMarketVolume": { "raw": 45123456, "fmt": "45.12M", "longFmt": "45,123,456" },
+          "regularMarketPreviousClose": { "raw": 189.95, "fmt": "189.95" },
+          "regularMarketOpen": { "raw": 190.5, "fmt": "190.50" },
+          "exchange": "NMS",
+          "exchangeName": "NasdaqGS",
+          "exchangeDataDelayedBy": 0,
+          "marketState": "REGULAR",
+          "quoteType": "EQUITY",
+          "symbol": "AAPL",
+          "underlyingSymbol": null,
+          "shortName": "Apple Inc.",
+          "longName": "Apple Inc.",
+          "currency": "USD",
+          "quoteSourceName": "Nasdaq Real Time Price",
+          "currencySymbol": "$",
+          "fromCurrency": null,
+          "toCurrency": null,
+          "lastMarket": null,
+          "marketCap": { "raw": 2934567890000, "fmt": "2.93T", "longFmt": "2,934,567,890,000" },
+          "fullExchangeName": "NasdaqGS"
+        }
+      }
+    ],
+    "error": null
+  }
+}

@@ -25,3 +25,14 @@ export type {
   GetOrResolveOptions,
   ResolveOutcome,
 } from './store.js';
+export {
+  createYahooTickerSource,
+  parseYahooSearch,
+  parseYahooQuoteSummary,
+} from './sources/yahoo.js';
+export type {
+  YahooTickerSourceOptions,
+  YahooSearchParseOptions,
+  YahooQuoteSummaryParseOptions,
+  YahooSourceLogger,
+} from './sources/yahoo.js';
