@@ -65,7 +65,15 @@ export function ConfigScreen({
               : `${p.label} CLI ${p.backend}${p.model ? ` model=${p.model}` : ''}`}
           </Text>
         ))}
-        <Text>Risk: maxLoss=${cfg.risk.maxLossUsd} maxLegs={cfg.risk.maxLegs} forbidNakedShorts={String(cfg.risk.forbidNakedShorts)}</Text>
+        <Text>
+          Risk: maxLoss=${cfg.risk.maxLossUsd} maxLegs={cfg.risk.maxLegs}{' '}
+          forbidNakedShorts={String(cfg.risk.forbidNakedShorts)}
+        </Text>
+        <Text>
+          Risk (#181): maxDte={cfg.risk.maxDte === 0 ? 'off' : `${cfg.risk.maxDte}d`}{' '}
+          accountSize=${cfg.risk.accountSizeUsd}{' '}
+          maxPctOfAccount={(cfg.risk.maxPctOfAccount * 100).toFixed(2)}%
+        </Text>
         <Text>Server: {cfg.server.host}:{cfg.server.port}</Text>
         <Text dimColor>(use `regard config` for the interactive editor)</Text>
         <Exit exit={leave} interactive={!!onDone} />

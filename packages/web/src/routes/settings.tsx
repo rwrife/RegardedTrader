@@ -970,6 +970,16 @@ function RiskCapsSection(props: RiskCapsSectionProps): JSX.Element {
   const [forbidNakedShorts, setForbidNakedShorts] = useState<boolean>(
     config.risk.forbidNakedShorts,
   );
+  // #181 — DTE + account-size caps. Stored as strings so users can clear the
+  // input without instantly snapping to NaN; validated on submit.
+  const [maxDte, setMaxDte] = useState<string>(String(config.risk.maxDte));
+  const [accountSizeUsd, setAccountSizeUsd] = useState<string>(
+    String(config.risk.accountSizeUsd),
+  );
+  const [maxPctOfAccount, setMaxPctOfAccount] = useState<string>(
+    // Show as percent for humans (0.02 → "2"). Keep 2 decimals if needed.
+    String(Number((config.risk.maxPctOfAccount * 100).toFixed(2))),
+  );
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
@@ -978,7 +988,19 @@ function RiskCapsSection(props: RiskCapsSectionProps): JSX.Element {
     setMaxLossUsd(String(config.risk.maxLossUsd));
     setMaxLegs(String(config.risk.maxLegs));
     setForbidNakedShorts(config.risk.forbidNakedShorts);
-  }, [config.risk.maxLossUsd, config.risk.maxLegs, config.risk.forbidNakedShorts]);
+    setMaxDte(String(config.risk.maxDte));
+    setAccountSizeUsd(String(config.risk.accountSizeUsd));
+    setMaxPctOfAccount(
+      String(Number((config.risk.maxPctOfAccount * 100).toFixed(2))),
+    );
+  }, [
+    config.risk.maxLossUsd,
+    config.risk.maxLegs,
+    config.risk.forbidNakedShorts,
+    config.risk.maxDte,
+    config.risk.accountSizeUsd,
+    config.risk.maxPctOfAccount,
+  ]);
 
   const onSubmit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
@@ -986,6 +1008,9 @@ function RiskCapsSection(props: RiskCapsSectionProps): JSX.Element {
     setOkMsg(null);
     const loss = Number(maxLossUsd);
     const legs = Number(maxLegs);
+    const dte = Number(maxDte);
+    const account = Number(accountSizeUsd);
+    const pctInput = Number(maxPctOfAccount);
     if (!Number.isFinite(loss) || loss <= 0) {
       setErr('Max loss must be a positive number');
       return;
@@ -994,12 +1019,28 @@ function RiskCapsSection(props: RiskCapsSectionProps): JSX.Element {
       setErr('Max legs must be a positive integer');
       return;
     }
+    if (!Number.isInteger(dte) || dte < 0) {
+      setErr('Max DTE must be a non-negative integer (0 disables)');
+      return;
+    }
+    if (!Number.isFinite(account) || account < 0) {
+      setErr('Account size must be a non-negative number (0 = unknown)');
+      return;
+    }
+    if (!Number.isFinite(pctInput) || pctInput < 0 || pctInput > 100) {
+      setErr('Max % of account must be between 0 and 100');
+      return;
+    }
     setSaving(true);
     try {
       const r = await api.updateRiskCaps({
         maxLossUsd: loss,
         maxLegs: legs,
         forbidNakedShorts,
+        maxDte: dte,
+        accountSizeUsd: account,
+        // Convert back from percent (0-100) to fraction (0-1) for the schema.
+        maxPctOfAccount: pctInput / 100,
       });
       onConfigChange(r.config);
       setOkMsg('Risk caps saved');
@@ -1052,6 +1093,52 @@ function RiskCapsSection(props: RiskCapsSectionProps): JSX.Element {
             value={maxLegs}
             onChange={(e) => setMaxLegs(e.target.value)}
             aria-label="Max legs"
+            className="mt-1 w-full px-2 py-1.5 text-sm bg-surface-2 border border-border-subtle rounded font-mono"
+          />
+        </label>
+        <label className="block text-xs">
+          <span className="text-fg-secondary">
+            Max DTE (days-to-expiry, 0 = disabled)
+          </span>
+          <input
+            type="number"
+            inputMode="numeric"
+            min="0"
+            step="1"
+            value={maxDte}
+            onChange={(e) => setMaxDte(e.target.value)}
+            aria-label="Max DTE"
+            className="mt-1 w-full px-2 py-1.5 text-sm bg-surface-2 border border-border-subtle rounded font-mono"
+          />
+        </label>
+        <label className="block text-xs">
+          <span className="text-fg-secondary">
+            Account size (USD, 0 = unknown / opt out of % cap)
+          </span>
+          <input
+            type="number"
+            inputMode="decimal"
+            min="0"
+            step="100"
+            value={accountSizeUsd}
+            onChange={(e) => setAccountSizeUsd(e.target.value)}
+            aria-label="Account size USD"
+            className="mt-1 w-full px-2 py-1.5 text-sm bg-surface-2 border border-border-subtle rounded font-mono"
+          />
+        </label>
+        <label className="block text-xs">
+          <span className="text-fg-secondary">
+            Max % of account per trade (0–100, applies only when account size &gt; 0)
+          </span>
+          <input
+            type="number"
+            inputMode="decimal"
+            min="0"
+            max="100"
+            step="0.1"
+            value={maxPctOfAccount}
+            onChange={(e) => setMaxPctOfAccount(e.target.value)}
+            aria-label="Max percent of account"
             className="mt-1 w-full px-2 py-1.5 text-sm bg-surface-2 border border-border-subtle rounded font-mono"
           />
         </label>

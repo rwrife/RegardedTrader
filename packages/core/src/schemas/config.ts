@@ -45,11 +45,32 @@ export type AiProvider = z.infer<typeof AiProvider>;
  * `POST /config/risk` endpoint and the web Settings risk-caps editor can
  * validate the same shape used by `RiskOfficer` without reaching for `any`.
  * (Issue #152 — CLI/web parity for risk caps.)
+ *
+ * DTE and account-size caps were added in #181 with defaults that preserve
+ * existing v1 configs: `maxDte=45` limits long-dated exposure, and
+ * `maxPctOfAccount=0.02` only takes effect once the user sets a positive
+ * `accountSizeUsd` (0 = unknown/opted out). Zod defaults apply on load so no
+ * explicit migration step is required.
  */
 export const RiskConfig = z.object({
   maxLossUsd: z.number().positive().default(500),
   maxLegs: z.number().int().positive().default(4),
   forbidNakedShorts: z.boolean().default(true),
+  /**
+   * Maximum days-to-expiry (DTE) of the longest-dated leg. `0` disables the
+   * check. Default 45 mirrors the RiskOfficer notes in AGENTS.md.
+   */
+  maxDte: z.number().int().nonnegative().default(45),
+  /**
+   * User's total tradable account size in USD, used with `maxPctOfAccount`.
+   * `0` means "not configured" — the pct-of-account check is skipped.
+   */
+  accountSizeUsd: z.number().nonnegative().default(0),
+  /**
+   * Cap on effectiveMaxLoss as a fraction of `accountSizeUsd`. Only enforced
+   * when both `accountSizeUsd` and this value are `> 0`. Default 0.02 (2%).
+   */
+  maxPctOfAccount: z.number().min(0).max(1).default(0.02),
 });
 export type RiskConfig = z.infer<typeof RiskConfig>;
 
@@ -61,7 +82,14 @@ export const AppConfig = z.object({
   /** Which provider id is active for AI calls */
   activeProvider: z.string().nullable().default(null),
   /** Risk caps applied by RiskOfficer */
-  risk: RiskConfig.default({ maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true }),
+  risk: RiskConfig.default({
+    maxLossUsd: 500,
+    maxLegs: 4,
+    forbidNakedShorts: true,
+    maxDte: 45,
+    accountSizeUsd: 0,
+    maxPctOfAccount: 0.02,
+  }),
   /** Local server bind. Validated to localhost only. */
   server: z
     .object({
