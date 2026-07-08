@@ -39,10 +39,36 @@ server is running unless you also `kill -HUP` (or restart) the server.
       "model": "gpt-5"                 // optional
     }
   },
-  "risk": { "maxLossUsd": 500, "maxLegs": 4, "forbidNakedShorts": true },
+  "risk": {
+    "maxLossUsd": 500,
+    "maxLegs": 4,
+    "forbidNakedShorts": true,
+    "maxDte": 45,               // #181 — longest-dated leg cap, 0 disables
+    "accountSizeUsd": 0,        // #181 — 0 = unknown; enables the % cap when > 0
+    "maxPctOfAccount": 0.02     // #181 — fraction of accountSizeUsd (2%)
+  },
   "server": { "host": "127.0.0.1", "port": 4317 }
 }
 ```
+
+## Risk caps
+
+`config.risk` is enforced by `RiskOfficer` on every trade plan (strategist
+candidates, `/plan/:sym`, briefings). The fields are:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `maxLossUsd` | `500` | Absolute cap on plan-level max loss (USD). |
+| `maxLegs` | `4` | Reject plans with more than this many legs. |
+| `forbidNakedShorts` | `true` | Flag any short leg not covered by a same-type same-expiry long leg. |
+| `maxDte` | `45` | Reject plans whose longest-dated leg exceeds this DTE. Set `0` to disable. |
+| `accountSizeUsd` | `0` | User's total tradable account size. `0` means "not configured" — the % cap is skipped. |
+| `maxPctOfAccount` | `0.02` | Fraction of `accountSizeUsd` allowed as max loss per trade. Only enforced when both fields are `> 0`. |
+
+Both `maxDte` and `maxPctOfAccount` were added in **#181**. Existing v1
+configs load with these defaults applied automatically (the Zod schema
+supplies them on `parse`), so no migration step is required. The pct-of-
+account cap stays inactive until the user sets `accountSizeUsd > 0`.
 
 ## Provider kinds
 

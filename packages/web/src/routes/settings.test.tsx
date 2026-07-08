@@ -18,7 +18,14 @@ function makeConfig(extra: Partial<AppConfig> = {}): AppConfig {
       },
     },
     activeProvider: 'openai',
-    risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true },
+    risk: {
+      maxLossUsd: 500,
+      maxLegs: 4,
+      forbidNakedShorts: true,
+      maxDte: 45,
+      accountSizeUsd: 0,
+      maxPctOfAccount: 0.02,
+    },
     server: { host: '127.0.0.1', port: 4317 },
     marketData: { providers: {}, activeProvider: null },
     ...extra,
@@ -237,6 +244,10 @@ describe('<Settings>', () => {
         maxLossUsd: 750,
         maxLegs: 2,
         forbidNakedShorts: false,
+        // #181 fields land at their fixture defaults since we didn't touch them.
+        maxDte: 45,
+        accountSizeUsd: 0,
+        maxPctOfAccount: 0.02,
       });
     } finally {
       unmount(harness);

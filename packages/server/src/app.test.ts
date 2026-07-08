@@ -81,7 +81,7 @@ describe('POST /tickers/validate', () => {
         version: 1,
         providers: { fake: { kind: 'openai-compatible', label: 'fake', baseUrl: 'http://x/v1', model: 'm' } },
         activeProvider: 'fake',
-        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true },
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
       },
@@ -132,7 +132,7 @@ describe('POST /tickers/validate', () => {
         version: 1,
         providers: { fake: { kind: 'openai-compatible', label: 'fake', baseUrl: 'http://x/v1', model: 'm' } },
         activeProvider: 'fake',
-        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true },
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
       },
@@ -160,7 +160,7 @@ describe('POST /tickers/validate', () => {
         version: 1,
         providers: {},
         activeProvider: null,
-        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true },
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
       },
@@ -204,7 +204,7 @@ describe('POST /config/test', () => {
         version: 1,
         providers: opts.providers ?? {},
         activeProvider: opts.active ?? null,
-        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true },
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
       },
@@ -314,7 +314,7 @@ describe('Origin loopback guard (#128)', () => {
         version: 1,
         providers: {},
         activeProvider: null,
-        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true },
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
       },
@@ -387,7 +387,7 @@ describe('POST /briefing/:symbol (#138)', () => {
         version: 1,
         providers: { fake: { kind: 'openai-compatible', label: 'fake', baseUrl: 'http://x/v1', model: 'm' } },
         activeProvider: 'fake',
-        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true },
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
       },
@@ -471,7 +471,7 @@ describe('POST /config/risk', () => {
         version: 1,
         providers: { fake: { kind: 'openai-compatible', label: 'fake', baseUrl: 'http://x/v1', model: 'm' } },
         activeProvider: 'fake',
-        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true },
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
       },
@@ -488,13 +488,62 @@ describe('POST /config/risk', () => {
       body: JSON.stringify({ maxLossUsd: 250, maxLegs: 2, forbidNakedShorts: false }),
     });
     expect(r.status).toBe(200);
-    const body = (await r.json()) as { ok: boolean; config: { risk: { maxLossUsd: number; maxLegs: number; forbidNakedShorts: boolean } } };
+    type RiskJson = {
+      maxLossUsd: number;
+      maxLegs: number;
+      forbidNakedShorts: boolean;
+      maxDte: number;
+      accountSizeUsd: number;
+      maxPctOfAccount: number;
+    };
+    const body = (await r.json()) as { ok: boolean; config: { risk: RiskJson } };
     expect(body.ok).toBe(true);
-    expect(body.config.risk).toEqual({ maxLossUsd: 250, maxLegs: 2, forbidNakedShorts: false });
+    // Zod fills in defaults for #181 fields when the client omits them, so
+    // existing web/CLI callers that only send the legacy three fields keep
+    // working. New fields land with their schema defaults.
+    expect(body.config.risk).toEqual({
+      maxLossUsd: 250,
+      maxLegs: 2,
+      forbidNakedShorts: false,
+      maxDte: 45,
+      accountSizeUsd: 0,
+      maxPctOfAccount: 0.02,
+    });
 
     const cur = await fetch(`${baseUrl}/config`);
-    const curJson = (await cur.json()) as { risk: { maxLossUsd: number; maxLegs: number; forbidNakedShorts: boolean } };
-    expect(curJson.risk).toEqual({ maxLossUsd: 250, maxLegs: 2, forbidNakedShorts: false });
+    const curJson = (await cur.json()) as { risk: RiskJson };
+    expect(curJson.risk).toEqual({
+      maxLossUsd: 250,
+      maxLegs: 2,
+      forbidNakedShorts: false,
+      maxDte: 45,
+      accountSizeUsd: 0,
+      maxPctOfAccount: 0.02,
+    });
+  });
+
+  it('accepts the full #181 shape and persists new fields', async () => {
+    const { baseUrl } = await makeApp();
+    const r = await fetch(`${baseUrl}/config/risk`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        maxLossUsd: 300,
+        maxLegs: 4,
+        forbidNakedShorts: true,
+        maxDte: 30,
+        accountSizeUsd: 25_000,
+        maxPctOfAccount: 0.01,
+      }),
+    });
+    expect(r.status).toBe(200);
+    const cur = await fetch(`${baseUrl}/config`);
+    const curJson = (await cur.json()) as {
+      risk: { maxDte: number; accountSizeUsd: number; maxPctOfAccount: number };
+    };
+    expect(curJson.risk.maxDte).toBe(30);
+    expect(curJson.risk.accountSizeUsd).toBe(25_000);
+    expect(curJson.risk.maxPctOfAccount).toBeCloseTo(0.01);
   });
 
   it('rejects invalid risk caps with 400', async () => {

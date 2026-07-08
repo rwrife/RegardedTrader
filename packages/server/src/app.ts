@@ -106,6 +106,9 @@ export function createApp(deps: AppDeps): AppHandle {
         maxLossUsd: cfg.risk.maxLossUsd,
         maxLegs: cfg.risk.maxLegs,
         forbidNakedShorts: cfg.risk.forbidNakedShorts,
+        maxDte: cfg.risk.maxDte,
+        accountSizeUsd: cfg.risk.accountSizeUsd,
+        maxPctOfAccount: cfg.risk.maxPctOfAccount,
       },
       // Wire the Technician agent (issue #74) by default so /briefing
       // includes a TA section whenever an LLM is configured.
