@@ -36,6 +36,7 @@ import {
 } from '@regardedtrader/core';
 import { liveQuote, type LiveQuoteSource, type YahooQuoteLike } from './liveQuote.js';
 import { isLoopbackOrigin } from './bind-guard.js';
+import { SERVER_VERSION } from './version.js';
 
 export interface AppDeps {
   /**
@@ -150,7 +151,10 @@ export function createApp(deps: AppDeps): AppHandle {
     res.json({
       ok: true,
       name: 'regardedtrader-server',
-      version: '0.1.0',
+      // Sourced from packages/server/package.json at module load (issue
+      // #180). Do NOT hardcode a literal here — use SERVER_VERSION so a
+      // future package.json bump stays in sync automatically.
+      version: SERVER_VERSION,
       aiConfigured: orchestrator !== null,
       activeProvider: cfg.activeProvider,
     });

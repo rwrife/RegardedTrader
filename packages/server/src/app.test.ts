@@ -1,11 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { WatchlistStore, type LLM, type WebSearch } from '@regardedtrader/core';
 import { createApp } from './app.js';
+import { SERVER_VERSION } from './version.js';
 
 function fakeWebSearch(): WebSearch {
   return {
@@ -296,6 +298,63 @@ describe('POST /config/test', () => {
     expect(r.error.code).toBe('provider_error');
     expect(r.error.message).not.toContain('sk-secret-1234');
     expect(r.error.message).toContain('***');
+  });
+});
+
+describe('GET /health (#180)', () => {
+  function makeMinimalApp() {
+    return createApp({
+      market: {
+        quote: async () => ({ symbol: 'X', price: 0, change: 0, changePercent: 0, volume: 0, asOf: '' }),
+        history: async () => [],
+        news: async () => [],
+        optionsChain: async () => [],
+      },
+      webSearch: fakeWebSearch(),
+      watchlist: new WatchlistStore({ path: join(dir, 'watchlist.json') }),
+      initialConfig: {
+        version: 1,
+        providers: {},
+        activeProvider: null,
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
+        server: { host: '127.0.0.1', port: 4317 },
+        marketData: { providers: {}, activeProvider: null },
+      },
+      llmFromConfig: () => null,
+    });
+  }
+
+  it('reports the version from packages/server/package.json, not a hardcoded literal', async () => {
+    // Cross-check /health.version against the actual package.json on disk
+    // so a future bump of either the code or package.json without the
+    // other is caught by CI.
+    const here = dirname(fileURLToPath(import.meta.url));
+    const pkgPath = resolve(here, '..', 'package.json');
+    const pkgRaw = await readFile(pkgPath, 'utf8');
+    const pkgVersion = (JSON.parse(pkgRaw) as { version: string }).version;
+    expect(pkgVersion).toMatch(/^\d+\.\d+\.\d+/);
+
+    // Cached module-load value must match what package.json currently says.
+    expect(SERVER_VERSION).toBe(pkgVersion);
+
+    const { app } = makeMinimalApp();
+    baseUrl = await listen(app);
+    const r = await fetch(`${baseUrl}/health`);
+    expect(r.status).toBe(200);
+    const j = (await r.json()) as {
+      ok: boolean;
+      name: string;
+      version: string;
+      aiConfigured: boolean;
+      activeProvider: string | null;
+    };
+    expect(j.version).toBe(pkgVersion);
+    // The other keys must be untouched (issue #180 is a pure fix, not a
+    // schema change).
+    expect(j.ok).toBe(true);
+    expect(j.name).toBe('regardedtrader-server');
+    expect(j.aiConfigured).toBe(false);
+    expect(j.activeProvider).toBeNull();
   });
 });
 
