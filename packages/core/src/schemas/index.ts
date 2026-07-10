@@ -1,6 +1,15 @@
 import { z } from 'zod';
 import { DISCLAIMER } from '../constants.js';
 export { AiOutputEnvelope, envelope, type AiEnvelope } from './envelope.js';
+export {
+  ContextBudgetOptionsSchema,
+  ContextBudgetSectionCharsSchema,
+  ContextBudgetTelemetrySchema,
+  DEFAULT_CHARS_PER_TOKEN,
+  type ContextBudgetOptions,
+  type ContextBudgetSectionChars,
+  type ContextBudgetTelemetry,
+} from './context-budget.js';
 
 export const Ticker = z.string().regex(/^[A-Z.\-]{1,10}$/);
 export type Ticker = z.infer<typeof Ticker>;

@@ -21,6 +21,10 @@
 
 import { computeIndicators } from '../indicators/index.js';
 import type { Indicators, OHLCV } from '../schemas/index.js';
+import {
+  DEFAULT_CHARS_PER_TOKEN,
+  type ContextBudgetTelemetry,
+} from '../schemas/context-budget.js';
 import type {
   ContextBudgetReport,
   ContextHeadline,
@@ -142,8 +146,38 @@ export interface BuildContextOptions {
   readonly now?: () => Date;
   /** Override per-section cadences (ms). */
   readonly cadences?: Partial<Record<CadenceKey, number>>;
-  /** Override the prompt char budget. */
+  /**
+   * Override the prompt char budget. Legacy name; `maxChars` (issue
+   * #125) is preferred. When both are supplied, the smaller (more
+   * conservative) value wins.
+   */
   readonly budgetChars?: number;
+  /**
+   * Preferred char cap for the assembled context (issue #125). Aliases
+   * `budgetChars`. Values `<= 0` are ignored (fall back to default) so
+   * misconfigured provider settings can't wipe out the whole context.
+   */
+  readonly maxChars?: number;
+  /**
+   * Approximate token cap (issue #125). Converted to chars via
+   * `charsPerToken` (default {@link DEFAULT_CHARS_PER_TOKEN}). When
+   * combined with `maxChars` / `budgetChars`, the smallest resolved
+   * char budget wins. Values `<= 0` are ignored.
+   */
+  readonly maxTokens?: number;
+  /**
+   * Chars-per-token conversion factor for `maxTokens`. Defaults to
+   * {@link DEFAULT_CHARS_PER_TOKEN}. Only consulted when `maxTokens` is
+   * set. Values `<= 0` fall back to the default.
+   */
+  readonly charsPerToken?: number;
+  /**
+   * Optional telemetry hook (issue #125). Called once per build with
+   * the resolved budget, per-section char counts, approximate token
+   * count, and the truncated flag. Errors thrown by the hook are
+   * swallowed so a broken debug sink never crashes context assembly.
+   */
+  readonly onTelemetry?: (event: ContextBudgetTelemetry) => void;
   /** Override news headline count. */
   readonly newsLimit?: number;
   /** Override opinion mention count. */
@@ -162,7 +196,7 @@ export async function buildRecommendationContext(
   const symbol = opts.symbol.toUpperCase();
   const now = (opts.now ?? (() => new Date()))();
   const cadences = { ...DEFAULT_CADENCES_MS, ...(opts.cadences ?? {}) };
-  const budgetChars = opts.budgetChars ?? DEFAULT_CONTEXT_BUDGET_CHARS;
+  const budgetChars = resolveBudgetChars(opts);
   const newsLimit = opts.newsLimit ?? DEFAULT_NEWS_LIMIT;
   const opinionsLimit = opts.opinionsLimit ?? DEFAULT_OPINIONS_LIMIT;
   const historyDays = opts.historyDays ?? DEFAULT_HISTORY_DAYS;
@@ -224,6 +258,30 @@ export async function buildRecommendationContext(
     budgetChars,
   });
 
+  const truncated = budgetReport.report.truncated.length > 0;
+
+  // Fire telemetry after the budget has been applied. Errors are
+  // swallowed: a broken debug sink must never take out a recommender
+  // build. See ContextBudgetTelemetrySchema for the wire contract.
+  if (opts.onTelemetry) {
+    const charsPerToken = resolveCharsPerToken(opts.charsPerToken);
+    const approxTokens = Math.ceil(budgetReport.report.chars.total / charsPerToken);
+    try {
+      opts.onTelemetry({
+        symbol,
+        builtAt: now.toISOString(),
+        budgetChars,
+        chars: budgetReport.report.chars,
+        approxTokens,
+        charsPerToken,
+        truncated,
+        truncatedSections: [...budgetReport.report.truncated],
+      });
+    } catch {
+      // intentional: telemetry sinks are best-effort.
+    }
+  }
+
   return {
     symbol,
     risk: { forbidNakedShorts: opts.forbidNakedShorts ?? false },
@@ -235,7 +293,37 @@ export async function buildRecommendationContext(
     news: budgetReport.news,
     opinions: budgetReport.opinions,
     budget: budgetReport.report,
+    truncated,
   };
+}
+
+/**
+ * Reconcile the several ways a caller can express a char budget
+ * (issue #125). `maxChars` and `budgetChars` are direct char caps;
+ * `maxTokens` is converted via `charsPerToken`. When more than one is
+ * supplied, the smallest positive value wins so the tightest cap holds.
+ * Non-positive values are ignored — they'd degenerate to "drop
+ * everything" and are almost certainly a caller bug.
+ */
+function resolveBudgetChars(opts: BuildContextOptions): number {
+  const candidates: number[] = [];
+  if (typeof opts.maxChars === 'number' && opts.maxChars > 0) {
+    candidates.push(Math.floor(opts.maxChars));
+  }
+  if (typeof opts.budgetChars === 'number' && opts.budgetChars > 0) {
+    candidates.push(Math.floor(opts.budgetChars));
+  }
+  if (typeof opts.maxTokens === 'number' && opts.maxTokens > 0) {
+    const cpt = resolveCharsPerToken(opts.charsPerToken);
+    candidates.push(Math.max(1, Math.floor(opts.maxTokens * cpt)));
+  }
+  if (candidates.length === 0) return DEFAULT_CONTEXT_BUDGET_CHARS;
+  return Math.min(...candidates);
+}
+
+function resolveCharsPerToken(v: number | undefined): number {
+  if (typeof v === 'number' && v > 0) return v;
+  return DEFAULT_CHARS_PER_TOKEN;
 }
 
 /* -------------------------------------------------------------------------- */

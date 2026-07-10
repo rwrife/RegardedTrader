@@ -73,6 +73,15 @@ export interface RecommendationContext {
   readonly opinions?: ContextOpinionsSection | null;
   /** Approximate char counts per section (post-budget). */
   readonly budget?: ContextBudgetReport;
+  /**
+   * Top-level convenience flag mirroring `budget.truncated.length > 0`
+   * (issue #125). `true` when at least one variable-length section had
+   * entries dropped to fit the char budget. Rules and prompts can branch
+   * on this without reaching into `budget.truncated`.
+   *
+   * Optional so pre-#125 fixtures / rule-engine callers keep validating.
+   */
+  readonly truncated?: boolean;
 }
 
 /** Per-section freshness annotation. */
