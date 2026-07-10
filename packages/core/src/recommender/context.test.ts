@@ -420,6 +420,132 @@ describe('buildRecommendationContext', () => {
     expect(ctx.budget!.truncated).toEqual([]);
   });
 
+  it('under-budget pass-through: sets truncated=false and emits telemetry with all sections intact (#125)', async () => {
+    const events: import('../schemas/context-budget.js').ContextBudgetTelemetry[] = [];
+    const ctx = await buildRecommendationContext({
+      symbol: 'NVDA',
+      snapshots: makeSnapshotReader({
+        symbol: 'NVDA',
+        updatedAt: NOW.toISOString(),
+        entries: {},
+      }),
+      now,
+      onTelemetry: (e) => events.push(e),
+    });
+    expect(ctx.truncated).toBe(false);
+    expect(ctx.budget!.truncated).toEqual([]);
+    expect(events).toHaveLength(1);
+    const t = events[0]!;
+    expect(t.symbol).toBe('NVDA');
+    expect(t.truncated).toBe(false);
+    expect(t.truncatedSections).toEqual([]);
+    expect(t.budgetChars).toBe(DEFAULT_CONTEXT_BUDGET_CHARS);
+    expect(t.chars.total).toBe(ctx.budget!.chars.total);
+    // approxTokens is chars / charsPerToken, rounded up.
+    expect(t.approxTokens).toBeGreaterThanOrEqual(Math.floor(t.chars.total / t.charsPerToken));
+    // No PII / key leakage in the payload keys.
+    expect(Object.keys(t).sort()).toEqual([
+      'approxTokens',
+      'budgetChars',
+      'builtAt',
+      'chars',
+      'charsPerToken',
+      'symbol',
+      'truncated',
+      'truncatedSections',
+    ]);
+  });
+
+  it('over-budget: sets truncated=true, drops the largest variable section first, and reports it (#125)', async () => {
+    // Heavy news load so news is by far the biggest section — it must
+    // be truncated before smaller sections (history sparkline etc.)
+    // are touched.
+    const newsEntries: StreamEntry[] = [];
+    for (let i = 0; i < 60; i++) {
+      newsEntries.push({
+        ts: isoMinusHour(i),
+        data: {
+          title: `Headline number ${i}`,
+          url: `https://example.com/x-${i}`,
+          source: 'yahoo',
+          publishedAt: isoMinusHour(i),
+          summary: 'x'.repeat(400),
+        },
+      });
+    }
+    const events: import('../schemas/context-budget.js').ContextBudgetTelemetry[] = [];
+    const ctx = await buildRecommendationContext({
+      symbol: 'NVDA',
+      snapshots: makeSnapshotReader(
+        { symbol: 'NVDA', updatedAt: NOW.toISOString(), entries: {} },
+        { news: newsEntries, quote: dailyBars(30) },
+      ),
+      newsLimit: 50,
+      maxChars: 1500,
+      now,
+      onTelemetry: (e) => events.push(e),
+    });
+    expect(ctx.truncated).toBe(true);
+    expect(ctx.budget!.truncated).toContain('news');
+    expect(ctx.budget!.chars.total).toBeLessThanOrEqual(1500 + 200);
+    expect(events).toHaveLength(1);
+    const t = events[0]!;
+    expect(t.truncated).toBe(true);
+    expect(t.truncatedSections).toContain('news');
+    expect(t.budgetChars).toBe(1500);
+  });
+
+  it('maxTokens is converted to a char cap via charsPerToken and the smallest cap wins (#125)', async () => {
+    // maxTokens=100 with charsPerToken=5 -> 500 chars, tighter than maxChars=1500.
+    const newsEntries: StreamEntry[] = [];
+    for (let i = 0; i < 40; i++) {
+      newsEntries.push({
+        ts: isoMinusHour(i),
+        data: {
+          title: `H ${i}`,
+          url: `https://example.com/x-${i}`,
+          source: 'yahoo',
+          publishedAt: isoMinusHour(i),
+          summary: 'y'.repeat(300),
+        },
+      });
+    }
+    const events: import('../schemas/context-budget.js').ContextBudgetTelemetry[] = [];
+    const ctx = await buildRecommendationContext({
+      symbol: 'NVDA',
+      snapshots: makeSnapshotReader(
+        { symbol: 'NVDA', updatedAt: NOW.toISOString(), entries: {} },
+        { news: newsEntries, quote: dailyBars(30) },
+      ),
+      newsLimit: 40,
+      maxChars: 1500,
+      maxTokens: 100,
+      charsPerToken: 5,
+      now,
+      onTelemetry: (e) => events.push(e),
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]!.budgetChars).toBe(500);
+    expect(ctx.truncated).toBe(true);
+    expect(ctx.budget!.chars.total).toBeLessThanOrEqual(500 + 200);
+  });
+
+  it('a throwing telemetry hook never crashes the build (#125)', async () => {
+    const ctx = await buildRecommendationContext({
+      symbol: 'NVDA',
+      snapshots: makeSnapshotReader({
+        symbol: 'NVDA',
+        updatedAt: NOW.toISOString(),
+        entries: {},
+      }),
+      now,
+      onTelemetry: () => {
+        throw new Error('sink is on fire');
+      },
+    });
+    expect(ctx.truncated).toBe(false);
+  });
+
   it('is a pure function with respect to inputs (no observable side effects)', async () => {
     const latest: ContextLatestSnapshot = Object.freeze({
       symbol: 'NVDA',
