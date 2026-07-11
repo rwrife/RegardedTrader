@@ -10,6 +10,15 @@ export type { LLM } from './llm.js';
 export { CliLLM, buildLLM, activeLLM } from './providers.js';
 export { TickerValidator } from './ticker-validator.js';
 export type { TickerValidatorDeps } from './ticker-validator.js';
+export {
+  AiSentimentScorer,
+  AI_SENTIMENT_SCORER_VERSION,
+  SENTIMENT_SCORER_BATCH_SIZE,
+} from './sentiment-scorer.js';
+export type {
+  SentimentScorer,
+  AiSentimentScorerOptions,
+} from './sentiment-scorer.js';
 
 import type {
   BriefingTechnical,
