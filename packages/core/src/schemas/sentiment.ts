@@ -67,8 +67,30 @@ export const ScoredMention = MentionItem.extend({
     score: z.number().min(-1).max(1),
     confidence: z.number().min(0).max(1),
     label: SentimentLabel,
+    /**
+     * Short human-readable justification from the scorer, capped at 240
+     * chars so it fits alongside the mention text in the dashboard
+     * mention rail (#40) without pushing it around. Optional so
+     * pre-#37 fixtures and non-LLM scorers keep validating.
+     */
+    rationale: z.string().max(240).optional(),
   }),
   scoredAt: z.string(),
+  /**
+   * Provenance for the sentiment verdict (issue #37). Records which
+   * scorer produced the sentiment so we can recompute when the prompt,
+   * model, or provider changes. `version` is a monotonically-bumped tag
+   * owned by the scorer implementation (e.g. `ai-sentiment-scorer@1`).
+   * Optional so pre-#37 fixtures and future non-LLM scorers (FinBERT,
+   * etc.) that don't need provider/model can omit them.
+   */
+  scorer: z
+    .object({
+      provider: z.string().min(1),
+      model: z.string().min(1),
+      version: z.string().min(1),
+    })
+    .optional(),
 });
 export type ScoredMention = z.infer<typeof ScoredMention>;
 
