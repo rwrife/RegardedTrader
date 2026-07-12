@@ -52,3 +52,13 @@ export {
   type NasdaqEarningsSourceOptions,
   type NasdaqDayParseOptions,
 } from './sources/earnings-nasdaq.js';
+export {
+  fetchSecEarnings,
+  parseSecEarningsSubmissions,
+  parseTickerMap,
+  padCik,
+  SEC_TICKERS_URL,
+  SEC_SUBMISSIONS_BASE,
+  type SecEarningsSourceOptions,
+  type SecEarningsParseOptions,
+} from './sources/earnings-sec.js';
