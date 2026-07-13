@@ -1,5 +1,7 @@
 # RegardedTrader
 
+[![CI](https://github.com/rwrife/RegardedTrader/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rwrife/RegardedTrader/actions/workflows/ci.yml)
+
 A **local-only** AI-powered portal for company stock analysis and day-trading
 options research. Runs entirely on your machine. Choose your surface:
 
