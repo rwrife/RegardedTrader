@@ -119,6 +119,21 @@ export {
   type PollRedditResult,
 } from './jobs/reddit-mentions.js';
 export {
+  pollCnnMentions,
+  parseCnnMentions,
+  parseCnnRssItems,
+  extractCnnStockPageBlurb,
+  cnnMatchesSymbol,
+  cnnStockPageUrl,
+  cnnUrlHash,
+  CNN_DEFAULT_LOOKBACK_MS,
+  CNN_DEFAULT_RSS_FEEDS,
+  CNN_STOCK_PAGE_BASE_URL,
+  CNN_USER_AGENT,
+  type PollCnnOptions,
+  type PollCnnResult,
+} from './jobs/cnn-mentions.js';
+export {
   pollHnMentions,
   parseHnMentions,
   hnSearchUrl,
