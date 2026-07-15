@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { appendFile, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SnapshotStore, type SnapshotEntry } from './store.js';
@@ -219,5 +219,36 @@ describe('SnapshotStore', () => {
     const files = await readdir(join(root, 'NVDA'));
     expect(files).not.toContain('latest.json.tmp');
     expect(files).toContain('latest.json');
+  });
+
+  // --- chaos cases (issue #29) ---
+
+  it('tolerates a truncated / malformed final JSONL line (simulated killed-mid-write)', async () => {
+    // Simulates: process killed mid-write on the live JSONL. `readRange` must
+    // yield all well-formed entries and silently skip the corrupted tail
+    // rather than throw. Zero-corruption on next boot is a separate guarantee
+    // (see the atomic-latest.json test above); the reader’s job is to survive.
+    const store = new SnapshotStore({ root });
+    const e1: SnapshotEntry = { ts: '2026-05-10T12:00:00.000Z', data: { p: 1 } };
+    const e2: SnapshotEntry = { ts: '2026-05-10T12:00:05.000Z', data: { p: 2 } };
+    await store.appendSnapshot('NVDA', 'quote', e1);
+    await store.appendSnapshot('NVDA', 'quote', e2);
+
+    // Simulate a crash mid-line: partial JSON with a stray newline at the
+    // very end (the process died just after emitting an incomplete record but
+    // before flushing the closing brace — the OS still terminated the write
+    // with the trailing \n from a previous partial buffer).
+    const live = join(root, 'NVDA', 'quote.jsonl');
+    await appendFile(live, '{"ts":"2026-05-10T12:00:10.000Z","data":{"p":3\n', 'utf8');
+
+    const rows = await collect(store.readRange('NVDA', 'quote'));
+    expect(rows).toEqual([e1, e2]);
+
+    // A subsequent append after truncation still lands — the corrupted partial
+    // line stays skipped, and the new well-formed entry reads back cleanly.
+    const e3: SnapshotEntry = { ts: '2026-05-10T12:00:15.000Z', data: { p: 4 } };
+    await store.appendSnapshot('NVDA', 'quote', e3);
+    const rows2 = await collect(store.readRange('NVDA', 'quote'));
+    expect(rows2).toEqual([e1, e2, e3]);
   });
 });

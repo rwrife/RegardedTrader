@@ -311,6 +311,106 @@ describe('Scheduler', () => {
     sched.stop();
   });
 
+  // --- chaos cases (issue #29) ---
+
+  it('escalates backoff on repeated 429s, then recovers to normal cadence on 200', async () => {
+    // Simulates: source returns 429 → backoff escalates and recovers on 200.
+    let attempts = 0;
+    // Fail first 3 attempts with a 429-ish error (no Retry-After hint, so the
+    // BackoffPolicy's exponential schedule drives the delays), then succeed.
+    const sched = makeScheduler();
+    sched.register({
+      id: 'flappy',
+      cadence: () => 1_000,
+      backoff: new BackoffPolicy({ baseMs: 100, maxMs: 5_000, jitterRatio: 0 }),
+      run: () => {
+        attempts += 1;
+        if (attempts <= 3) {
+          throw Object.assign(new Error('429'), { status: 429 });
+        }
+        // 4th+ attempts succeed silently.
+      },
+    });
+    sched.start();
+
+    // First run at 1s cadence: fails → status becomes backing-off, next in 100ms.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(attempts).toBe(1);
+    expect(sched.statusOf('flappy')).toBe('backing-off');
+
+    // 2nd attempt (100ms): fails → next in 200ms.
+    await vi.advanceTimersByTimeAsync(100);
+    expect(attempts).toBe(2);
+    expect(sched.statusOf('flappy')).toBe('backing-off');
+
+    // 3rd attempt (200ms): fails → next in 400ms.
+    await vi.advanceTimersByTimeAsync(200);
+    expect(attempts).toBe(3);
+    expect(sched.statusOf('flappy')).toBe('backing-off');
+
+    // 4th attempt (400ms): succeeds → backoff resets, status back to idle,
+    // and the next tick is scheduled at the normal 1s cadence, not 800ms.
+    await vi.advanceTimersByTimeAsync(400);
+    expect(attempts).toBe(4);
+    expect(sched.statusOf('flappy')).toBe('idle');
+
+    // Confirm recovery: 800ms passes with no additional attempt (would have
+    // fired at 800ms if backoff had continued to escalate).
+    await vi.advanceTimersByTimeAsync(800);
+    expect(attempts).toBe(4);
+
+    // 5th attempt lands at the normal 1s cadence.
+    await vi.advanceTimersByTimeAsync(200);
+    expect(attempts).toBe(5);
+    expect(sched.statusOf('flappy')).toBe('idle');
+    sched.stop();
+  });
+
+  it('a job that always throws (malformed payload) does not disrupt sibling jobs', async () => {
+    // Simulates: source returns malformed payload → entry dropped, run marked
+    // errored, others unaffected. From the scheduler's perspective the payload
+    // handler throws (Zod parse throws), so we model the job as always-throwing.
+    const errors: { id: string; err: unknown }[] = [];
+    const sched = makeScheduler({
+      onError: (id, err) => errors.push({ id, err }),
+    });
+
+    let badAttempts = 0;
+    let goodRuns = 0;
+    sched.register({
+      id: 'bad',
+      cadence: () => 100,
+      // Small backoff so we get repeated attempts inside the test window.
+      backoff: new BackoffPolicy({ baseMs: 50, maxMs: 200, jitterRatio: 0 }),
+      run: () => {
+        badAttempts += 1;
+        throw new Error('malformed payload');
+      },
+    });
+    sched.register({
+      id: 'good',
+      cadence: () => 100,
+      run: () => {
+        goodRuns += 1;
+      },
+    });
+    sched.start();
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    // Bad job errored repeatedly but stays contained in backing-off.
+    expect(badAttempts).toBeGreaterThanOrEqual(2);
+    expect(errors.length).toBe(badAttempts);
+    expect(errors.every((e) => e.id === 'bad')).toBe(true);
+    expect(sched.statusOf('bad')).toBe('backing-off');
+
+    // Good job kept ticking on its own cadence, unaffected by the bad job.
+    expect(goodRuns).toBeGreaterThanOrEqual(9);
+    expect(sched.statusOf('good')).toBe('idle');
+
+    sched.stop();
+  });
+
   it('reapplyCadences reschedules idle jobs to the current cadence', async () => {
     let state: 'rth' | 'closed' = 'rth';
     let listener: (() => void) | null = null;
