@@ -11,6 +11,7 @@ import {
   type Quote,
   type TechnicianOutput,
 } from '../schemas/index.js';
+import { TechnicianPrompts } from '../prompts/index.js';
 
 /**
  * Input shape for the orchestrator-facing `analyze` call (issue #74).
@@ -26,13 +27,6 @@ export interface TechnicianInput {
   indicators: Indicators;
 }
 
-const SYSTEM = `You are a technical analyst. You read price/indicator data and
-produce a concise, plain-English chart read. You ONLY use the numbers the user
-provides — never invent price levels, news, or earnings dates. You never
-recommend specific trades. Output strict JSON matching the schema requested.`;
-
-
-
 /**
  * `Technician` — TA-driven chart/indicator commentary agent (issue #74).
  *
@@ -45,24 +39,14 @@ export class Technician {
   constructor(private readonly llm: LLM) {}
 
   async analyze(input: TechnicianInput): Promise<BriefingTechnicalT> {
-    const { symbol, quote, indicators } = input;
-    const user = `Produce a JSON object with keys:
-  trend (string, one short sentence: "uptrend" / "downtrend" / "rangebound" + brief reason),
-  momentum (string, one short sentence referencing RSI/MACD),
-  volatility (string, one short sentence referencing ATR if available),
-  keyLevels (number[], 2-4 round-number support/resistance levels near the current price),
-  commentary (string, 2-3 sentences combining the above into a plain-English chart read).
+    const { symbol, indicators } = input;
+    const user = TechnicianPrompts.buildUserPrompt(input);
 
-Rules:
-- Do not invent values. If an indicator is null, say so.
-- Do not recommend trades, only describe the chart.
-- Use ONLY the data below.
-
-Symbol: ${symbol}
-Quote: ${JSON.stringify(quote)}
-Indicators: ${JSON.stringify(indicators)}`;
-
-    const raw = await this.llm.complete({ system: SYSTEM, user, json: true });
+    const raw = await this.llm.complete({
+      system: TechnicianPrompts.SYSTEM_PROMPT,
+      user,
+      json: true,
+    });
     const parsed = safeParse(raw);
 
     const candidate: BriefingTechnicalT = {

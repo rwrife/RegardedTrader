@@ -4,13 +4,7 @@ import type { OptionContract, TradePlan, RiskGraphSeries } from '../schemas/inde
 import { StrategistOutputSchema } from '../schemas/index.js';
 import { AgentParseError } from './errors.js';
 import { riskGraph, type RiskGraphLeg } from '../options/index.js';
-
-const SYSTEM = `You are an options strategist. Given an underlying, a directional
-or volatility thesis, a max-loss budget, and a slice of the options chain, you
-propose 1-3 defined-risk structures (long call/put, vertical spread, calendar,
-iron condor). You output STRICT JSON with an array "plans" of TradePlan objects.
-You NEVER recommend naked short options. You ALWAYS include a "notes" field
-mentioning that this is educational, not advice.`;
+import { OptionsStrategistPrompts } from '../prompts/index.js';
 
 export interface StrategistInput {
   symbol: string;
@@ -23,15 +17,12 @@ export class OptionsStrategist {
   constructor(private readonly llm: LLM) {}
 
   async propose(input: StrategistInput): Promise<TradePlan[]> {
-    const user = `Underlying: ${input.symbol}
-Thesis: ${input.thesis}
-Max loss budget: $${input.maxLossUsd}
-
-Available contracts (truncated as needed):
-${JSON.stringify(input.chain.slice(0, 60), null, 2)}
-
-Return JSON: { "plans": TradePlan[] }`;
-    const raw = await this.llm.complete({ system: SYSTEM, user, json: true });
+    const user = OptionsStrategistPrompts.buildUserPrompt(input);
+    const raw = await this.llm.complete({
+      system: OptionsStrategistPrompts.SYSTEM_PROMPT,
+      user,
+      json: true,
+    });
     let jsonValue: unknown;
     try {
       jsonValue = JSON.parse(raw);

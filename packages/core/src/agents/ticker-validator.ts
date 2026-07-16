@@ -7,46 +7,7 @@ import {
   type TickerSuggestion,
   type ValidationResult,
 } from '../schemas/index.js';
-
-const SYSTEM = `You are a US-equities reference librarian. Given a candidate
-ticker symbol and a few web search snippets, you decide whether the symbol
-unambiguously refers to ONE publicly traded US equity (NYSE, NASDAQ, NYSE
-American, OTC). If yes, you extract a structured profile. If not, you say so
-and propose alternatives. You never invent facts that are not visible in the
-provided snippets. You only output JSON.`;
-
-const VALID_INSTRUCTION = `Reply with strict JSON in ONE of these two shapes.
-
-Shape A — confident match:
-{
-  "match": true,
-  "profile": {
-    "symbol": "<canonical uppercase ticker, 1-10 chars, A-Z . - only>",
-    "name": "<official company name>",
-    "exchange": "<NYSE | NASDAQ | NYSE American | OTC | ...>",
-    "sector": "<GICS-style sector, e.g. Technology>",
-    "industry": "<GICS-style industry, e.g. Semiconductors>",
-    "description": "<1-2 sentence plain-English company description>"
-  }
-}
-
-Shape B — ambiguous, wrong, or insufficient info:
-{
-  "match": false,
-  "reason": "<one short sentence explaining why>",
-  "suggestions": [
-    { "symbol": "<TICKER>", "name": "<company>", "reason": "<why it might be what the user meant>" }
-  ]
-}
-
-Rules:
-- Only output JSON. No prose, no markdown.
-- "symbol" must be uppercase, 1-10 chars, only letters / dot / hyphen.
-- If the snippets are about a private company, an ETF, a crypto coin, a person,
-  or a non-US listing, return Shape B.
-- If two different US equities plausibly match the input, return Shape B with
-  both as suggestions.
-- "description" must be derived from the snippets, not memorized.`;
+import { TickerValidatorPrompts } from '../prompts/index.js';
 
 /** Internal LLM-output schema (Zod-parsed, never `any`). */
 const LlmReply = z.discriminatedUnion('match', [
@@ -111,21 +72,15 @@ export class TickerValidator {
       };
     }
 
-    const userPrompt = [
-      `Candidate ticker: ${symbol}`,
-      '',
-      'Web search snippets:',
-      ...results.map(
-        (r, i) =>
-          `[${i + 1}] ${r.title}\n    ${r.snippet}\n    URL: ${r.url}`,
-      ),
-      '',
-      VALID_INSTRUCTION,
-    ].join('\n');
+    const userPrompt = TickerValidatorPrompts.buildUserPrompt({ symbol, results });
 
     let raw: string;
     try {
-      raw = await this.deps.llm.complete({ system: SYSTEM, user: userPrompt, json: true });
+      raw = await this.deps.llm.complete({
+        system: TickerValidatorPrompts.SYSTEM_PROMPT,
+        user: userPrompt,
+        json: true,
+      });
     } catch (e) {
       return {
         ok: false,
