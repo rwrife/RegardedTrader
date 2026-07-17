@@ -301,6 +301,66 @@ describe('POST /config/test', () => {
   });
 });
 
+describe('GET /version (#179)', () => {
+  function makeMinimalApp() {
+    return createApp({
+      market: {
+        quote: async () => ({ symbol: 'X', price: 0, change: 0, changePercent: 0, volume: 0, asOf: '' }),
+        history: async () => [],
+        news: async () => [],
+        optionsChain: async () => [],
+      },
+      webSearch: fakeWebSearch(),
+      watchlist: new WatchlistStore({ path: join(dir, 'watchlist.json') }),
+      initialConfig: {
+        version: 1,
+        providers: {},
+        activeProvider: null,
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
+        server: { host: '127.0.0.1', port: 4317 },
+        marketData: { providers: {}, activeProvider: null },
+      },
+      llmFromConfig: () => null,
+    });
+  }
+
+  it('returns a Zod-shaped payload sourced from package.json', async () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const pkgPath = resolve(here, '..', 'package.json');
+    const pkgRaw = await readFile(pkgPath, 'utf8');
+    const pkgVersion = (JSON.parse(pkgRaw) as { version: string }).version;
+
+    const { app } = makeMinimalApp();
+    baseUrl = await listen(app);
+    const r = await fetch(`${baseUrl}/version`);
+    expect(r.status).toBe(200);
+    const j = (await r.json()) as {
+      server: string;
+      core: string;
+      node: string;
+      api: number;
+      startedAt: string;
+    };
+    expect(j.server).toBe(pkgVersion);
+    expect(typeof j.core).toBe('string');
+    expect(j.core.length).toBeGreaterThan(0);
+    expect(j.node).toBe(process.versions.node);
+    expect(Number.isInteger(j.api)).toBe(true);
+    expect(j.api).toBeGreaterThanOrEqual(0);
+    // ISO-8601 timestamp
+    expect(() => new Date(j.startedAt).toISOString()).not.toThrow();
+    expect(new Date(j.startedAt).toISOString()).toBe(j.startedAt);
+  });
+
+  it('reports a stable startedAt across calls to the same app', async () => {
+    const { app } = makeMinimalApp();
+    baseUrl = await listen(app);
+    const a = (await (await fetch(`${baseUrl}/version`)).json()) as { startedAt: string };
+    const b = (await (await fetch(`${baseUrl}/version`)).json()) as { startedAt: string };
+    expect(a.startedAt).toBe(b.startedAt);
+  });
+});
+
 describe('GET /health (#180)', () => {
   function makeMinimalApp() {
     return createApp({

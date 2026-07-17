@@ -24,6 +24,7 @@ without filing a tracking issue should be rejected in review.
 | Options chain explorer        | `regard options <SYM>`     | `#/options/:sym`      | ✅     |
 | Watchlist                     | `regard watch [add\|ls\|rm]` | `/watchlist`        | ✅     |
 | Open the other surface        | `regard dashboard`         | "Open CLI help" link  | ✅ / 🚧 |
+| Server version chip           | `regard dashboard` connect line (`connected to server X (core Y, api Z)`) | TopBar `srv X · core Y` chip (fetches `GET /version`) | ✅     |
 
 Legend: ✅ implemented · 🚧 planned · ❌ explicitly out of scope.
 
