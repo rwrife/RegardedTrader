@@ -18,6 +18,9 @@ import {
   BriefingRequest,
   PlansResponse,
   ConfigTestResult,
+  CORE_VERSION,
+  ServerVersion,
+  SERVER_API_VERSION,
   buildLLM,
   type ConfigTestResult as ConfigTestResultT,
   MarketDataProviderConfig,
@@ -125,6 +128,10 @@ export function createApp(deps: AppDeps): AppHandle {
     return new TickerValidator({ webSearch: deps.webSearch, llm });
   }
 
+  // Process start timestamp for `GET /version` (issue #179). Captured once
+  // at app creation so consumers can spot silent restarts.
+  const startedAt = new Date().toISOString();
+
   const app = express();
   app.use(express.json({ limit: '1mb' }));
   // Defence-in-depth Origin guard (AGENTS.md rule #1, issue #128):
@@ -146,6 +153,23 @@ export function createApp(deps: AppDeps): AppHandle {
   app.use(
     cors({ origin: [/^http:\/\/127\.0\.0\.1:\d+$/, /^http:\/\/localhost:\d+$/, /^http:\/\/\[::1\]:\d+$/] }),
   );
+
+  // Dedicated version endpoint (issue #179). Deliberately separate from
+  // `/health` so monitors, the web TopBar chip, and the CLI `regard
+  // dashboard` connect-line can render a stable "srv X.Y.Z · core X.Y.Z"
+  // string without touching AI-config state. The payload is validated
+  // against the shared `ServerVersion` Zod schema so any drift between the
+  // server and the CLI/web consumers surfaces immediately.
+  app.get('/version', (_req, res) => {
+    const payload: import('@regardedtrader/core').ServerVersion = {
+      server: SERVER_VERSION,
+      core: CORE_VERSION,
+      node: process.versions.node,
+      api: SERVER_API_VERSION,
+      startedAt,
+    };
+    res.json(ServerVersion.parse(payload));
+  });
 
   app.get('/health', (_req, res) => {
     res.json({

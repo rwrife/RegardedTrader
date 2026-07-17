@@ -17,3 +17,5 @@ export * from './rating.js';
 export * from './options/index.js';
 export * from './schemas/calendar.js';
 export * from './calendar/index.js';
+export * from './schemas/serverVersion.js';
+export { CORE_VERSION } from './version.js';
