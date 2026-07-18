@@ -257,6 +257,9 @@ npm run lint             # tsc --noEmit + prettier --check
 - Adding a web view? Add a route under `web/src/routes/` and a matching server
   endpoint if needed. **Also** add (or open a tracking issue for) the matching
   `regard` subcommand and update `docs/surface-parity.md`.
+- Recommender tests: use `createTestRecommendationStore` from
+  `packages/core/src/recommender/__fixtures__/store.ts` for orchestrator/store
+  doubles. Do not use `as any` casts for store mocks.
 - Before finishing: `npm run lint && npm test && npm run build`.
 
 ## Milestones

@@ -35,8 +35,18 @@ import type { Rule } from './rules/index.js';
 import { applyRules } from './rules/index.js';
 import type { RecommendationContext } from './rules/index.js';
 import type { Recommender, RecommenderStamp } from './recommender.js';
-import type { RecommendationStore } from './store.js';
 import type { Recommendation } from '../schemas/recommendation.js';
+
+/**
+ * Narrow store port consumed by the orchestrator.
+ *
+ * The concrete `RecommendationStore` class implements this shape, but tests can
+ * inject lightweight typed doubles without `as any` casts.
+ */
+export interface RecommendationStorePort {
+  readLatest(symbol: string): Promise<Recommendation | null>;
+  append(symbol: string, recommendation: Recommendation): Promise<Recommendation>;
+}
 
 /**
  * `recommendation.update` event fired after every successful pipeline run,
@@ -57,7 +67,7 @@ export interface RecommendationUpdateEvent {
  */
 export interface RecommenderOrchestratorOptions {
   readonly recommender: Recommender;
-  readonly store: RecommendationStore;
+  readonly store: RecommendationStorePort;
   /** Build a {@link RecommendationContext} for the symbol. */
   buildContext(symbol: string): Promise<RecommendationContext>;
   /** Build the {@link RecommenderStamp} for the freshly-built context. */
