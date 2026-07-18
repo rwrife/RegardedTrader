@@ -62,7 +62,8 @@ describe('MentionStore', () => {
   });
 
   it('dedupes by (source, sourceId) within the retention window', async () => {
-    const store = new MentionStore({ root });
+    const now = () => new Date('2026-05-10T12:05:00.000Z');
+    const store = new MentionStore({ root, now });
     const first = await store.appendMention(mention());
     const dupe = await store.appendMention(mention({ text: 'different excerpt' }));
     expect(first).not.toBeNull();
@@ -81,10 +82,11 @@ describe('MentionStore', () => {
   });
 
   it('dedup cache hydrates from disk on a fresh instance', async () => {
-    const a = new MentionStore({ root });
+    const now = () => new Date('2026-05-10T12:05:00.000Z');
+    const a = new MentionStore({ root, now });
     await a.appendMention(mention());
 
-    const b = new MentionStore({ root });
+    const b = new MentionStore({ root, now });
     const dupe = await b.appendMention(mention());
     expect(dupe).toBeNull();
   });
