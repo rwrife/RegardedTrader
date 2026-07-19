@@ -9,6 +9,7 @@ import {
 } from '../schemas/recommendation.js';
 import type { Recommender, RecommenderStamp } from './recommender.js';
 import type { RecommendationContext, Rule } from './rules/index.js';
+import { createTestRecommendationStore } from './__fixtures__/store.js';
 
 function buildCtx(symbol = 'NVDA'): RecommendationContext {
   return {
@@ -73,31 +74,6 @@ function makeRecommender(rec: Recommendation | (() => Recommendation)): {
   };
 }
 
-function makeStore(initial: Recommendation | null = null): {
-  store: { readLatest: (s: string) => Promise<Recommendation | null>; append: (s: string, r: Recommendation) => Promise<Recommendation> };
-  appends: Recommendation[];
-  setLatest: (r: Recommendation | null) => void;
-} {
-  let latest = initial;
-  const appends: Recommendation[] = [];
-  return {
-    appends,
-    setLatest(r) {
-      latest = r;
-    },
-    store: {
-      async readLatest() {
-        return latest;
-      },
-      async append(_s, r) {
-        appends.push(r);
-        latest = r;
-        return r;
-      },
-    },
-  };
-}
-
 const STAMP: RecommenderStamp = {
   generatedAt: '2026-06-10T15:00:00.000Z',
   asOf: {
@@ -115,7 +91,7 @@ describe('RecommenderOrchestrator', () => {
     const ctx = buildCtx();
     const rec = buildRec();
     const { rec: recommender } = makeRecommender(rec);
-    const { store, appends } = makeStore(null);
+    const { store, appends } = createTestRecommendationStore(null);
     const events: RecommendationUpdateEvent[] = [];
 
     const ruleSeen: RecommendationContext[] = [];
@@ -130,8 +106,7 @@ describe('RecommenderOrchestrator', () => {
 
     const orch = new RecommenderOrchestrator({
       recommender,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      store: store as any,
+      store,
       buildContext: async () => ctx,
       stampFor: () => STAMP,
       rules: [tagRule],
@@ -157,11 +132,10 @@ describe('RecommenderOrchestrator', () => {
 
   it('first run with empty store always persists', async () => {
     const { rec } = makeRecommender(buildRec());
-    const { store, appends } = makeStore(null);
+    const { store, appends } = createTestRecommendationStore(null);
     const orch = new RecommenderOrchestrator({
       recommender: rec,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      store: store as any,
+      store,
       buildContext: async () => buildCtx(),
       stampFor: () => STAMP,
     });
@@ -192,13 +166,12 @@ describe('RecommenderOrchestrator', () => {
       },
     });
     const { rec } = makeRecommender(next);
-    const { store, appends } = makeStore(prev);
+    const { store, appends } = createTestRecommendationStore(prev);
     const events: RecommendationUpdateEvent[] = [];
 
     const orch = new RecommenderOrchestrator({
       recommender: rec,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      store: store as any,
+      store,
       buildContext: async () => buildCtx(),
       stampFor: () => STAMP,
       now: () => new Date('2026-06-10T15:10:00.000Z'),
@@ -234,11 +207,10 @@ describe('RecommenderOrchestrator', () => {
       },
     });
     const { rec } = makeRecommender(next);
-    const { store, appends } = makeStore(prev);
+    const { store, appends } = createTestRecommendationStore(prev);
     const orch = new RecommenderOrchestrator({
       recommender: rec,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      store: store as any,
+      store,
       buildContext: async () => buildCtx(),
       stampFor: () => STAMP,
       now: () => new Date('2026-06-10T15:10:00.000Z'),
@@ -270,11 +242,10 @@ describe('RecommenderOrchestrator', () => {
       },
     });
     const { rec } = makeRecommender(next);
-    const { store, appends } = makeStore(prev);
+    const { store, appends } = createTestRecommendationStore(prev);
     const orch = new RecommenderOrchestrator({
       recommender: rec,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      store: store as any,
+      store,
       buildContext: async () => buildCtx(),
       stampFor: () => STAMP,
       now: () => new Date('2026-06-10T15:10:00.000Z'),
@@ -307,11 +278,10 @@ describe('RecommenderOrchestrator', () => {
       },
     });
     const { rec } = makeRecommender(next);
-    const { store, appends } = makeStore(prev);
+    const { store, appends } = createTestRecommendationStore(prev);
     const orch = new RecommenderOrchestrator({
       recommender: rec,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      store: store as any,
+      store,
       buildContext: async () => buildCtx(),
       stampFor: () => STAMP,
       now: () => new Date('2026-06-10T15:00:00.000Z'),
@@ -339,11 +309,10 @@ describe('RecommenderOrchestrator', () => {
       },
     });
     const { rec } = makeRecommender(next);
-    const { store, appends } = makeStore(prev);
+    const { store, appends } = createTestRecommendationStore(prev);
     const orch = new RecommenderOrchestrator({
       recommender: rec,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      store: store as any,
+      store,
       buildContext: async () => buildCtx(),
       stampFor: () => STAMP,
       now: () => new Date('2026-06-10T15:10:00.000Z'),
@@ -362,11 +331,10 @@ describe('RecommenderOrchestrator', () => {
     const recommender: Recommender = {
       recommend: vi.fn(() => firstPromise),
     };
-    const { store, appends } = makeStore(null);
+    const { store, appends } = createTestRecommendationStore(null);
     const orch = new RecommenderOrchestrator({
       recommender,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      store: store as any,
+      store,
       buildContext: async () => buildCtx(),
       stampFor: () => STAMP,
     });
@@ -400,11 +368,10 @@ describe('RecommenderOrchestrator', () => {
         throw new Error('LLM down');
       }),
     };
-    const { store } = makeStore(null);
+    const { store } = createTestRecommendationStore(null);
     const orch = new RecommenderOrchestrator({
       recommender,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      store: store as any,
+      store,
       buildContext: async () => buildCtx(),
       stampFor: () => STAMP,
     });

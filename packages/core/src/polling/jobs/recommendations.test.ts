@@ -15,6 +15,7 @@ import {
 } from '../../schemas/recommendation.js';
 import type { Recommender } from '../../recommender/recommender.js';
 import type { RecommendationContext } from '../../recommender/rules/index.js';
+import { createTestRecommendationStore } from '../../recommender/__fixtures__/store.js';
 
 function constantClock(state: 'rth' | 'pre' | 'post' | 'closed' | 'holiday' = 'rth'): MarketClock {
   return {
@@ -67,19 +68,10 @@ function makeOrchestratorOpts(
   recommender: Recommender,
   initial: Recommendation | null = null,
 ): RecommenderOrchestratorOptions {
-  let latest = initial;
+  const { store } = createTestRecommendationStore(initial);
   return {
     recommender,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    store: {
-      async readLatest() {
-        return latest;
-      },
-      async append(_s: string, r: Recommendation) {
-        latest = r;
-        return r;
-      },
-    } as any,
+    store,
     buildContext: async () => buildCtx(),
     stampFor: () => ({
       generatedAt: new Date().toISOString(),

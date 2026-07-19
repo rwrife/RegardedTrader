@@ -8,6 +8,7 @@ export {
 } from './recommender.js';
 export {
   RecommenderOrchestrator,
+  type RecommendationStorePort,
   type RecommendationUpdateEvent,
   type RecommenderOrchestratorOptions,
   type RunOnceResult,
