@@ -23,7 +23,7 @@
     "cli": "npm --workspace @regardedtrader/cli run start --",
     "build": "npm --workspaces --if-present run build",
     "test": "npm --workspaces --if-present run test",
-    "lint": "npm --workspaces --if-present run lint"
+    "lint": "npm --workspaces --if-present run lint && node ./scripts/check-disclaimer.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.0.1",

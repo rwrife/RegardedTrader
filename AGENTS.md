@@ -85,7 +85,7 @@ These are non-negotiable. Violating them is a bug, not a tradeoff.
 3. **No secrets in the repo.** Real keys belong in `.env` (gitignored). Use
    `.env.example` for the schema. The server is the only consumer.
 4. **Not financial advice.** Every user-facing surface that emits an LLM opinion
-   must include a "not financial advice / educational" disclaimer.
+   must include the canonical disclaimer (see [`docs/disclaimer.md`](./docs/disclaimer.md)).
 5. **Deterministic core.** `core` functions should be pure where possible and unit
    testable without network. Network calls live behind injected clients.
 6. **Single source of truth.** Any analyzer, prompt, or schema used by both CLI

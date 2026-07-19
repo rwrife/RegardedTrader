@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { Ticker } from './index.js';
+import { DISCLAIMER } from '../constants.js';
 
 /**
  * Canonical research disclaimer baked into every Recommendation. Surfaces
@@ -8,7 +9,7 @@ import { Ticker } from './index.js';
  * pull in any agent code.
  */
 export const RECOMMENDATION_DISCLAIMER =
-  'Research only. Not financial advice. You are responsible for your own trades.';
+  DISCLAIMER;
 
 /** Strategy buckets a single `Recommendation` covers per symbol. */
 export const RecommendationKind = z.enum([
