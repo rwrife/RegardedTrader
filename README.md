@@ -12,7 +12,7 @@ options research. Runs entirely on your machine. Choose your surface:
 peers, not a primary + companion. See [`docs/surface-parity.md`](./docs/surface-parity.md).
 
 > ⚠️ **Not financial advice.** Educational/research tool. No live order
-> placement. You are responsible for your own trades.
+> placement. You are responsible for your own trades. See [`docs/disclaimer.md`](./docs/disclaimer.md).
 
 ## Quick start
 

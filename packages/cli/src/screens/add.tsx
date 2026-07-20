@@ -3,9 +3,8 @@ import { Box, Text, useApp } from 'ink';
 import Spinner from 'ink-spinner';
 import type { ValidationResult, TickerProfile } from '@regardedtrader/core';
 import { api } from '../api.js';
+import { aiDisclaimerLine } from '../aiDisclaimer.js';
 import { ReturnPrompt } from './menu.js';
-
-const DISCLAIMER = 'Not financial advice. Educational/research output.';
 
 interface State {
   loading: boolean;
@@ -64,7 +63,7 @@ export function AddScreen({
         <ResultBlock key={i} r={r} />
       ))}
       <Text dimColor italic>
-        {DISCLAIMER}
+        {aiDisclaimerLine()}
       </Text>
       {onDone && <ReturnPrompt onDone={onDone} />}
     </Box>
