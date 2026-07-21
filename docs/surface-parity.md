@@ -8,23 +8,27 @@ This file is the source of truth for that mapping. **Update it in the same PR
 that adds or changes a feature on either surface.** A PR that breaks parity
 without filing a tracking issue should be rejected in review.
 
+_Last reviewed: 2026-07-20_
+
 ## Pairing table
 
-| Capability                    | CLI (`regard ...`)         | Web route             | Status |
-| ----------------------------- | -------------------------- | --------------------- | ------ |
-| **Configuration / AI providers**  | `regard config` / `regard config show` | `/settings`           | ✅     |
-| Risk caps editor              | `regard config` (risk fields)             | `/settings` → Risk caps | ✅     |
-| Provider smoke test           | `regard config test [id]`  | `/settings` “Test” button | ✅     |
+| Capability | CLI (`regard ...`) | Web route | Status |
+| --- | --- | --- | --- |
+| **Configuration / AI providers** | `regard config` / `regard config show` | `/settings` | ✅ |
+| Risk caps editor | `regard config show` (read-only risk caps display) | `/settings` → Risk caps panel + save flow | 🚧 |
+| Provider smoke test | `regard config test [id]` | `/settings` “Test” button | ✅ |
 | **Ticker intake & validation** (M1) | `regard add <SYM>...` / `regard ls` / `regard rm <SYM>` | ticker input bar + validated list on `/` | ✅ |
-| Quick quote                   | `regard quote <SYM>`       | `/quote/:sym`         | ✅     |
-| Full AI briefing              | `regard briefing <SYM>`    | `/` (home)            | ✅     |
-| Full briefing pipeline (analyst + TA + news + strategist) | `regard brief <SYM> [--thesis ... --max-loss N]` | `#/brief/:symbol` | ✅     |
-| Technician (TA) commentary    | `regard tech <SYM>`        | `Tech` tab on `/` | ✅     |
-| Options trade-plan wizard     | `regard plan <SYM>`        | `#/plan/:sym`         | ✅     |
-| Options chain explorer        | `regard options <SYM>`     | `#/options/:sym`      | ✅     |
-| Watchlist                     | `regard watch [add\|ls\|rm]` | `/watchlist`        | ✅     |
-| Open the other surface        | `regard dashboard`         | "Open CLI help" link  | ✅ / 🚧 |
-| Server version chip           | `regard dashboard` connect line (`connected to server X (core Y, api Z)`) | TopBar `srv X · core Y` chip (fetches `GET /version`) | ✅     |
+| Quick quote | `regard quote <SYM>` | `/quote/:sym` | ✅ |
+| Full AI briefing | `regard briefing <SYM>` | `/` (home) | ✅ |
+| Full briefing pipeline (analyst + TA + news + strategist + POST overrides) | `regard brief <SYM> [--thesis ... --max-loss N --expiry YYYY-MM-DD]` | `#/brief/:symbol` | ✅ |
+| Technician (TA) commentary | `regard tech <SYM>` | `Tech` tab on `/` | ✅ |
+| Options trade-plan wizard | `regard plan <SYM>` | `#/plan/:sym` | ✅ |
+| Trade-plan risk graph + risk violations panel | `regard plan <SYM>` (textual break-even + violations) | `#/plan/:sym` (SVG risk graph + violations chip panel) | ✅ |
+| Options chain explorer | `regard options <SYM>` | `#/options/:sym` | ✅ |
+| Watchlist | `regard watch [add\|ls\|rm]` | `/watchlist` | ✅ |
+| Market calendar (holidays + earnings) | `regard cal` / `regard cal earnings` / `regard cal refresh` (planned in #64) | calendar strip + calendar tab (partial; top-bar pill/per-ticker badge tracked in #63) | 🚧 |
+| Open the other surface | `regard dashboard` | "Open CLI help" link | ✅ / 🚧 |
+| Server version chip | `regard dashboard` connect line (`connected to server X (core Y, api Z)`) | TopBar `srv X · core Y` chip (fetches `GET /version`) | ✅ |
 
 Legend: ✅ implemented · 🚧 planned · ❌ explicitly out of scope.
 
