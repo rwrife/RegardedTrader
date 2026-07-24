@@ -1,8 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { Orchestrator } from './orchestrator.js';
 import type { LLM, TechnicianAgent, NewsScoutAgent } from './agents/index.js';
 import type { MarketDataClient } from './clients/index.js';
-import type { OptionContract, TradePlan } from './schemas/index.js';
+import { Briefing, type OptionContract, type TradePlan } from './schemas/index.js';
 import { DISCLAIMER } from './constants.js';
 
 /**
@@ -198,6 +198,81 @@ describe('Orchestrator.briefing (#126)', () => {
     expect(Array.isArray(b.sourcesUsed)).toBe(true);
   });
 
+  it('does not invoke strategist when thesis/budget are omitted', async () => {
+    const complete = vi.fn(async () => analystReply);
+    const optionsChain = vi.fn(fakeMarket().optionsChain);
+    const market: MarketDataClient = { ...fakeMarket(), optionsChain };
+    const llm: LLM = { complete };
+
+    const o = new Orchestrator(market, llm);
+    const b = await o.briefing('NVDA');
+
+    expect(b.strategist).toBeUndefined();
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(optionsChain).not.toHaveBeenCalled();
+  });
+
+  it('continues without technical output when Technician throws, and logs once', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const technician: TechnicianAgent = {
+        async analyze() {
+          throw new Error('indicator service unavailable');
+        },
+      };
+      const o = new Orchestrator(fakeMarket(), analystLLM(), undefined, { technician });
+      const b = await o.briefing('NVDA');
+
+      expect(b.ta).toBeUndefined();
+      expect(b.bullCase).toBe('bull');
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0] ?? '')).toContain('Technician failed');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('continues without newsScout output when NewsScout rejects, and logs once', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const scout: NewsScoutAgent = {
+        async scout() {
+          throw new Error('news ranking timeout');
+        },
+      };
+      const o = new Orchestrator(fakeMarket(), analystLLM(), undefined, { newsScout: scout });
+      const b = await o.briefing('NVDA');
+
+      expect(b.newsScout).toBeUndefined();
+      expect(b.bearCase).toBe('bear');
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0] ?? '')).toContain('NewsScout failed');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('continues when market.news fails, falling back to analyst-only news=[] and logging once', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const market: MarketDataClient = {
+        ...fakeMarket(),
+        news: async () => {
+          throw new Error('feed outage');
+        },
+      };
+      const o = new Orchestrator(market, analystLLM());
+      const b = await o.briefing('NVDA');
+
+      expect(b.news).toEqual([]);
+      expect(b.bullCase).toBe('bull');
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0] ?? '')).toContain('market.news failed');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('skips missing optional agents without breaking the briefing', async () => {
     // Only Technician registered; NewsScout absent.
     const technician: TechnicianAgent = {
@@ -312,5 +387,16 @@ describe('Orchestrator.briefing (#126)', () => {
     expect(b.bullCase).toBe('bull');
     expect(b.strategist?.candidates).toEqual([]);
     expect(b.strategist?.parseError).toMatch(/OptionsStrategist/);
+  });
+
+  it('Briefing schema rejects unknown top-level keys', async () => {
+    const o = new Orchestrator(fakeMarket(), analystLLM());
+    const b = await o.briefing('NVDA');
+
+    const parsed = Briefing.safeParse({
+      ...b,
+      unexpected: 'nope',
+    });
+    expect(parsed.success).toBe(false);
   });
 });
