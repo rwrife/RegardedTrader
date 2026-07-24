@@ -675,3 +675,287 @@ describe('POST /config/risk', () => {
     expect(r.status).toBe(400);
   });
 });
+
+describe('Config routes coverage (#105)', () => {
+  let prevHome: string | undefined;
+  beforeEach(() => {
+    prevHome = process.env.REGARDEDTRADER_HOME;
+    process.env.REGARDEDTRADER_HOME = dir;
+  });
+  afterEach(() => {
+    if (prevHome === undefined) delete process.env.REGARDEDTRADER_HOME;
+    else process.env.REGARDEDTRADER_HOME = prevHome;
+  });
+
+  async function makeConfigApp(opts?: {
+    providers?: Record<string, import('@regardedtrader/core').AiProvider>;
+    activeProvider?: string | null;
+    marketProviders?: Record<string, import('@regardedtrader/core').MarketDataProviderConfig>;
+    activeMarketProvider?: string | null;
+  }): Promise<{ baseUrl: string }> {
+    const watchlist = new WatchlistStore({ path: join(dir, 'watchlist.json') });
+    const { app } = createApp({
+      market: {
+        quote: async (symbol) => ({ symbol, price: 0, change: 0, changePercent: 0, volume: 0, asOf: new Date().toISOString() }),
+        history: async () => [],
+        news: async () => [],
+        optionsChain: async () => [],
+      },
+      webSearch: fakeWebSearch(),
+      watchlist,
+      initialConfig: {
+        version: 1,
+        providers: opts?.providers ?? {},
+        activeProvider: opts?.activeProvider ?? null,
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
+        server: { host: '127.0.0.1', port: 4317 },
+        marketData: {
+          providers: opts?.marketProviders ?? {},
+          activeProvider: opts?.activeMarketProvider ?? null,
+        },
+      },
+      llmFromConfig: () => fakeLLM(goodReply),
+      buildLLMForProvider: (provider) => ({
+        async complete() {
+          if (provider.kind === 'openai-compatible') return provider.model;
+          return provider.model ?? 'cli-model';
+        },
+      }),
+    });
+    return { baseUrl: await listen(app) };
+  }
+
+  it('GET /config masks provider keys (AI + market data) and never returns plaintext keys', async () => {
+    const aiKey = 'sk-test-1234567890';
+    const mdKey = 'fh-test-abcdefghij';
+    const { baseUrl } = await makeConfigApp({
+      providers: {
+        openai: {
+          kind: 'openai-compatible',
+          label: 'OpenAI',
+          baseUrl: 'https://api.openai.com/v1',
+          apiKey: aiKey,
+          model: 'gpt-5-mini',
+        },
+      },
+      activeProvider: 'openai',
+      marketProviders: {
+        finnhub: {
+          kind: 'finnhub',
+          label: 'Finnhub',
+          apiKey: mdKey,
+          baseUrl: 'https://finnhub.io/api/v1',
+        },
+      },
+      activeMarketProvider: 'finnhub',
+    });
+
+    const r = await fetch(`${baseUrl}/config`);
+    expect(r.status).toBe(200);
+    const j = (await r.json()) as {
+      providers: Record<string, { apiKey?: string }>;
+      marketData: { providers: Record<string, { apiKey?: string }> };
+    };
+
+    expect(j.providers.openai?.apiKey).toBeDefined();
+    expect(j.providers.openai?.apiKey).not.toBe(aiKey);
+    expect(j.providers.openai?.apiKey).toContain('••••');
+    expect(j.marketData.providers.finnhub?.apiKey).toBeDefined();
+    expect(j.marketData.providers.finnhub?.apiKey).not.toBe(mdKey);
+    expect(j.marketData.providers.finnhub?.apiKey).toContain('••••');
+
+    const raw = JSON.stringify(j);
+    expect(raw).not.toContain(aiKey);
+    expect(raw).not.toContain(mdKey);
+  });
+
+  it('POST /config/providers supports happy path and rejects invalid payloads', async () => {
+    const { baseUrl } = await makeConfigApp();
+
+    const ok = await fetch(`${baseUrl}/config/providers`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        id: 'openai',
+        provider: {
+          kind: 'openai-compatible',
+          label: 'OpenAI',
+          baseUrl: 'https://api.openai.com/v1',
+          apiKey: 'sk-in-test-1234',
+          model: 'gpt-5-mini',
+        },
+      }),
+    });
+    expect(ok.status).toBe(200);
+    const okJson = (await ok.json()) as {
+      ok: boolean;
+      config: { providers: Record<string, { apiKey?: string }>; activeProvider: string | null };
+    };
+    expect(okJson.ok).toBe(true);
+    expect(okJson.config.activeProvider).toBe('openai');
+    expect(okJson.config.providers.openai?.apiKey).toContain('••••');
+
+    const bad = await fetch(`${baseUrl}/config/providers`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'broken', provider: { kind: 'openai-compatible' } }),
+    });
+    expect(bad.status).toBe(400);
+  });
+
+  it('DELETE /config/providers returns 200 for existing and 404 for missing ids', async () => {
+    const { baseUrl } = await makeConfigApp({
+      providers: {
+        openai: {
+          kind: 'openai-compatible',
+          label: 'OpenAI',
+          baseUrl: 'https://api.openai.com/v1',
+          apiKey: 'sk-in-test-1234',
+          model: 'gpt-5-mini',
+        },
+      },
+      activeProvider: 'openai',
+    });
+
+    const delExisting = await fetch(`${baseUrl}/config/providers/openai`, { method: 'DELETE' });
+    expect(delExisting.status).toBe(200);
+    const j1 = (await delExisting.json()) as { config: { activeProvider: string | null; providers: Record<string, unknown> } };
+    expect(j1.config.activeProvider).toBeNull();
+    expect(Object.keys(j1.config.providers)).toEqual([]);
+
+    const delMissing = await fetch(`${baseUrl}/config/providers/does-not-exist`, { method: 'DELETE' });
+    expect(delMissing.status).toBe(404);
+  });
+
+  it('POST /config/activate hot-swaps the active provider without restart', async () => {
+    const { baseUrl } = await makeConfigApp({
+      providers: {
+        p1: {
+          kind: 'openai-compatible',
+          label: 'Provider 1',
+          baseUrl: 'https://api.openai.com/v1',
+          apiKey: 'sk-provider-1-1234',
+          model: 'model-one',
+        },
+        p2: {
+          kind: 'openai-compatible',
+          label: 'Provider 2',
+          baseUrl: 'https://api.openai.com/v1',
+          apiKey: 'sk-provider-2-5678',
+          model: 'model-two',
+        },
+      },
+      activeProvider: 'p1',
+    });
+
+    const before = await fetch(`${baseUrl}/config/test`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const beforeJson = (await before.json()) as { ok: boolean; providerId?: string; model?: string };
+    expect(beforeJson.ok).toBe(true);
+    expect(beforeJson.providerId).toBe('p1');
+    expect(beforeJson.model).toBe('model-one');
+
+    const activate = await fetch(`${baseUrl}/config/activate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'p2' }),
+    });
+    expect(activate.status).toBe(200);
+
+    const after = await fetch(`${baseUrl}/config/test`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const afterJson = (await after.json()) as { ok: boolean; providerId?: string; model?: string };
+    expect(afterJson.ok).toBe(true);
+    expect(afterJson.providerId).toBe('p2');
+    expect(afterJson.model).toBe('model-two');
+  });
+
+  it('supports mirrored /config/market-data provider add/activate/delete flows', async () => {
+    const { baseUrl } = await makeConfigApp();
+
+    const addYahoo = await fetch(`${baseUrl}/config/market-data/providers`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        id: 'yahoo',
+        provider: { kind: 'yahoo', label: 'Yahoo Finance' },
+      }),
+    });
+    expect(addYahoo.status).toBe(200);
+
+    const addFinnhub = await fetch(`${baseUrl}/config/market-data/providers`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        id: 'finnhub',
+        provider: {
+          kind: 'finnhub',
+          label: 'Finnhub',
+          apiKey: 'fh-in-test-123456',
+          baseUrl: 'https://finnhub.io/api/v1',
+        },
+      }),
+    });
+    expect(addFinnhub.status).toBe(200);
+
+    const badAdd = await fetch(`${baseUrl}/config/market-data/providers`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'broken', provider: { label: 'missing-kind' } }),
+    });
+    expect(badAdd.status).toBe(400);
+
+    const activate = await fetch(`${baseUrl}/config/market-data/activate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'finnhub' }),
+    });
+    expect(activate.status).toBe(200);
+    const activateJson = (await activate.json()) as { activeMarketProvider: string | null };
+    expect(activateJson.activeMarketProvider).toBe('finnhub');
+
+    const activateMissing = await fetch(`${baseUrl}/config/market-data/activate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'does-not-exist' }),
+    });
+    expect(activateMissing.status).toBe(404);
+
+    const delExisting = await fetch(`${baseUrl}/config/market-data/providers/finnhub`, { method: 'DELETE' });
+    expect(delExisting.status).toBe(200);
+
+    const delMissing = await fetch(`${baseUrl}/config/market-data/providers/does-not-exist`, { method: 'DELETE' });
+    expect(delMissing.status).toBe(404);
+  });
+
+  it('PUT /config rejects non-loopback server.host values', async () => {
+    const { baseUrl } = await makeConfigApp();
+
+    const badHost = await fetch(`${baseUrl}/config`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        version: 1,
+        providers: {},
+        activeProvider: null,
+        risk: {
+          maxLossUsd: 500,
+          maxLegs: 4,
+          forbidNakedShorts: true,
+          maxDte: 45,
+          accountSizeUsd: 0,
+          maxPctOfAccount: 0.02,
+        },
+        server: { host: '0.0.0.0', port: 4317 },
+        marketData: { providers: {}, activeProvider: null },
+      }),
+    });
+    expect(badHost.status).toBe(400);
+  });
+});

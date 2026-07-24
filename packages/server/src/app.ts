@@ -509,6 +509,10 @@ export function createApp(deps: AppDeps): AppHandle {
   app.delete('/config/market-data/providers/:id', async (req, res, next) => {
     try {
       const id = req.params.id;
+      if (!cfg.marketData.providers[id]) {
+        res.status(404).json({ error: `market-data provider "${id}" not found` });
+        return;
+      }
       delete cfg.marketData.providers[id];
       if (cfg.marketData.activeProvider === id) cfg.marketData.activeProvider = null;
       await saveConfig(cfg);
@@ -586,6 +590,10 @@ export function createApp(deps: AppDeps): AppHandle {
   app.delete('/config/providers/:id', async (req, res, next) => {
     try {
       const id = req.params.id;
+      if (!cfg.providers[id]) {
+        res.status(404).json({ error: `provider "${id}" not found` });
+        return;
+      }
       delete cfg.providers[id];
       if (cfg.activeProvider === id) cfg.activeProvider = null;
       await saveConfig(cfg);
