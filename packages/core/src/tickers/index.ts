@@ -36,3 +36,16 @@ export type {
   YahooQuoteSummaryParseOptions,
   YahooSourceLogger,
 } from './sources/yahoo.js';
+export {
+  createNasdaqTraderTickerSource,
+  parseNasdaqListedText,
+  parseOtherListedText,
+  NASDAQ_TRADER_BASE_URL,
+  NASDAQ_LISTED_URL,
+  OTHER_LISTED_URL,
+} from './sources/nasdaq-trader.js';
+export type {
+  NasdaqTraderTickerSourceOptions,
+  NasdaqTickerRow,
+  NasdaqTraderSourceLogger,
+} from './sources/nasdaq-trader.js';
