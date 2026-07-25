@@ -70,7 +70,10 @@ export class Orchestrator {
     const [quote, history, news] = await Promise.all([
       this.market.quote(symbol),
       this.market.history(symbol, 180),
-      this.market.news(symbol),
+      this.market.news(symbol).catch((err) => {
+        this.logRecoverableBriefingFailure('market.news', symbol, err);
+        return [];
+      }),
     ]);
     const indicators = computeIndicators(history);
 
@@ -78,10 +81,18 @@ export class Orchestrator {
     // The strategist runs only when a thesis + budget are supplied; the
     // `RiskOfficer` reviews its candidates after they come back.
     const technicalPromise = this.technician
-      ? this.technician.analyze({ symbol, quote, indicators })
+      ? this.technician
+          .analyze({ symbol, quote, indicators })
+          .catch((err) => {
+            this.logRecoverableBriefingFailure('Technician', symbol, err);
+            return undefined;
+          })
       : Promise.resolve(undefined);
     const newsPromise = this.newsScout
-      ? this.newsScout.scout({ symbol, news })
+      ? this.newsScout.scout({ symbol, news }).catch((err) => {
+          this.logRecoverableBriefingFailure('NewsScout', symbol, err);
+          return undefined;
+        })
       : Promise.resolve(undefined);
 
     const strategistPromise = this.runStrategistSection(symbol, opts);
@@ -132,6 +143,17 @@ export class Orchestrator {
     return noCompliantPlans
       ? { plans: reviewed, noCompliantPlans: true }
       : { plans: reviewed };
+  }
+
+  private logRecoverableBriefingFailure(
+    section: 'market.news' | 'Technician' | 'NewsScout',
+    symbol: string,
+    err: unknown,
+  ): void {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[Orchestrator.briefing] ${section} failed for ${symbol.toUpperCase()}: ${msg}`,
+    );
   }
 
   private async runStrategistSection(

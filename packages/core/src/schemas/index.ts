@@ -339,54 +339,56 @@ export const BriefingStrategist = z.object({
 });
 export type BriefingStrategist = z.infer<typeof BriefingStrategist>;
 
-export const Briefing = z.object({
-  symbol: Ticker,
-  asOf: z.string(),
-  quote: Quote,
-  indicators: Indicators,
-  bullCase: z.string(),
-  bearCase: z.string(),
-  catalysts: z.array(z.string()),
-  risks: z.array(z.string()),
-  news: z.array(NewsItem),
-  /**
-   * Required non-empty 'not financial advice' disclaimer (issue #77).
-   * Enforced at the schema boundary — a Briefing with a missing/empty
-   * disclaimer fails Zod validation and the server refuses to emit it.
-   */
-  disclaimer: z.string().min(1, 'disclaimer must be non-empty'),
-  /**
-   * Optional Technician section. Populated when an Orchestrator was
-   * constructed with a `technician` agent (issue #126). Absent otherwise so
-   * existing CLI/web consumers keep working unchanged.
-   */
-  ta: BriefingTechnical.optional(),
-  /**
-   * Optional NewsScout section. Populated when an Orchestrator was
-   * constructed with a `newsScout` agent.
-   */
-  newsScout: BriefingNews.optional(),
-  /**
-   * Optional strategist section. Populated only when the briefing call
-   * includes a `thesis` + `maxLossUsd` budget so the strategist can produce
-   * candidate structures.
-   */
-  strategist: BriefingStrategist.optional(),
-  /**
-   * Aggregated `RiskOfficer` verdict for the briefing as a whole. When a
-   * strategist section is present and *any* candidate fails review, `ok` is
-   * false and `violations` summarises why. When there is no strategist
-   * section (briefing-only call) this is omitted.
-   */
-  riskVerdict: RiskReview.optional(),
-  /**
-   * Flat list of source labels used to assemble this briefing (market data,
-   * indicator inputs, agent sources). Mirrors the AGENTS.md "sources used"
-   * requirement. Empty by default so existing fixtures don't have to be
-   * regenerated.
-   */
-  sourcesUsed: z.array(z.string()).default([]),
-});
+export const Briefing = z
+  .object({
+    symbol: Ticker,
+    asOf: z.string(),
+    quote: Quote,
+    indicators: Indicators,
+    bullCase: z.string(),
+    bearCase: z.string(),
+    catalysts: z.array(z.string()),
+    risks: z.array(z.string()),
+    news: z.array(NewsItem),
+    /**
+     * Required non-empty 'not financial advice' disclaimer (issue #77).
+     * Enforced at the schema boundary — a Briefing with a missing/empty
+     * disclaimer fails Zod validation and the server refuses to emit it.
+     */
+    disclaimer: z.string().min(1, 'disclaimer must be non-empty'),
+    /**
+     * Optional Technician section. Populated when an Orchestrator was
+     * constructed with a `technician` agent (issue #126). Absent otherwise so
+     * existing CLI/web consumers keep working unchanged.
+     */
+    ta: BriefingTechnical.optional(),
+    /**
+     * Optional NewsScout section. Populated when an Orchestrator was
+     * constructed with a `newsScout` agent.
+     */
+    newsScout: BriefingNews.optional(),
+    /**
+     * Optional strategist section. Populated only when the briefing call
+     * includes a `thesis` + `maxLossUsd` budget so the strategist can produce
+     * candidate structures.
+     */
+    strategist: BriefingStrategist.optional(),
+    /**
+     * Aggregated `RiskOfficer` verdict for the briefing as a whole. When a
+     * strategist section is present and *any* candidate fails review, `ok` is
+     * false and `violations` summarises why. When there is no strategist
+     * section (briefing-only call) this is omitted.
+     */
+    riskVerdict: RiskReview.optional(),
+    /**
+     * Flat list of source labels used to assemble this briefing (market data,
+     * indicator inputs, agent sources). Mirrors the AGENTS.md "sources used"
+     * requirement. Empty by default so existing fixtures don't have to be
+     * regenerated.
+     */
+    sourcesUsed: z.array(z.string()).default([]),
+  })
+  .strict();
 export type Briefing = z.infer<typeof Briefing>;
 
 /* ------------------------------------------------------------------ */
