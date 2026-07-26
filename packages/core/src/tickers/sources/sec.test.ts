@@ -80,45 +80,51 @@ describe('createSecEdgarTickerSource', () => {
   it('fetch() by symbol loads ticker directory then submissions and maps SIC fields', async () => {
     const tickersBody = await loadFixture('sec-company-tickers-sample.json');
     const submissionsBody = await loadFixture('sec-submissions-AAPL-profile.json');
+    const cacheDir = await mkdtemp(join(tmpdir(), 'rt-sec-fetch-cache-'));
 
-    const calls: Array<{ url: string; headers: Headers }> = [];
-    const fetchImpl: FetchLike = async (input, init) => {
-      const url = String(input);
-      calls.push({ url, headers: new Headers(init?.headers) });
+    try {
+      const calls: Array<{ url: string; headers: Headers }> = [];
+      const fetchImpl: FetchLike = async (input, init) => {
+        const url = String(input);
+        calls.push({ url, headers: new Headers(init?.headers) });
 
-      if (url === SEC_TICKERS_URL) {
-        return new Response(tickersBody, { status: 200, headers: { 'content-type': 'application/json' } });
-      }
-      if (url === `${SEC_SUBMISSIONS_BASE}/CIK${padCik(320193)}.json`) {
-        return new Response(submissionsBody, { status: 200, headers: { 'content-type': 'application/json' } });
-      }
-      return new Response('not found', { status: 404 });
-    };
+        if (url === SEC_TICKERS_URL) {
+          return new Response(tickersBody, { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        if (url === `${SEC_SUBMISSIONS_BASE}/CIK${padCik(320193)}.json`) {
+          return new Response(submissionsBody, { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        return new Response('not found', { status: 404 });
+      };
 
-    const client = new PoliteFetchClient({ fetchImpl, sleep: async () => {} });
-    const src = createSecEdgarTickerSource({
-      client,
-      operatorContact: 'sec-ops@example.test',
-    });
+      const client = new PoliteFetchClient({ fetchImpl, sleep: async () => {} });
+      const src = createSecEdgarTickerSource({
+        client,
+        cacheDir,
+        operatorContact: 'sec-ops@example.test',
+      });
 
-    const profile = await src.fetch('aapl');
-    expect(profile).not.toBeNull();
-    expect(profile?.symbol).toBe('AAPL');
-    expect(profile?.name).toBe('Apple Inc.');
-    expect(profile?.exchange).toBe('NASDAQ');
-    expect(profile?.sector).toBe('Manufacturing');
-    expect(profile?.industry).toBe('3571 - Electronic Computers');
-    expect(profile?.description).toContain('CIK 0000320193');
-    expect(profile?.description).toContain('Country: US');
-    expect(profile?.description).toContain('Website: https://www.apple.com/');
-    expect(profile?.sourceUrls).toEqual([
-      SEC_TICKERS_URL,
-      `${SEC_SUBMISSIONS_BASE}/CIK${padCik(320193)}.json`,
-    ]);
+      const profile = await src.fetch('aapl');
+      expect(profile).not.toBeNull();
+      expect(profile?.symbol).toBe('AAPL');
+      expect(profile?.name).toBe('Apple Inc.');
+      expect(profile?.exchange).toBe('NASDAQ');
+      expect(profile?.sector).toBe('Manufacturing');
+      expect(profile?.industry).toBe('3571 - Electronic Computers');
+      expect(profile?.description).toContain('CIK 0000320193');
+      expect(profile?.description).toContain('Country: US');
+      expect(profile?.description).toContain('Website: https://www.apple.com/');
+      expect(profile?.sourceUrls).toEqual([
+        SEC_TICKERS_URL,
+        `${SEC_SUBMISSIONS_BASE}/CIK${padCik(320193)}.json`,
+      ]);
 
-    expect(calls).toHaveLength(2);
-    expect(calls[0]?.headers.get('User-Agent')).toBe('RegardedTrader sec-ops@example.test');
-    expect(calls[0]?.headers.get('From')).toBe('sec-ops@example.test');
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.headers.get('User-Agent')).toBe('RegardedTrader sec-ops@example.test');
+      expect(calls[0]?.headers.get('From')).toBe('sec-ops@example.test');
+    } finally {
+      await rm(cacheDir, { recursive: true, force: true });
+    }
   });
 
   it('fetch() accepts CIK input', async () => {
