@@ -1,0 +1,18 @@
+{
+  "cik": "0000320193",
+  "name": "Apple Inc.",
+  "tickers": ["AAPL"],
+  "exchanges": ["Nasdaq"],
+  "sic": "3571",
+  "sicDescription": "Electronic Computers",
+  "website": "https://www.apple.com",
+  "investorWebsite": "",
+  "addresses": {
+    "mailing": {
+      "stateOrCountry": "US"
+    },
+    "business": {
+      "stateOrCountry": "US"
+    }
+  }
+}

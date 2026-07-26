@@ -49,3 +49,17 @@ export type {
   NasdaqTickerRow,
   NasdaqTraderSourceLogger,
 } from './sources/nasdaq-trader.js';
+export {
+  createSecEdgarTickerSource,
+  parseSecTickerDirectory,
+  parseSecSubmissionsProfile,
+  mapSicToSector,
+  padCik as padSecEdgarCik,
+  SEC_TICKERS_URL as SEC_EDGAR_TICKERS_URL,
+  SEC_SUBMISSIONS_BASE as SEC_EDGAR_SUBMISSIONS_BASE,
+} from './sources/sec.js';
+export type {
+  SecEdgarTickerSourceOptions,
+  SecTickerDirectoryRow,
+  SecEdgarSourceLogger,
+} from './sources/sec.js';

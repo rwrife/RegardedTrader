@@ -47,6 +47,19 @@ describe('PoliteFetchClient.fetch', () => {
     expect(headers.get('X-Foo')).toBe('bar');
   });
 
+  it('supports per-request User-Agent override', async () => {
+    const { fetchImpl, calls } = makeStubFetch(() => ok());
+    const c = new PoliteFetchClient({ fetchImpl, sleep: async () => {} });
+
+    await c.fetch('https://example.com/x', {
+      userAgent: 'RegardedTrader sec-ops@example.test',
+    });
+
+    expect(calls).toHaveLength(1);
+    const headers = calls[0]!.init!.headers as Headers;
+    expect(headers.get('User-Agent')).toBe('RegardedTrader sec-ops@example.test');
+  });
+
   it('rejects non-http(s) URLs', async () => {
     const c = new PoliteFetchClient({ fetchImpl: async () => ok() });
     await expect(c.fetch('ftp://example.com')).rejects.toThrow(/unsupported protocol/);
