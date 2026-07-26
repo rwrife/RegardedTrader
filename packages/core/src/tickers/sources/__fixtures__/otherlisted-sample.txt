@@ -1,0 +1,5 @@
+ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|Test Issue|NASDAQ Symbol
+IBM|International Business Machines Corporation Common Stock|N|IBM|N|100|N|IBM
+SPY|SPDR S&P 500 ETF Trust|P|SPY|Y|100|N|SPY
+ATEST|NYSE American Test Security|A|ATEST|N|100|Y|ATEST
+File Creation Time: 072520261200
