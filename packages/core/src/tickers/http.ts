@@ -32,6 +32,13 @@ export interface PoliteFetchOptions extends Omit<RequestInit, 'signal'> {
   backoffBaseMs?: number;
   /** Optional AbortSignal from the caller; merged with the timeout signal. */
   signal?: AbortSignal;
+  /**
+   * Optional per-request User-Agent override.
+   *
+   * Used by providers like SEC EDGAR that require a more specific contact
+   * identity than the process-wide default.
+   */
+  userAgent?: string;
 }
 
 export interface PoliteFetchClientOptions {
@@ -132,7 +139,7 @@ export class PoliteFetchClient {
     const maxRetries = Math.max(1, opts.maxRetries ?? 3);
     const baseBackoff = opts.backoffBaseMs ?? 250;
 
-    const headers = scrubHeaders(opts.headers, this.ua);
+    const headers = scrubHeaders(opts.headers, opts.userAgent ?? this.ua);
 
     let lastErr: unknown = null;
     let lastResp: Response | null = null;
@@ -233,10 +240,17 @@ export class PoliteFetchClient {
 }
 
 function stripPoliteOpts(opts: PoliteFetchOptions): RequestInit {
-  const { timeoutMs: _t, maxRetries: _r, backoffBaseMs: _b, ...rest } = opts;
+  const {
+    timeoutMs: _t,
+    maxRetries: _r,
+    backoffBaseMs: _b,
+    userAgent: _ua,
+    ...rest
+  } = opts;
   void _t;
   void _r;
   void _b;
+  void _ua;
   return rest;
 }
 
