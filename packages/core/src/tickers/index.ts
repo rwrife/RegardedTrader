@@ -13,7 +13,18 @@ export {
   TickerResolutionError,
   reconcile,
 } from './resolver.js';
-export type { SourceOutcome, TickerResolverOptions } from './resolver.js';
+export type {
+  SourceOutcome,
+  TickerResolverOptions,
+  TickerResolutionDiagnostics,
+} from './resolver.js';
+export { ReconcileConflictError } from './reconcile.js';
+export type {
+  ReconcileConflict,
+  ReconcileInput,
+  ReconcileOptions,
+  ReconcileScalarField,
+} from './reconcile.js';
 export {
   TickerStore,
   PROFILE_TTL_MS,

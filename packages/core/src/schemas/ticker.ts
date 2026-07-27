@@ -20,8 +20,10 @@ export const TickerProfile = z.object({
   validatedAt: z.string(), // ISO timestamp
   /** Confidence in the reconciled profile in [0, 1]. */
   confidence: z.number().min(0).max(1),
-  /** Names of the sources that contributed to this profile. */
+  /** Names/attributions of the sources that contributed to this profile. */
   sources: z.array(z.string()),
+  /** Reconciliation notes (field disputes, tie-break rationale, etc.). */
+  notes: z.array(z.string()).default([]),
 });
 export type TickerProfile = z.infer<typeof TickerProfile>;
 
