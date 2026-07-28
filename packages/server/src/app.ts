@@ -294,6 +294,91 @@ export function createApp(deps: AppDeps): AppHandle {
     refresh: z.boolean().optional().default(false),
   });
 
+  const ResolveQuery = z.object({
+    q: z.string().min(1),
+    refresh: z.coerce.boolean().optional().default(false),
+  });
+
+  const AddTickerBody = z
+    .object({
+      symbol: z.string().min(1).optional(),
+      query: z.string().min(1).optional(),
+      refresh: z.boolean().optional().default(false),
+    })
+    .refine((v) => Boolean(v.symbol?.trim() || v.query?.trim()), {
+      message: 'Provide either `symbol` or `query`.',
+      path: ['symbol'],
+    });
+
+  async function getFreshCachedProfile(raw: string, refresh: boolean) {
+    if (refresh) return null;
+    const candidate = raw.trim().toUpperCase();
+    try {
+      const symbol = Ticker.parse(candidate);
+      const cached = await deps.watchlist.get(symbol);
+      if (cached && !deps.watchlist.isStale(cached)) return cached.profile;
+      return null;
+    } catch {
+      // Non-ticker query (e.g. company name). Skip direct watchlist hit.
+      return null;
+    }
+  }
+
+  type ResolveMode = 'symbol' | 'query' | 'auto';
+  type SearchHit = Awaited<ReturnType<WebSearch['search']>>[number];
+  const SYMBOL_SHAPE = /^[A-Z.\-]{1,10}$/;
+
+  function pickLikelySymbol(hit: SearchHit): string | null {
+    const title = hit.title.toUpperCase();
+    const snippet = hit.snippet.toUpperCase();
+    const text = `${title} ${snippet}`;
+
+    const paren = text.match(/\(([A-Z.\-]{1,10})\)/);
+    if (paren?.[1] && SYMBOL_SHAPE.test(paren[1])) return paren[1];
+
+    const exchange = text.match(/\b(?:NASDAQ|NYSE|AMEX|ARCA)\s*[:\-]\s*([A-Z.\-]{1,10})\b/);
+    if (exchange?.[1] && SYMBOL_SHAPE.test(exchange[1])) return exchange[1];
+
+    const stop = new Set([
+      'STOCK',
+      'SHARES',
+      'PRICE',
+      'QUOTE',
+      'INC',
+      'CORP',
+      'ETF',
+      'NYSE',
+      'NASDAQ',
+      'COMPANY',
+      'HOLDINGS',
+    ]);
+    const words = text.match(/\b[A-Z]{1,5}\b/g) ?? [];
+    for (const w of words) {
+      if (!stop.has(w) && SYMBOL_SHAPE.test(w)) return w;
+    }
+    return null;
+  }
+
+  async function normalizeResolveInput(raw: string, mode: ResolveMode): Promise<string> {
+    const trimmed = raw.trim();
+    const upper = trimmed.toUpperCase();
+    if (trimmed.length === 0) return upper;
+
+    if (mode === 'symbol') return upper;
+    if (mode === 'auto' && SYMBOL_SHAPE.test(upper) && trimmed === upper) return upper;
+
+    try {
+      const hits = await deps.webSearch.search(`${trimmed} stock ticker symbol`, { limit: 5 });
+      for (const hit of hits) {
+        const picked = pickLikelySymbol(hit);
+        if (picked) return picked;
+      }
+    } catch {
+      // Fall back to the raw uppercased input.
+    }
+    return upper;
+  }
+
   app.post('/tickers/validate', async (req, res, next) => {
     try {
       const body = ValidateBody.parse(req.body);
@@ -301,13 +386,10 @@ export function createApp(deps: AppDeps): AppHandle {
       const results: ValidationResult[] = [];
 
       for (const raw of body.symbols) {
-        const symbol = raw.trim().toUpperCase();
-        if (!body.refresh) {
-          const cached = await deps.watchlist.get(symbol);
-          if (cached && !deps.watchlist.isStale(cached)) {
-            results.push({ ok: true, profile: cached.profile, cached: true });
-            continue;
-          }
+        const cached = await getFreshCachedProfile(raw, body.refresh);
+        if (cached) {
+          results.push({ ok: true, profile: cached, cached: true });
+          continue;
         }
         if (!validator) {
           res.status(503).json({
@@ -316,11 +398,78 @@ export function createApp(deps: AppDeps): AppHandle {
           });
           return;
         }
-        const r = await validator.validate(symbol);
+        const r = await validator.validate(raw.trim());
         if (r.ok) await deps.watchlist.upsert(r.profile);
         results.push(r);
       }
       res.json({ results });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Compatibility endpoint for issue #16 clients that want a one-shot
+  // resolve preview without mutating the stored watchlist.
+  app.get('/tickers/resolve', async (req, res, next) => {
+    try {
+      const { q, refresh } = ResolveQuery.parse(req.query);
+      const candidate = await normalizeResolveInput(q, 'auto');
+      const cached = await getFreshCachedProfile(candidate, refresh);
+      if (cached) {
+        res.json(cached);
+        return;
+      }
+      const validator = makeValidator();
+      if (!validator) {
+        res.status(503).json({
+          error: 'AI provider not configured',
+          hint: 'Run `regard config` (CLI) or open Settings in the dashboard.',
+        });
+        return;
+      }
+      const result = await validator.validate(candidate);
+      if (!result.ok) {
+        res.status(404).json({
+          error: result.error,
+          symbol: result.symbol,
+          suggestions: result.suggestions,
+        });
+        return;
+      }
+      res.json(result.profile);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Compatibility alias for issue #16 clients. Mirrors POST /tickers/validate
+  // for a single symbol/query and persists successful resolutions.
+  app.post('/tickers', async (req, res, next) => {
+    try {
+      const body = AddTickerBody.parse(req.body);
+      const raw = (body.symbol ?? body.query ?? '').trim();
+      const mode: ResolveMode = body.symbol ? 'symbol' : 'query';
+      const candidate = await normalizeResolveInput(raw, mode);
+      const cached = await getFreshCachedProfile(candidate, body.refresh);
+      if (cached) {
+        res.json({ ok: true, profile: cached, cached: true });
+        return;
+      }
+      const validator = makeValidator();
+      if (!validator) {
+        res.status(503).json({
+          error: 'AI provider not configured',
+          hint: 'Run `regard config` (CLI) or open Settings in the dashboard.',
+        });
+        return;
+      }
+      const result = await validator.validate(candidate);
+      if (!result.ok) {
+        res.status(404).json(result);
+        return;
+      }
+      await deps.watchlist.upsert(result.profile);
+      res.json(result);
     } catch (e) {
       next(e);
     }
