@@ -1,4 +1,9 @@
-import { TickerProfile, type PartialTickerProfile } from '../schemas/ticker.js';
+import { type PartialTickerProfile, type TickerProfile } from '../schemas/ticker.js';
+import {
+  ReconcileConflictError,
+  type ReconcileConflict,
+  reconcile as reconcileFromSources,
+} from './reconcile.js';
 import type { TickerSource } from './source.js';
 
 /**
@@ -15,20 +20,39 @@ export interface SourceOutcome {
   partial?: PartialTickerProfile;
 }
 
+export interface TickerResolutionDiagnostics {
+  kind: 'no-match' | 'conflict' | 'reconciliation';
+  conflicts?: ReconcileConflict[];
+  notes?: string[];
+}
+
 export class TickerResolutionError extends Error {
   readonly input: string;
   readonly outcomes: SourceOutcome[];
-  constructor(message: string, input: string, outcomes: SourceOutcome[]) {
+  readonly diagnostics?: TickerResolutionDiagnostics;
+
+  constructor(
+    message: string,
+    input: string,
+    outcomes: SourceOutcome[],
+    diagnostics?: TickerResolutionDiagnostics,
+  ) {
     super(message);
     this.name = 'TickerResolutionError';
     this.input = input;
     this.outcomes = outcomes;
+    this.diagnostics = diagnostics;
   }
 }
 
 export interface TickerResolverOptions {
   /** Per-resolve global timeout, in milliseconds. Default 4000. */
   timeoutMs?: number;
+  /**
+   * Minimum consensus share required when sources disagree on identity fields.
+   * Lower values are more permissive. Default 0.55.
+   */
+  conflictThreshold?: number;
 }
 
 const SYMBOL_RE = /^[A-Za-z.\-]{1,10}$/;
@@ -54,86 +78,28 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 }
 
 /**
- * Reconcile a set of per-source partials into a single `TickerProfile`.
- *
- * Strategy:
- *  - Symbol: most common canonical symbol across partials, tie-break by
- *    summed source weight.
- *  - String fields (name, exchange, sector, industry, description): pick the
- *    value from the highest-weight source that supplied a non-empty value.
- *  - sourceUrls: union, de-duplicated, preserving first-seen order.
- *  - confidence: sum(weight of contributing sources) / sum(weight of all
- *    sources that were *consulted*), clamped to [0, 1].
+ * Compatibility wrapper for direct unit tests and external callers.
+ * New reconciliation logic lives in `tickers/reconcile.ts` and accepts inputs
+ * in the form `{ source, partial }`.
  */
 export function reconcile(
   partials: ReadonlyArray<{ partial: PartialTickerProfile; weight: number; sourceName: string }>,
   totalWeight: number,
   validatedAt: string,
 ): TickerProfile {
-  if (partials.length === 0) {
-    throw new Error('reconcile: no partials');
-  }
-
-  // Pick canonical symbol by weighted vote.
-  const symbolVotes = new Map<string, number>();
-  for (const { partial, weight } of partials) {
-    symbolVotes.set(partial.symbol, (symbolVotes.get(partial.symbol) ?? 0) + weight);
-  }
-  let symbol = partials[0]!.partial.symbol;
-  let bestVote = -1;
-  for (const [sym, vote] of symbolVotes) {
-    if (vote > bestVote) {
-      bestVote = vote;
-      symbol = sym;
-    }
-  }
-
-  // Highest weight first for string-field selection.
-  const ordered = [...partials].sort((a, b) => b.weight - a.weight);
-
-  const pickString = (key: 'name' | 'exchange' | 'sector' | 'industry' | 'description'): string | null => {
-    for (const { partial } of ordered) {
-      const value = partial[key];
-      if (typeof value === 'string' && value.trim().length > 0) {
-        return value;
-      }
-    }
-    return null;
-  };
-
-  const urls: string[] = [];
-  const seenUrls = new Set<string>();
-  for (const { partial } of ordered) {
-    for (const u of partial.sourceUrls ?? []) {
-      if (!seenUrls.has(u)) {
-        seenUrls.add(u);
-        urls.push(u);
-      }
-    }
-  }
-
-  const contributingWeight = partials.reduce((s, p) => s + p.weight, 0);
-  const denom = totalWeight > 0 ? totalWeight : contributingWeight;
-  const confidence = denom > 0 ? Math.max(0, Math.min(1, contributingWeight / denom)) : 0;
-
-  const name = pickString('name');
-  const exchange = pickString('exchange');
-  if (name === null || exchange === null) {
-    throw new Error('reconcile: missing required field (name or exchange)');
-  }
-
-  return TickerProfile.parse({
-    symbol,
-    name,
-    exchange,
-    sector: pickString('sector'),
-    industry: pickString('industry'),
-    description: pickString('description'),
-    sourceUrls: urls,
-    validatedAt,
-    confidence,
-    sources: partials.map((p) => p.sourceName),
-  });
+  return reconcileFromSources(
+    partials.map((entry) => ({
+      partial: entry.partial,
+      source: {
+        name: entry.sourceName,
+        weight: entry.weight,
+      },
+    })),
+    {
+      totalWeight,
+      validatedAt,
+    },
+  );
 }
 
 /**
@@ -146,11 +112,13 @@ export class TickerResolver {
   private readonly sources: ReadonlyArray<TickerSource>;
   private readonly timeoutMs: number;
   private readonly now: () => Date;
+  private readonly conflictThreshold: number;
 
   constructor(sources: ReadonlyArray<TickerSource>, opts: TickerResolverOptions & { now?: () => Date } = {}) {
     this.sources = sources;
     this.timeoutMs = opts.timeoutMs ?? 4000;
     this.now = opts.now ?? (() => new Date());
+    this.conflictThreshold = opts.conflictThreshold ?? 0.55;
   }
 
   /**
@@ -161,10 +129,14 @@ export class TickerResolver {
   async resolve(input: string): Promise<TickerProfile> {
     const trimmed = input.trim();
     if (trimmed.length === 0) {
-      throw new TickerResolutionError('empty input', input, []);
+      throw new TickerResolutionError('empty input', input, [], {
+        kind: 'reconciliation',
+      });
     }
     if (this.sources.length === 0) {
-      throw new TickerResolutionError('no sources configured', input, []);
+      throw new TickerResolutionError('no sources configured', input, [], {
+        kind: 'reconciliation',
+      });
     }
 
     const symbolMode = isLikelySymbol(trimmed);
@@ -197,18 +169,44 @@ export class TickerResolver {
     await Promise.all(tasks);
 
     if (contributors.length === 0) {
-      throw new TickerResolutionError(
-        `no source could resolve "${input}"`,
-        input,
-        outcomes,
-      );
+      throw new TickerResolutionError(`no source could resolve "${input}"`, input, outcomes, {
+        kind: 'no-match',
+      });
     }
 
     try {
-      return reconcile(contributors, totalWeight, this.now().toISOString());
+      return reconcileFromSources(
+        contributors.map((entry) => ({
+          partial: entry.partial,
+          source: {
+            name: entry.sourceName,
+            weight: entry.weight,
+          },
+        })),
+        {
+          totalWeight,
+          validatedAt: this.now().toISOString(),
+          conflictThreshold: this.conflictThreshold,
+        },
+      );
     } catch (err) {
+      if (err instanceof ReconcileConflictError) {
+        throw new TickerResolutionError(
+          `reconciliation conflict: ${err.message}`,
+          input,
+          outcomes,
+          {
+            kind: 'conflict',
+            conflicts: err.conflicts,
+            notes: err.notes,
+          },
+        );
+      }
+
       const msg = err instanceof Error ? err.message : String(err);
-      throw new TickerResolutionError(`reconciliation failed: ${msg}`, input, outcomes);
+      throw new TickerResolutionError(`reconciliation failed: ${msg}`, input, outcomes, {
+        kind: 'reconciliation',
+      });
     }
   }
 }

@@ -58,7 +58,7 @@ describe('TickerResolver', () => {
     expect(profile.symbol).toBe('AAPL');
     expect(profile.name).toBe('Apple Inc.');
     expect(profile.exchange).toBe('NASDAQ');
-    expect(profile.sources).toEqual(['yahoo']);
+    expect(profile.sources).toEqual(['yahoo:https://finance.yahoo.com/quote/AAPL']);
     expect(profile.confidence).toBeCloseTo(1);
     expect(profile.validatedAt).toBe('2026-05-12T09:00:00.000Z');
   });
@@ -91,10 +91,16 @@ describe('TickerResolver', () => {
     // Industry only came from sec.
     expect(profile.industry).toBe('Software');
     // Sources are listed in contribution order.
-    expect(new Set(profile.sources)).toEqual(new Set(['yahoo', 'sec']));
+    expect(new Set(profile.sources)).toEqual(
+      new Set([
+        'yahoo:https://finance.yahoo.com/quote/MSFT',
+        'sec:https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000789019',
+      ]),
+    );
     // sourceUrls are de-duped union.
     expect(profile.sourceUrls).toHaveLength(2);
-    expect(profile.confidence).toBeCloseTo(1);
+    // Full source participation, scaled down slightly for incomplete optional coverage.
+    expect(profile.confidence).toBeCloseTo(0.9);
   });
 
   it('still resolves when some sources error or return missing, reducing confidence', async () => {
@@ -111,9 +117,10 @@ describe('TickerResolver', () => {
     const resolver = new TickerResolver([yahoo, sec, nasdaq], { now: FIXED_NOW });
     const profile = await resolver.resolve('TSLA');
     expect(profile.symbol).toBe('TSLA');
-    expect(profile.sources).toEqual(['yahoo']);
-    // confidence = 0.6 / (0.6 + 0.9 + 0.5) = 0.3
-    expect(profile.confidence).toBeCloseTo(0.3, 5);
+    expect(profile.sources).toEqual(['yahoo:https://finance.yahoo.com/quote/TSLA']);
+    // base confidence = 0.6 / (0.6 + 0.9 + 0.5) = 0.3
+    // optional coverage = 0/3 => scale 0.7 => 0.21
+    expect(profile.confidence).toBeCloseTo(0.21, 5);
   });
 
   it('throws TickerResolutionError with per-source diagnostics when no source succeeds', async () => {
@@ -129,12 +136,46 @@ describe('TickerResolver', () => {
       expect(err).toBeInstanceOf(TickerResolutionError);
       const e = err as TickerResolutionError;
       expect(e.input).toBe('ZZZZ');
+      expect(e.diagnostics?.kind).toBe('no-match');
       expect(e.outcomes).toHaveLength(2);
       const byName = Object.fromEntries(e.outcomes.map((o) => [o.source, o]));
       expect(byName.sec!.ok).toBe(false);
       expect(byName.sec!.reason).toBe('error');
       expect(byName.nasdaq!.ok).toBe(false);
       expect(byName.nasdaq!.reason).toBe('missing');
+    }
+  });
+
+  it('throws structured conflict diagnostics when identity fields disagree beyond threshold', async () => {
+    const alpha = new MockSource('alpha', 0.6, {
+      fetchResult: {
+        symbol: 'AAPL',
+        name: 'Apple Inc.',
+        exchange: 'NASDAQ',
+        sourceUrls: ['https://example.com/alpha/aapl'],
+      },
+    });
+    const beta = new MockSource('beta', 0.5, {
+      fetchResult: {
+        symbol: 'MSFT',
+        name: 'Microsoft Corporation',
+        exchange: 'NASDAQ',
+        sourceUrls: ['https://example.com/beta/msft'],
+      },
+    });
+
+    const resolver = new TickerResolver([alpha, beta], {
+      now: FIXED_NOW,
+      conflictThreshold: 0.75,
+    });
+
+    await expect(resolver.resolve('AAPL')).rejects.toBeInstanceOf(TickerResolutionError);
+    try {
+      await resolver.resolve('AAPL');
+    } catch (err) {
+      const e = err as TickerResolutionError;
+      expect(e.diagnostics?.kind).toBe('conflict');
+      expect(e.diagnostics?.conflicts?.some((conflict) => conflict.field === 'symbol')).toBe(true);
     }
   });
 
