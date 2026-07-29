@@ -18,6 +18,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch",
     "test": "vitest run",
+    "test:live:tickers": "vitest run src/tickers/live.test.ts",
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
