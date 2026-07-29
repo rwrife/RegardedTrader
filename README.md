@@ -28,6 +28,22 @@ npm run cli -- briefing NVDA   # or, after `npm link`: `regard briefing NVDA`
 
 Node **>= 20** required.
 
+## Ticker intake & watchlist (M1)
+
+Before running briefings/plans, add symbols to the validated watchlist:
+
+```bash
+# CLI
+regard add NVDA AAPL
+regard add NVDA --refresh        # force fresh validation
+regard ls
+regard rm NVDA
+```
+
+Web parity: the home view and `/watchlist` route call the same local endpoints
+(`GET /tickers`, `POST /tickers`, `POST /tickers/validate`, `DELETE /tickers/:sym`,
+`GET /tickers/resolve`) and show the same canonical ticker profile fields.
+
 ## What it does
 
 - Pulls public market data (Yahoo Finance, optionally Polygon/Alpha Vantage).

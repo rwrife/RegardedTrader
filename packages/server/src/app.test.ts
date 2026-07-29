@@ -43,6 +43,12 @@ const goodReply = {
   },
 };
 
+const noMatchReply = {
+  match: false,
+  reason: 'Could not confidently map this symbol to a tradable US equity.',
+  suggestions: [{ symbol: 'NVDA', name: 'NVIDIA Corporation' }],
+};
+
 let dir: string;
 let server: Server | null = null;
 let baseUrl = '';
@@ -117,6 +123,87 @@ describe('POST /tickers/validate', () => {
     const del = await fetch(`${baseUrl}/tickers/NVDA`, { method: 'DELETE' });
     expect(del.status).toBe(200);
     expect((await (await fetch(`${baseUrl}/tickers`)).json() as { entries: unknown[] }).entries).toEqual([]);
+  });
+
+  it('GET /tickers/resolve resolves without persisting, and POST /tickers persists', async () => {
+    const watchlist = new WatchlistStore({ path: join(dir, 'watchlist.json') });
+    const { app } = createApp({
+      market: {
+        quote: async () => ({ symbol: 'NVDA', price: 0, change: 0, changePercent: 0, volume: 0, asOf: '' }),
+        history: async () => [],
+        news: async () => [],
+        optionsChain: async () => [],
+      },
+      webSearch: fakeWebSearch(),
+      watchlist,
+      initialConfig: {
+        version: 1,
+        providers: { fake: { kind: 'openai-compatible', label: 'fake', baseUrl: 'http://x/v1', model: 'm' } },
+        activeProvider: 'fake',
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
+        server: { host: '127.0.0.1', port: 4317 },
+        marketData: { providers: {}, activeProvider: null },
+      },
+      llmFromConfig: () => fakeLLM(goodReply),
+    });
+    baseUrl = await listen(app);
+
+    const resolveRes = await fetch(`${baseUrl}/tickers/resolve?q=${encodeURIComponent('nvidia')}`);
+    expect(resolveRes.status).toBe(200);
+    const resolved = (await resolveRes.json()) as { symbol: string; name: string };
+    expect(resolved.symbol).toBe('NVDA');
+    expect(resolved.name).toMatch(/NVIDIA/i);
+
+    const beforePersist = (await (await fetch(`${baseUrl}/tickers`)).json() as { entries: unknown[] }).entries;
+    expect(beforePersist).toEqual([]);
+
+    const addRes = await fetch(`${baseUrl}/tickers`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query: 'nvidia' }),
+    });
+    expect(addRes.status).toBe(200);
+    const added = (await addRes.json()) as { ok: boolean; profile?: { symbol: string } };
+    expect(added.ok).toBe(true);
+    expect(added.profile?.symbol).toBe('NVDA');
+
+    const afterPersist = await fetch(`${baseUrl}/tickers`);
+    const list = (await afterPersist.json()) as { entries: Array<{ profile: { symbol: string } }> };
+    expect(list.entries.map((e) => e.profile.symbol)).toEqual(['NVDA']);
+  });
+
+  it('GET /tickers/resolve and POST /tickers return 404 when no match is found', async () => {
+    const watchlist = new WatchlistStore({ path: join(dir, 'watchlist.json') });
+    const { app } = createApp({
+      market: {
+        quote: async () => ({ symbol: 'NVDA', price: 0, change: 0, changePercent: 0, volume: 0, asOf: '' }),
+        history: async () => [],
+        news: async () => [],
+        optionsChain: async () => [],
+      },
+      webSearch: fakeWebSearch(),
+      watchlist,
+      initialConfig: {
+        version: 1,
+        providers: { fake: { kind: 'openai-compatible', label: 'fake', baseUrl: 'http://x/v1', model: 'm' } },
+        activeProvider: 'fake',
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
+        server: { host: '127.0.0.1', port: 4317 },
+        marketData: { providers: {}, activeProvider: null },
+      },
+      llmFromConfig: () => fakeLLM(noMatchReply),
+    });
+    baseUrl = await listen(app);
+
+    const resolveRes = await fetch(`${baseUrl}/tickers/resolve?q=${encodeURIComponent('ZZZZ')}`);
+    expect(resolveRes.status).toBe(404);
+
+    const addRes = await fetch(`${baseUrl}/tickers`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ symbol: 'ZZZZ' }),
+    });
+    expect(addRes.status).toBe(404);
   });
 
   it('briefing refuses unknown symbols with 422', async () => {
