@@ -2,6 +2,94 @@ import { describe, expect, it } from 'vitest';
 import { ReconcileConflictError, reconcile } from './reconcile.js';
 
 describe('tickers/reconcile', () => {
+  it('returns a stable profile when all sources unanimously agree', () => {
+    const profile = reconcile(
+      [
+        {
+          source: { name: 'sec', weight: 0.9 },
+          partial: {
+            symbol: 'AAPL',
+            name: 'Apple Inc.',
+            exchange: 'NASDAQ',
+            sector: 'Technology',
+            industry: 'Consumer Electronics',
+            description: 'Designs and sells consumer electronics.',
+            sourceUrls: ['https://www.sec.gov/example/aapl'],
+          },
+        },
+        {
+          source: { name: 'yahoo', weight: 0.7 },
+          partial: {
+            symbol: 'AAPL',
+            name: 'Apple Inc.',
+            exchange: 'NASDAQ',
+            sector: 'Technology',
+            industry: 'Consumer Electronics',
+            description: 'Designs and sells consumer electronics.',
+            sourceUrls: ['https://finance.yahoo.com/quote/AAPL'],
+          },
+        },
+      ],
+      {
+        totalWeight: 1.6,
+        validatedAt: '2026-07-27T00:00:00.000Z',
+      },
+    );
+
+    expect(profile.symbol).toBe('AAPL');
+    expect(profile.name).toBe('Apple Inc.');
+    expect(profile.exchange).toBe('NASDAQ');
+    expect(profile.notes).toEqual([]);
+    expect(profile.confidence).toBeCloseTo(1);
+  });
+
+  it('handles a single-source profile and fills missing optional fields as null', () => {
+    const profile = reconcile(
+      [
+        {
+          source: { name: 'sec', weight: 0.9 },
+          partial: {
+            symbol: 'TSM',
+            name: 'Taiwan Semiconductor Manufacturing Company Limited',
+            exchange: 'NYSE',
+            sourceUrls: ['https://www.sec.gov/example/tsm'],
+          },
+        },
+      ],
+      {
+        totalWeight: 1.8,
+        validatedAt: '2026-07-27T00:00:00.000Z',
+      },
+    );
+
+    expect(profile.symbol).toBe('TSM');
+    expect(profile.sector).toBeNull();
+    expect(profile.industry).toBeNull();
+    expect(profile.description).toBeNull();
+    // contributingWeight(0.9) / totalWeight(1.8) = 0.5, coverageScale=0.7
+    expect(profile.confidence).toBeCloseTo(0.35);
+  });
+
+  it('throws when no source provides the required identity fields', () => {
+    expect(() =>
+      reconcile(
+        [
+          {
+            source: { name: 'only-source', weight: 1 },
+            partial: {
+              symbol: 'AAPL',
+              sourceUrls: ['https://example.com/aapl'],
+            },
+          },
+        ],
+        {
+          totalWeight: 1,
+          validatedAt: '2026-07-27T00:00:00.000Z',
+        },
+      ),
+    ).toThrow(/missing required field/);
+  });
+
   it('normalizes company suffixes before voting on name', () => {
     const profile = reconcile(
       [
