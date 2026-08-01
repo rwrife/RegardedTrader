@@ -24,7 +24,7 @@
     "build": "npm --workspaces --if-present run build",
     "test": "npm --workspaces --if-present run test",
     "test:live": "node ./scripts/test-live.mjs",
-    "lint": "npm --workspaces --if-present run lint && node ./scripts/check-disclaimer.mjs"
+    "lint": "npm --workspaces --if-present run lint && node ./scripts/check-disclaimer.mjs && node ./scripts/check-domain-glossary.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.0.1",

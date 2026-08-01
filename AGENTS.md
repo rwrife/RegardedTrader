@@ -112,6 +112,9 @@ These are non-negotiable. Violating them is a bug, not a tradeoff.
 
 ## Domain Notes
 
+Canonical terminology lives in [`docs/domain-glossary.md`](./docs/domain-glossary.md).
+Use it when authoring prompts, schema docs, and user-facing analysis copy.
+
 ### "Stock analysis" means
 - Pull recent OHLCV, fundamentals snapshot, news headlines.
 - Compute classic TA (RSI, MACD, SMA/EMA crossovers, ATR, IV when available).
