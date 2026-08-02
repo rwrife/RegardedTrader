@@ -1,0 +1,17 @@
+{
+  "QuickQuoteResult": {
+    "QuickQuote": [
+      {
+        "symbol": "AAPL",
+        "code": "0",
+        "name": "Apple Inc",
+        "shortName": "AAPL",
+        "altName": "Apple",
+        "exchange": "NASDAQ",
+        "assetType": "STOCK",
+        "assetSubType": "Common Stock",
+        "countryCode": "US"
+      }
+    ]
+  }
+}
