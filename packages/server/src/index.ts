@@ -4,6 +4,7 @@ import { createDefaultApp } from './app.js';
 import { assertLoopbackHost } from './bind-guard.js';
 import { logger } from './logging.js';
 import { parseRuntimeAuth } from './runtimeAuth.js';
+import { attachStreamServer } from './ws.js';
 
 const cfg = await loadConfig();
 const envPort = Number(process.env.REGARDEDTRADER_SERVER_PORT ?? '');
@@ -30,8 +31,7 @@ try {
   process.exit(1);
 }
 
-const { app, getConfig, shutdown } = createDefaultApp(cfg, runtimeAuth);
-
+const { app, getConfig, shutdown, stream } = createDefaultApp(cfg, runtimeAuth);
 const server = app.listen(cfg.server.port, cfg.server.host, () => {
   const c = getConfig();
   logger.info(`RegardedTrader server listening on http://${cfg.server.host}:${cfg.server.port}`);
@@ -40,6 +40,14 @@ const server = app.listen(cfg.server.port, cfg.server.host, () => {
   } else {
     logger.info(`Active AI provider: ${c.activeProvider}`);
   }
+});
+attachStreamServer({
+  server,
+  bridge: {
+    subscribe: stream.subscribe,
+    loadChain: stream.loadChain,
+  },
+  auth: stream.auth,
 });
 
 let shuttingDown = false;
