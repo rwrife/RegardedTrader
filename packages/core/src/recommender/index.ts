@@ -39,6 +39,7 @@ export {
   DEFAULT_SENTIMENT_SPARK_HOURS,
   DEFAULT_NEWS_LOOKBACK_HOURS,
   DEFAULT_OPINIONS_LOOKBACK_HOURS,
+  StaleInputError,
   type BuildContextOptions,
   type CadenceKey,
   type ContextLatestSnapshot,
