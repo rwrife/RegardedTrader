@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { logger } from './logging.js';
 import {
@@ -29,6 +30,11 @@ import {
   WatchlistStore,
   DuckDuckGoSearch,
   MarketClock,
+  MentionStore,
+  SentimentSource,
+  SentimentSnapshot,
+  type MentionItem,
+  type ScoredMention,
   type WebSearch,
   type LLM,
   type AppConfig as AppConfigT,
@@ -58,6 +64,7 @@ export interface AppDeps {
    */
   buildLLMForProvider?: (provider: AiProviderT) => LLM;
   watchlist: WatchlistStore;
+  mentions?: MentionStore;
   initialConfig: AppConfigT;
   /**
    * Built-in live-quote source used when no provider is configured (or when
@@ -73,6 +80,7 @@ export interface AppHandle {
   app: express.Express;
   /** Currently-active config (mutated by /config endpoints). Read for tests. */
   getConfig: () => AppConfigT;
+  emitSentimentUpdate: (symbol: string, snapshot: SentimentSnapshot | null) => void;
 }
 
 /**
@@ -80,7 +88,9 @@ export interface AppHandle {
  * (`index.ts`) wires defaults; tests pass mocks.
  */
 export function createApp(deps: AppDeps): AppHandle {
-  let cfg: AppConfigT = deps.initialConfig;
+  let cfg: AppConfigT = AppConfig.parse(deps.initialConfig);
+  const mentionStore = deps.mentions ?? new MentionStore();
+  const authToken = process.env.REGARDEDTRADER_AUTH_TOKEN?.trim() || null;
 
   // --- Market data registry (#91) ---
   // Rebuilt whenever the marketData config changes so route handlers always
@@ -122,6 +132,89 @@ export function createApp(deps: AppDeps): AppHandle {
   }
 
   let orchestrator = makeOrchestrator();
+
+  type SentimentHealth = {
+    lastSuccess: string | null;
+    lastError: string | null;
+    lastErrorAt: string | null;
+  };
+  const sentimentHealth: Record<z.infer<typeof SentimentSource>, SentimentHealth> = {
+    reddit: { lastSuccess: null, lastError: null, lastErrorAt: null },
+    stocktwits: { lastSuccess: null, lastError: null, lastErrorAt: null },
+    hn: { lastSuccess: null, lastError: null, lastErrorAt: null },
+    cnn: { lastSuccess: null, lastError: null, lastErrorAt: null },
+    'google-news': { lastSuccess: null, lastError: null, lastErrorAt: null },
+  };
+
+  function setSentimentSuccess(source: z.infer<typeof SentimentSource>, at: string): void {
+    const cur = sentimentHealth[source];
+    cur.lastSuccess = at;
+    cur.lastError = null;
+    cur.lastErrorAt = null;
+  }
+
+  function setSentimentError(source: z.infer<typeof SentimentSource>, err: unknown): void {
+    const cur = sentimentHealth[source];
+    cur.lastError = err instanceof Error ? err.message : String(err);
+    cur.lastErrorAt = new Date().toISOString();
+  }
+
+  function tokenMatches(candidate: string | null | undefined): boolean {
+    if (!authToken) return true;
+    if (!candidate) return false;
+    const a = Buffer.from(candidate);
+    const b = Buffer.from(authToken);
+    if (a.length !== b.length) return false;
+    return timingSafeEqual(a, b);
+  }
+
+  function authTokenFrom(req: express.Request): string | null {
+    const header = req.header('authorization');
+    if (header) {
+      const v = header.trim();
+      if (v.toLowerCase().startsWith('bearer ')) return v.slice(7).trim();
+      return v;
+    }
+    const query = req.query.t;
+    return typeof query === 'string' ? query : null;
+  }
+
+  function requireDashboardToken(
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ): void {
+    if (!authToken) {
+      next();
+      return;
+    }
+    if (!tokenMatches(authTokenFrom(req))) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    next();
+  }
+
+  type SentimentSsePayload = {
+    type: 'sentiment.update';
+    symbol: string;
+    snapshot: SentimentSnapshot | null;
+    id: string;
+    at: string;
+  };
+  const sseClients = new Set<express.Response>();
+
+  function emitSentimentUpdate(symbol: string, snapshot: SentimentSnapshot | null): void {
+    const payload: SentimentSsePayload = {
+      type: 'sentiment.update',
+      symbol,
+      snapshot,
+      id: randomUUID(),
+      at: new Date().toISOString(),
+    };
+    const frame = `event: sentiment.update\ndata: ${JSON.stringify(payload)}\n\n`;
+    for (const client of sseClients) client.write(frame);
+  }
 
   function makeValidator(): TickerValidator | null {
     const llm = deps.llmFromConfig(cfg);
@@ -182,6 +275,7 @@ export function createApp(deps: AppDeps): AppHandle {
       version: SERVER_VERSION,
       aiConfigured: orchestrator !== null,
       activeProvider: cfg.activeProvider,
+      sentimentSources: sentimentHealth,
     });
   });
 
@@ -189,7 +283,7 @@ export function createApp(deps: AppDeps): AppHandle {
 
   app.get('/quote/:symbol', async (req, res, next) => {
     try {
-      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
       res.json(await registry.client.quote(symbol));
     } catch (e) {
       next(e);
@@ -216,7 +310,7 @@ export function createApp(deps: AppDeps): AppHandle {
 
     app.get('/tickers/:symbol/quote', async (req, res, next) => {
       try {
-        const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+        const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
         const source = resolveLiveQuoteSource();
         if (!source) {
           res.status(503).json({
@@ -270,7 +364,7 @@ export function createApp(deps: AppDeps): AppHandle {
 
   app.get('/history/:symbol', async (req, res, next) => {
     try {
-      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
       const days = Math.min(Number(req.query.days ?? 180), 365 * 5);
       res.json(await registry.client.history(symbol, days));
     } catch (e) {
@@ -280,7 +374,7 @@ export function createApp(deps: AppDeps): AppHandle {
 
   app.get('/options/:symbol', async (req, res, next) => {
     try {
-      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
       const expiry = typeof req.query.expiry === 'string' ? req.query.expiry : undefined;
       res.json(await registry.client.optionsChain(symbol, expiry));
     } catch (e) {
@@ -490,6 +584,103 @@ export function createApp(deps: AppDeps): AppHandle {
       const sym = Ticker.parse(req.params.sym.toUpperCase());
       const removed = await deps.watchlist.remove(sym);
       res.json({ ok: true, removed });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // --- Sentiment / mentions (#39) ---
+  const DateParam = z
+    .string()
+    .min(1)
+    .refine((v) => !Number.isNaN(Date.parse(v)), { message: 'Expected an ISO-8601 datetime.' });
+  const SentimentRangeQuery = z.object({
+    since: DateParam.optional(),
+    until: DateParam.optional(),
+  });
+  const MentionsQuery = z.object({
+    source: SentimentSource.optional(),
+    limit: z.coerce.number().int().min(1).max(500).optional().default(100),
+    since: DateParam.optional(),
+  });
+
+  app.get('/events', requireDashboardToken, (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+    res.write(`event: ready\ndata: ${JSON.stringify({ ok: true })}\n\n`);
+
+    sseClients.add(res);
+    const keepAlive = setInterval(() => {
+      res.write(`: keepalive ${Date.now()}\n\n`);
+    }, 20_000);
+
+    req.on('close', () => {
+      clearInterval(keepAlive);
+      sseClients.delete(res);
+    });
+  });
+
+  app.get('/sentiment/:symbol/latest', requireDashboardToken, async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
+      const latest = await mentionStore.readLatest(symbol);
+      const snapshot = latest.sentiment ?? null;
+      if (!snapshot) {
+        res.status(404).json({ error: `No sentiment snapshot found for ${symbol}.` });
+        return;
+      }
+      res.json(snapshot);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/sentiment/:symbol', requireDashboardToken, async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
+      const q = SentimentRangeQuery.parse(req.query);
+      const since = q.since ? new Date(q.since) : undefined;
+      const until = q.until ? new Date(q.until) : undefined;
+      const items: SentimentSnapshot[] = [];
+      for await (const snap of mentionStore.readSentiment(symbol, since, until)) {
+        items.push(snap);
+      }
+      items.sort((a, b) => Date.parse(a.asOf) - Date.parse(b.asOf));
+      res.json({ symbol, items });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/mentions/:symbol', requireDashboardToken, async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
+      const q = MentionsQuery.parse(req.query);
+      const since = q.since ? new Date(q.since) : undefined;
+      const items: Array<MentionItem | ScoredMention> = [];
+      for await (const item of mentionStore.readMentions(symbol, since, undefined)) {
+        if (q.source && item.source !== q.source) continue;
+        items.push(item);
+      }
+      items.sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt));
+      const limited = items.slice(0, q.limit);
+      for (const source of SentimentSource.options) {
+        try {
+          const latest = limited
+            .filter((row) => row.source === source)
+            .reduce<string | null>((acc, row) => {
+              const ts = row.fetchedAt || row.publishedAt;
+              if (!acc) return ts;
+              return Date.parse(ts) > Date.parse(acc) ? ts : acc;
+            }, null);
+          if (latest) setSentimentSuccess(source, latest);
+        } catch (e) {
+          setSentimentError(source, e);
+        }
+      }
+      res.json({ symbol, items: limited });
     } catch (e) {
       next(e);
     }
@@ -953,7 +1144,7 @@ export function createApp(deps: AppDeps): AppHandle {
     },
   );
 
-  return { app, getConfig: () => cfg };
+  return { app, getConfig: () => cfg, emitSentimentUpdate };
 }
 
 /** Maps well-known NYSE holiday dates (YYYY-MM-DD) to human-readable names. */
