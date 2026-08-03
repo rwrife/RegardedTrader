@@ -1,8 +1,8 @@
-import { spawn } from 'node:child_process';
 import OpenAI from 'openai';
 import type { LLM } from '../agents/llm.js';
 import { OpenAILLM } from '../agents/llm.js';
 import type { AiProvider, AppConfig, CliBackendKind } from '../schemas/config.js';
+import { CliBackendRunner } from './cli/runner.js';
 
 /**
  * Build an LLM from a provider config.
@@ -38,19 +38,21 @@ export function activeLLM(cfg: AppConfig): LLM {
 
 /**
  * Generic CLI-backend LLM. Spawns an installed coding-CLI and captures its
- * final text output for one turn. Stateless; no session resume yet.
+ * final text output for one turn.
  *
  * Defaults follow OpenClaw's sanctioned invocation patterns:
  *   - codex-cli   → `codex exec --json --color never --sandbox workspace-write --skip-git-repo-check`
  *   - claude-cli  → `claude -p --output-format stream-json`
- *   - copilot-cli → `copilot -p <prompt>` (GitHub Copilot CLI standalone,
- *     `@github/copilot` npm package — not the older `gh copilot` extension)
+ *   - copilot-cli → `copilot -p <prompt>` (standalone `@github/copilot`)
  *
- * Each backend has its own quirks; this implementation gives a working baseline.
- * Per-backend hardening (sessions, JSONL parsing, MCP loopback) is tracked as
- * GitHub issues.
+ * Each backend is routed through a per-provider serialized lane with backend-
+ * specific timeout defaults so repeated completions don't spam local CLIs in
+ * parallel. Codex/Claude backends also preserve parsed session IDs and attempt
+ * resume on follow-up turns.
  */
 export class CliLLM implements LLM {
+  private static readonly runners = new Map<string, CliBackendRunner>();
+
   constructor(
     private readonly backend: CliBackendKind,
     private readonly command?: string,
@@ -67,128 +69,23 @@ export class CliLLM implements LLM {
     user: string;
     json?: boolean;
   }): Promise<string> {
-    const { cmd, args, prompt, promptViaStdin } = this.buildInvocation(system, user);
-    return new Promise<string>((resolve, reject) => {
-      const child = spawn(cmd, args, {
-        env: { ...process.env, ...(this.env ?? {}) },
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-      let stdout = '';
-      let stderr = '';
-      child.stdout.on('data', (b) => (stdout += b.toString()));
-      child.stderr.on('data', (b) => (stderr += b.toString()));
-      child.on('error', reject);
-      child.on('close', (code) => {
-        if (code !== 0) {
-          reject(
-            new Error(
-              `${this.backend} exited with code ${code}: ${stderr.slice(0, 500) || '(no stderr)'}`,
-            ),
-          );
-          return;
-        }
-        resolve(this.extractText(stdout));
-      });
-      if (promptViaStdin) {
-        child.stdin.end(prompt);
-      } else {
-        child.stdin.end();
-      }
-    });
-  }
-
-  private buildInvocation(system: string, user: string): {
-    cmd: string;
-    args: string[];
-    prompt: string;
-    /** When true, write `prompt` to the child's stdin. When false, the prompt is already in `args`. */
-    promptViaStdin: boolean;
-  } {
     const prompt = `${system}\n\n---\n\n${user}`;
-    switch (this.backend) {
-      case 'codex-cli': {
-        const cmd = this.command ?? 'codex';
-        const args = [
-          'exec',
-          '--json',
-          '--color',
-          'never',
-          '--sandbox',
-          'workspace-write',
-          '--skip-git-repo-check',
-        ];
-        if (this.model) args.push('--model', this.model);
-        if (this.extraArgs) args.push(...this.extraArgs);
-        return { cmd, args, prompt, promptViaStdin: true };
-      }
-      case 'claude-cli': {
-        const cmd = this.command ?? 'claude';
-        const args = ['-p', '--output-format', 'stream-json', '--verbose'];
-        if (this.model) args.push('--model', this.model);
-        if (this.extraArgs) args.push(...this.extraArgs);
-        return { cmd, args, prompt, promptViaStdin: true };
-      }
-      case 'copilot-cli': {
-        // Standalone GitHub Copilot CLI (`@github/copilot`). It accepts the
-        // prompt as a `-p`/`--prompt` argument in non-interactive mode and
-        // does NOT read from stdin (older `gh copilot explain` integration
-        // was removed — `gh copilot` only handled shell-suggest flows and
-        // wasn't a real chat interface).
-        const cmd = this.command ?? 'copilot';
-        const args: string[] = [];
-        if (this.model) args.push('--model', this.model);
-        if (this.extraArgs) args.push(...this.extraArgs);
-        args.push('-p', prompt);
-        return { cmd, args, prompt, promptViaStdin: false };
-      }
-    }
+    return this.runner().complete(prompt);
   }
 
-  /** Extract the final assistant text from each backend's stdout. Best-effort. */
-  private extractText(out: string): string {
-    if (this.backend === 'codex-cli') {
-      // JSONL stream; the final agent message has type "agent_message".
-      const lines = out.split(/\r?\n/).filter(Boolean);
-      let last = '';
-      for (const line of lines) {
-        try {
-          const obj = JSON.parse(line);
-          const text =
-            obj?.message?.content ??
-            obj?.content ??
-            obj?.text ??
-            (obj?.type === 'agent_message' ? obj?.message : null);
-          if (typeof text === 'string' && text.trim()) last = text;
-        } catch {
-          /* not json, skip */
-        }
-      }
-      return last || out.trim();
+  private runner(): CliBackendRunner {
+    const key = JSON.stringify({
+      backend: this.backend,
+      command: this.command ?? null,
+      args: this.extraArgs ?? [],
+      model: this.model ?? null,
+      env: this.env ?? {},
+    });
+    let r = CliLLM.runners.get(key);
+    if (!r) {
+      r = new CliBackendRunner(this.backend, key, this.command, this.extraArgs, this.model, this.env);
+      CliLLM.runners.set(key, r);
     }
-    if (this.backend === 'claude-cli') {
-      // stream-json from claude. The final result event has `.result`.
-      const lines = out.split(/\r?\n/).filter(Boolean);
-      let last = '';
-      for (const line of lines) {
-        try {
-          const obj = JSON.parse(line);
-          if (typeof obj?.result === 'string') last = obj.result;
-          else if (obj?.type === 'assistant' && typeof obj?.message?.content === 'string') {
-            last = obj.message.content;
-          }
-        } catch {
-          /* skip */
-        }
-      }
-      return last || out.trim();
-    }
-    if (this.backend === 'copilot-cli') {
-      // Strip ANSI escape sequences (the standalone Copilot CLI emits color
-      // codes even in non-interactive mode). Anything beyond that is the
-      // model's plain-text response.
-      // eslint-disable-next-line no-control-regex
-      return out.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, '').trim();
-    }
-    return out.trim();
+    return r;
   }
 }

@@ -26,7 +26,7 @@ export const CliProvider = z.object({
   kind: z.literal('cli'),
   label: z.string().min(1),
   backend: CliBackendKind,
-  /** Binary path / command. Defaults: `codex`, `claude`, `gh` */
+  /** Binary path / command. Defaults: `codex`, `claude`, `copilot` */
   command: z.string().optional(),
   /** Extra args appended after the backend's defaults */
   args: z.array(z.string()).optional(),
