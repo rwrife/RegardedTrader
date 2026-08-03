@@ -17,6 +17,7 @@ import {
   Briefing,
   type Briefing as BriefingT,
   type BriefingStrategist,
+  type NewsItem,
   type PlansResponse,
   type ReviewedTradePlan,
   type RiskReview,
@@ -85,9 +86,9 @@ export class Orchestrator {
     ]);
     const indicators = computeIndicators(history);
 
-    // Fan out the analyst + optional Technician/NewsScout in parallel.
-    // The strategist runs only when a thesis + budget are supplied; the
-    // `RiskOfficer` reviews its candidates after they come back.
+    // Fan out optional Technician/NewsScout in parallel.
+    // NewsScout resolves before Analyst so the analyst always gets
+    // ID-labeled headlines it can cite in catalysts/risks.
     const technicalPromise = this.technician
       ? this.technician
           .analyze({ symbol, quote, indicators })
@@ -105,12 +106,20 @@ export class Orchestrator {
 
     const strategistPromise = this.runStrategistSection(symbol, opts);
 
-    const [base, ta, scout, strategist] = await Promise.all([
-      this.analyst.brief({ symbol, quote, indicators, news }),
+    const [ta, scout, strategist] = await Promise.all([
       technicalPromise,
       newsPromise,
       strategistPromise,
     ]);
+    const analystNews = scout?.headlines.length
+      ? scout.headlines
+      : withHeadlineIds(news);
+    const base = await this.analyst.brief({
+      symbol,
+      quote,
+      indicators,
+      news: analystNews,
+    });
 
     // Aggregate risk verdict for the briefing. Briefing-only calls do not
     // get a verdict; strategist calls always do.
@@ -238,4 +247,8 @@ function collectSources(parts: {
   for (const s of parts.ta?.sourcesUsed ?? []) out.add(s);
   for (const s of parts.scout?.sourcesUsed ?? []) out.add(s);
   return Array.from(out);
+}
+
+function withHeadlineIds(news: NewsItem[]): NewsItem[] {
+  return news.map((h, i) => ({ ...h, id: h.id ?? `h${i + 1}` }));
 }

@@ -5,6 +5,8 @@ export type { TechnicianInput } from './technician.js';
 export { OptionsStrategist } from './options-strategist.js';
 export { RiskOfficer } from './risk-officer.js';
 export type { RiskCaps } from './risk-officer.js';
+export { NewsScout } from './news-scout.js';
+export type { NewsScoutInput, NewsScoutOptions } from './news-scout.js';
 export { OpenAILLM, DISCLAIMER } from './llm.js';
 export type { LLM } from './llm.js';
 export { CliLLM, buildLLM, activeLLM } from './providers.js';
@@ -49,4 +51,3 @@ export interface TechnicianAgent {
 export interface NewsScoutAgent {
   scout(input: { symbol: string; news: NewsItem[] }): Promise<BriefingNews>;
 }
-

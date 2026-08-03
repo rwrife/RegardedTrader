@@ -26,6 +26,7 @@ const cli = meow(
     brief <SYMBOL>             Full briefing pipeline (analyst + TA + news + strategist)
     quote <SYMBOL>             Quick quote
     tech <SYMBOL>              Technician (TA) commentary for a ticker
+    news <SYMBOL>              Ranked traditional headlines via NewsScout
     plan <SYMBOL>              Interactive options trade-plan wizard
     options <SYMBOL>           Options-chain explorer (calls/puts/greeks)
     chart <SYMBOL>             ASCII sparkline + RSI/MACD indicator readout

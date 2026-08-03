@@ -4,6 +4,7 @@ import TextInput from 'ink-text-input';
 import { BriefingScreen } from './screens/briefing.js';
 import { QuoteScreen } from './screens/quote.js';
 import { TechScreen } from './screens/tech.js';
+import { NewsScreen } from './screens/news.js';
 import { PlanScreen } from './screens/plan.js';
 import { ConfigScreen } from './screens/config.js';
 import { AddScreen } from './screens/add.js';
@@ -27,6 +28,7 @@ type SlashId =
   | 'briefing'
   | 'quote'
   | 'tech'
+  | 'news'
   | 'plan'
   | 'chart'
   | 'add'
@@ -52,6 +54,7 @@ const COMMANDS: SlashCommand[] = [
   { id: 'briefing', name: '/briefing', usage: '/briefing <SYM>', blurb: 'AI bull/bear write-up for a ticker', needsArgs: true },
   { id: 'quote',    name: '/quote',    usage: '/quote <SYM>',    blurb: 'Quick price snapshot',                    needsArgs: true },
   { id: 'tech',     name: '/tech',     usage: '/tech <SYM>',     blurb: 'Technician (TA) commentary',              needsArgs: true },
+  { id: 'news',     name: '/news',     usage: '/news <SYM>',     blurb: 'Ranked traditional headlines (NewsScout)', needsArgs: true },
   { id: 'plan',     name: '/plan',     usage: '/plan <SYM>',     blurb: 'Interactive options trade-plan wizard',   needsArgs: true },
   { id: 'chart',    name: '/chart',    usage: '/chart <SYM>',    blurb: 'ASCII sparkline + RSI/MACD readout',      needsArgs: true },
   { id: 'add',      name: '/add',      usage: '/add <SYM>...',   blurb: 'Validate ticker(s) and add to watchlist', needsArgs: true },
@@ -284,6 +287,8 @@ function RunningBody({
       return <QuoteScreen symbol={(args[0] ?? '').toUpperCase()} serverUrl={serverUrl} onDone={onDone} />;
     case 'tech':
       return <TechScreen symbol={(args[0] ?? '').toUpperCase()} serverUrl={serverUrl} onDone={onDone} />;
+    case 'news':
+      return <NewsScreen symbol={(args[0] ?? '').toUpperCase()} serverUrl={serverUrl} onDone={onDone} />;
     case 'plan':
       return <PlanScreen symbol={(args[0] ?? '').toUpperCase()} serverUrl={serverUrl} onDone={onDone} />;
     case 'chart':
