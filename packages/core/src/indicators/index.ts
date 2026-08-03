@@ -91,6 +91,55 @@ function atr(bars: OHLCV[], period = 14): (number | null)[] {
   return sma(trs, period);
 }
 
+export interface IndicatorSeries {
+  sma20: (number | null)[];
+  sma50: (number | null)[];
+  ema12: (number | null)[];
+  ema26: (number | null)[];
+  rsi14: (number | null)[];
+  macd: (number | null)[];
+  macdSignal: (number | null)[];
+  macdHistogram: (number | null)[];
+  atr14: (number | null)[];
+}
+
+/**
+ * Full-length indicator vectors aligned to the input bars.
+ *
+ * This is shared by both surfaces so chart overlays / panes and CLI readouts
+ * derive from exactly the same formulas and windows.
+ */
+export function computeIndicatorSeries(bars: OHLCV[]): IndicatorSeries {
+  const closes = bars.map((b) => b.c);
+  const sma20 = sma(closes, 20);
+  const sma50 = sma(closes, 50);
+  const ema12 = ema(closes, 12);
+  const ema26 = ema(closes, 26);
+  const rsi14 = rsi(closes, 14);
+  const atr14 = atr(bars, 14);
+
+  const macd = ema12.map((v, i) =>
+    v !== null && ema26[i] !== null ? v - (ema26[i] as number) : null,
+  );
+  const macdNumeric = macd.map((v) => v ?? 0);
+  const macdSignal = ema(macdNumeric, 9);
+  const macdHistogram = macd.map((v, i) =>
+    v !== null && macdSignal[i] !== null ? v - (macdSignal[i] as number) : null,
+  );
+
+  return {
+    sma20,
+    sma50,
+    ema12,
+    ema26,
+    rsi14,
+    macd,
+    macdSignal,
+    macdHistogram,
+    atr14,
+  };
+}
+
 /**
  * Bollinger Bands (issue #140).
  *
@@ -215,18 +264,7 @@ export function stochastic(
 
 export function computeIndicators(bars: OHLCV[]): Indicators {
   const closes = bars.map((b) => b.c);
-  const sma20Arr = sma(closes, 20);
-  const sma50Arr = sma(closes, 50);
-  const ema12Arr = ema(closes, 12);
-  const ema26Arr = ema(closes, 26);
-  const rsiArr = rsi(closes, 14);
-  const atrArr = atr(bars, 14);
-
-  const macdLine = ema12Arr.map((v, i) =>
-    v !== null && ema26Arr[i] !== null ? v - (ema26Arr[i] as number) : null,
-  );
-  const macdNumeric = macdLine.map((v) => v ?? 0);
-  const macdSignalArr = ema(macdNumeric, 9);
+  const series = computeIndicatorSeries(bars);
 
   // Bollinger Bands (20, 2) and Stochastic (14, 3) — issue #140. Both are
   // additive/optional on the Indicators schema so pre-#140 fixtures still
@@ -240,14 +278,14 @@ export function computeIndicators(bars: OHLCV[]): Indicators {
   const last = <T>(arr: T[]): T | null => (arr.length ? arr[arr.length - 1]! : null);
 
   return {
-    rsi14: last(rsiArr) ?? null,
-    sma20: last(sma20Arr) ?? null,
-    sma50: last(sma50Arr) ?? null,
-    ema12: last(ema12Arr) ?? null,
-    ema26: last(ema26Arr) ?? null,
-    macd: last(macdLine) ?? null,
-    macdSignal: last(macdSignalArr) ?? null,
-    atr14: last(atrArr) ?? null,
+    rsi14: last(series.rsi14) ?? null,
+    sma20: last(series.sma20) ?? null,
+    sma50: last(series.sma50) ?? null,
+    ema12: last(series.ema12) ?? null,
+    ema26: last(series.ema26) ?? null,
+    macd: last(series.macd) ?? null,
+    macdSignal: last(series.macdSignal) ?? null,
+    atr14: last(series.atr14) ?? null,
     bbMiddle: last(bb.middle) ?? null,
     bbUpper: last(bb.upper) ?? null,
     bbLower: last(bb.lower) ?? null,

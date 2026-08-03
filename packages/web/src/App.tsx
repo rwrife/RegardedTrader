@@ -4,6 +4,7 @@ import { Settings } from './routes/settings.js';
 import { Brief } from './routes/brief.js';
 import { Plan } from './routes/plan.js';
 import { Options } from './routes/options.js';
+import { TickerRoute } from './routes/ticker.js';
 import { Watchlist as WatchlistRoute } from './routes/watchlist.js';
 import { TopBar } from './components/TopBar.js';
 import { Watchlist } from './components/Watchlist.js';
@@ -24,13 +25,15 @@ import type { Tab } from './types.js';
 // pulling in react-router. Routes: `#/` (default), `#/settings`,
 // `#/brief/:symbol` (full Orchestrator briefing pipeline, issue #139),
 // `#/plan/:symbol` (OptionsStrategist trade-plan view, issue #113),
-// `#/options/:symbol` (options chain explorer).
+// `#/options/:symbol` (options chain explorer), `#/ticker/:symbol` (full
+// chart route with overlays/RSI/MACD, issue #2).
 type Route =
   | { kind: 'home' }
   | { kind: 'settings' }
   | { kind: 'brief'; symbol: string }
   | { kind: 'plan'; symbol: string }
   | { kind: 'options'; symbol: string }
+  | { kind: 'ticker'; symbol: string }
   | { kind: 'watchlist' };
 
 export function parseRoute(hash: string): Route {
@@ -44,6 +47,9 @@ export function parseRoute(hash: string): Route {
   const optionsMatch = raw.match(/^options\/([^/?#]+)/);
   if (optionsMatch)
     return { kind: 'options', symbol: decodeURIComponent(optionsMatch[1]!).toUpperCase() };
+  const tickerMatch = raw.match(/^ticker\/([^/?#]+)/);
+  if (tickerMatch)
+    return { kind: 'ticker', symbol: decodeURIComponent(tickerMatch[1]!).toUpperCase() };
   return { kind: 'home' };
 }
 
@@ -53,7 +59,8 @@ type NavTarget =
   | 'watchlist'
   | { kind: 'brief'; symbol: string }
   | { kind: 'plan'; symbol: string }
-  | { kind: 'options'; symbol: string };
+  | { kind: 'options'; symbol: string }
+  | { kind: 'ticker'; symbol: string };
 
 export function useHashRoute(): [Route, (r: NavTarget) => void] {
   const [route, setRoute] = useState<Route>(() =>
@@ -77,6 +84,8 @@ export function useHashRoute(): [Route, (r: NavTarget) => void] {
       window.location.hash = `#/plan/${encodeURIComponent(r.symbol)}`;
     } else if (r.kind === 'options') {
       window.location.hash = `#/options/${encodeURIComponent(r.symbol)}`;
+    } else if (r.kind === 'ticker') {
+      window.location.hash = `#/ticker/${encodeURIComponent(r.symbol)}`;
     } else {
       window.location.hash = `#/brief/${encodeURIComponent(r.symbol)}`;
     }
@@ -123,6 +132,9 @@ export function App(): JSX.Element {
   }
   if (route.kind === 'options') {
     return <Options symbol={route.symbol} onClose={() => navigate('home')} />;
+  }
+  if (route.kind === 'ticker') {
+    return <TickerRoute symbol={route.symbol} demo={demo} onClose={() => navigate('home')} />;
   }
 
   return (
