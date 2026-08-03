@@ -24,6 +24,7 @@ import { MainMenu } from './menu.js';
 import { PlanScreen } from './plan.js';
 import { QuoteScreen } from './quote.js';
 import { TechScreen } from './tech.js';
+import { NewsScreen } from './news.js';
 import { ListScreen } from './watchlist.js';
 
 vi.mock('../api.js', () => ({
@@ -109,6 +110,26 @@ const techFixture: BriefingTechnical = {
   disclaimer: 'Not financial advice.',
 };
 
+const newsFixture = {
+  symbol: 'NVDA',
+  asOf: '2026-08-01T00:00:00.000Z',
+  summary: 'Coverage skews bullish into earnings.',
+  headlines: [
+    {
+      id: 'h1',
+      title: 'NVIDIA raises guidance',
+      url: 'https://example.com/nvda-news',
+      source: 'Reuters',
+      publishedAt: '2026-08-01T00:00:00.000Z',
+      relevance: 5,
+      materiality: 5,
+      rationale: 'Direct outlook update.',
+    },
+  ],
+  sourcesUsed: ['https://example.com/nvda-news'],
+  disclaimer: 'Not financial advice.',
+};
+
 const plansFixture: PlansResponse = {
   plans: [
     {
@@ -190,6 +211,9 @@ describe('CLI screens smoke + interactions (#157)', () => {
       }
       if (typeof path === 'string' && path.startsWith('/technician/')) {
         return techFixture;
+      }
+      if (typeof path === 'string' && path.startsWith('/news/')) {
+        return newsFixture;
       }
       if (path === '/tickers') {
         return { entries: watchlistEntries };
@@ -335,6 +359,18 @@ describe('CLI screens smoke + interactions (#157)', () => {
       expect(app.lastFrame()).toContain('Technician · NVDA');
       expect(app.lastFrame()).toContain('Momentum:');
       expect(app.lastFrame()).toContain('Commentary');
+    });
+
+    app.unmount();
+  });
+
+  it('smoke: news screen renders ranked headlines and disclaimer', async () => {
+    const app = render(<NewsScreen symbol="NVDA" serverUrl={SERVER_URL} onDone={() => {}} />);
+
+    await vi.waitFor(() => {
+      expect(app.lastFrame()).toContain('NewsScout · NVDA');
+      expect(app.lastFrame()).toContain('NVIDIA raises guidance');
+      expect(app.lastFrame()).toContain('Not financial advice');
     });
 
     app.unmount();

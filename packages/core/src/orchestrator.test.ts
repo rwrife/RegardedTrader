@@ -362,12 +362,9 @@ describe('Orchestrator.briefing (#126)', () => {
    * candidates” and keeps the analyst/technician sections intact.
    */
   it('surfaces a strategist parseError on the briefing when the LLM reply is unparseable', async () => {
-    let call = 0;
     const llm: LLM = {
-      async complete() {
-        call += 1;
-        // First call = Analyst (valid), second call = Strategist (junk).
-        if (call === 1) {
+      async complete({ system }) {
+        if (/equity research analyst/i.test(system)) {
           return JSON.stringify({
             bullCase: 'bull',
             bearCase: 'bear',

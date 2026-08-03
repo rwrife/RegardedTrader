@@ -27,6 +27,10 @@ export function buildUserPrompt(input: AnalystUserPromptInput): string {
   catalysts (string[], up to 5),
   risks (string[], up to 5).
 
+If provided headlines include an \`id\` field (e.g. "h1"), cite relevant IDs
+inline inside bullCase/bearCase/catalysts/risks like "[h1]" so downstream
+surfaces can trace each claim.
+
 Data:
 ${JSON.stringify(input, null, 2)}`;
 }

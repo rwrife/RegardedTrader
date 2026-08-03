@@ -152,6 +152,7 @@ describe('POST /tickers/validate', () => {
             risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
             server: { host: '127.0.0.1', port: 4317 },
             marketData: { providers: {}, activeProvider: null },
+            polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
           },
           llmFromConfig: () => null,
           paperStore: new PaperStore({ homeDir: dir }),
@@ -367,6 +368,68 @@ describe('POST /tickers/validate', () => {
       body: JSON.stringify({ symbols: ['NVDA'] }),
     });
     expect(r.status).toBe(503);
+  });
+});
+
+describe('GET /news/:symbol', () => {
+  it('returns a scored headline bundle for known symbols', async () => {
+    const knownProfile = {
+      symbol: 'NVDA',
+      name: 'NVIDIA Corporation',
+      exchange: 'NASDAQ',
+      sector: 'Technology',
+      industry: 'Semiconductors',
+      description: 'Designs GPUs and AI chips.',
+      sources: ['https://example.com/nvda'],
+      validatedAt: '2026-08-03T00:00:00.000Z',
+    };
+    const watchlist = new WatchlistStore({ path: join(dir, 'watchlist.json') });
+    await watchlist.upsert(knownProfile);
+    const { app } = createApp({
+      market: {
+        quote: async () => ({ symbol: 'NVDA', price: 0, change: 0, changePercent: 0, volume: 0, asOf: '' }),
+        history: async () => [],
+        news: async () => [
+          {
+            title: 'NVIDIA raises guidance',
+            url: 'https://example.com/nvda-guide',
+            source: 'Reuters',
+            publishedAt: '2026-08-03T08:00:00.000Z',
+          },
+        ],
+        optionsChain: async () => [],
+      },
+      webSearch: fakeWebSearch(),
+      watchlist,
+      initialConfig: {
+        version: 1,
+        providers: { fake: { kind: 'openai-compatible', label: 'fake', baseUrl: 'http://x/v1', model: 'm' } },
+        activeProvider: 'fake',
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
+        server: { host: '127.0.0.1', port: 4317 },
+        marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
+      },
+      llmFromConfig: () =>
+        fakeLLM({
+          summary: 'Guide raise is material for near-term setup.',
+          headlines: [{ id: 'h1', relevance: 5, materiality: 5, rationale: 'Direct fundamental update.' }],
+        }),
+    });
+    baseUrl = await listen(app);
+    const r = await fetch(`${baseUrl}/news/NVDA`);
+    expect(r.status).toBe(200);
+    const j = (await r.json()) as {
+      symbol: string;
+      summary: string;
+      headlines: Array<{ id: string; relevance: number }>;
+      disclaimer: string;
+    };
+    expect(j.symbol).toBe('NVDA');
+    expect(j.summary).toMatch(/material/i);
+    expect(j.headlines[0]?.id).toBe('h1');
+    expect(j.headlines[0]?.relevance).toBe(5);
+    expect(j.disclaimer).toMatch(/Not financial advice/i);
   });
 });
 
@@ -1399,6 +1462,3 @@ describe('Config routes coverage (#105)', () => {
     expect(badHost.status).toBe(400);
   });
 });
-
-
-

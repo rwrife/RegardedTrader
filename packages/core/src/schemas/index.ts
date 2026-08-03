@@ -10,6 +10,12 @@ export {
   type ContextBudgetSectionChars,
   type ContextBudgetTelemetry,
 } from './context-budget.js';
+export {
+  HeadlineBundle,
+  ScoredHeadline,
+  NewsScoutOutputSchema,
+} from './news.js';
+export type { HeadlineBundle as HeadlineBundleT, NewsScoutOutput } from './news.js';
 
 export const Ticker = z.string().regex(/^[A-Z.\-]{1,10}$/);
 export type Ticker = z.infer<typeof Ticker>;
@@ -99,6 +105,7 @@ export const Indicators = z.object({
 export type Indicators = z.infer<typeof Indicators>;
 
 export const NewsItem = z.object({
+  id: z.string().optional(),
   title: z.string(),
   url: z.string().url(),
   source: z.string(),

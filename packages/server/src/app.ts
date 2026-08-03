@@ -6,6 +6,7 @@ import { logger } from './logging.js';
 import {
   Orchestrator,
   Technician,
+  NewsScout,
   YahooClient,
   Ticker,
   QuoteSchema,
@@ -151,9 +152,9 @@ export function createApp(deps: AppDeps): AppHandle {
         accountSizeUsd: cfg.risk.accountSizeUsd,
         maxPctOfAccount: cfg.risk.maxPctOfAccount,
       },
-      // Wire the Technician agent (issue #74) by default so /briefing
-      // includes a TA section whenever an LLM is configured.
-      { technician: new Technician(llm) },
+      // Wire optional agents by default so /briefing includes TA + ranked
+      // headline context whenever an LLM is configured.
+      { technician: new Technician(llm), newsScout: new NewsScout(llm) },
       { briefings },
     );
   }
@@ -1060,6 +1061,26 @@ export function createApp(deps: AppDeps): AppHandle {
         symbol,
         items: await briefings.listBriefings(symbol, limit),
       });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // NewsScout endpoint (issue #75). Returns ranked traditional headlines with
+  // model-assigned relevance/materiality scores, shared by CLI + web.
+  app.get('/news/:symbol', async (req, res, next) => {
+    try {
+      const llm = deps.llmFromConfig(cfg);
+      if (!llm) {
+        res.status(503).json({ error: 'AI provider not configured' });
+        return;
+      }
+      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+      const known = await requireKnownSymbol(res, symbol);
+      if (!known) return;
+      const news = await registry.client.news(symbol).catch(() => []);
+      const scout = new NewsScout(llm);
+      res.json(await scout.bundle({ symbol, news }));
     } catch (e) {
       next(e);
     }
