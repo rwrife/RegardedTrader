@@ -1501,6 +1501,10 @@ export function createApp(deps: AppDeps): AppHandle {
           ),
           kind: ev.kind,
           title: ev.title,
+          startUtc: ev.startUtc,
+          endUtc: ev.endUtc,
+          details: ev.details ?? null,
+          sources: ev.sources,
         }));
       emitCalendarUpdate({ reason: 'read-refresh', status: calendar.status() });
       res.json({ today: fromEt, events });

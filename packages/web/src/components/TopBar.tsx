@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { MarketPill } from './MarketPill.js';
+import { formatEventTimeLabel } from '../calendar-format.js';
 
 /**
  * Minimal client-side shape of `GET /version` (issue #179). We deliberately
@@ -14,6 +15,82 @@ interface ServerVersionPayload {
   node: string;
   api: number;
   startedAt: string;
+}
+
+interface UpcomingEvent {
+  dateOffset: number;
+  kind: string;
+  title: string;
+  details?: { closeTimeEt?: string } | null;
+  startUtc?: string;
+}
+
+interface CalendarStatusPayload {
+  stale?: boolean;
+  marketState?: string;
+}
+
+interface MarketPillState {
+  label: string;
+  note?: string;
+  mutedNote?: boolean;
+  stale: boolean;
+}
+
+const LOCAL_CLOCK = new Intl.DateTimeFormat(undefined, {
+  hour: 'numeric',
+  minute: '2-digit',
+});
+const ET_CLOCK = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  hour: 'numeric',
+  minute: '2-digit',
+  hour12: true,
+});
+
+function mapMarketStateLabel(raw: string | undefined): string {
+  switch (raw) {
+    case 'rth':
+      return 'Open';
+    case 'pre':
+      return 'Pre-market';
+    case 'post':
+      return 'After-hours';
+    case 'holiday':
+      return 'Holiday';
+    case 'closed':
+      return 'Closed';
+    default:
+      return 'Open';
+  }
+}
+
+function toMarketPillState(
+  events: ReadonlyArray<UpcomingEvent>,
+  status: CalendarStatusPayload,
+): MarketPillState {
+  const today = events.find((ev) => ev.dateOffset === 0);
+  if (today?.kind === 'market_holiday') {
+    return {
+      label: mapMarketStateLabel(status.marketState),
+      note: today.title,
+      mutedNote: true,
+      stale: Boolean(status.stale),
+    };
+  }
+  if (today?.kind === 'market_early_close') {
+    const closeEt = today.details?.closeTimeEt ?? '13:00';
+    return {
+      label: mapMarketStateLabel(status.marketState),
+      note: `Early close ${closeEt} ET`,
+      mutedNote: false,
+      stale: Boolean(status.stale),
+    };
+  }
+  return {
+    label: mapMarketStateLabel(status.marketState),
+    stale: Boolean(status.stale),
+  };
 }
 
 /**
@@ -63,6 +140,41 @@ function useServerVersion(): { label: string; title: string | undefined } {
   return state;
 }
 
+function useMarketPill(): MarketPillState {
+  const [state, setState] = useState<MarketPillState>({
+    label: 'Open',
+    note: undefined,
+    mutedNote: false,
+    stale: false,
+  });
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [upcomingRes, statusRes] = await Promise.all([
+          fetch('/calendar/upcoming?days=1'),
+          fetch('/calendar/status'),
+        ]);
+        if (!upcomingRes.ok || !statusRes.ok) throw new Error('calendar unavailable');
+        const upcomingRaw = (await upcomingRes.json()) as unknown;
+        const statusRaw = (await statusRes.json()) as unknown;
+        const events = Array.isArray((upcomingRaw as { events?: unknown }).events)
+          ? ((upcomingRaw as { events: UpcomingEvent[] }).events ?? [])
+          : [];
+        const status: CalendarStatusPayload =
+          statusRaw && typeof statusRaw === 'object' ? (statusRaw as CalendarStatusPayload) : {};
+        if (!cancelled) setState(toMarketPillState(events, status));
+      } catch {
+        // Keep default view model when calendar read fails.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return state;
+}
+
 /**
  * Thin status bar at the top of the dashboard. Shows the local server
  * address, market state, demo-mode badge, current UTC time, and a settings
@@ -82,6 +194,10 @@ export function TopBar({
   onOpenPaper?: () => void;
 }): JSX.Element {
   const version = useServerVersion();
+  const market = useMarketPill();
+  const now = new Date();
+  const localClock = LOCAL_CLOCK.format(now);
+  const etClock = `${ET_CLOCK.format(now)} ET`;
   return (
     <header className="border-b border-border-subtle bg-surface">
       <div className="max-w-7xl mx-auto px-6 h-12 flex items-center gap-4 text-xs">
@@ -92,7 +208,12 @@ export function TopBar({
         <span className="text-fg-muted">·</span>
         <span className="num text-fg-secondary">local · 127.0.0.1:4317</span>
         <span className="text-fg-muted">·</span>
-        <MarketPill />
+        <MarketPill
+          label={market.label}
+          note={market.note}
+          mutedNote={market.mutedNote}
+          stale={market.stale}
+        />
         <span
           data-testid="version-chip"
           title={version.title}
@@ -106,7 +227,12 @@ export function TopBar({
           </span>
         )}
         <div className="ml-auto flex items-center gap-3 text-fg-muted">
-          <span className="num">{new Date().toUTCString().slice(17, 25)} UTC</span>
+          <span
+            className="num"
+            title={`${formatEventTimeLabel(now.toISOString()).etLabel} · market now ${etClock}`}
+          >
+            {localClock}
+          </span>
           {onOpenWatchlist && (
             <button
               type="button"
