@@ -53,8 +53,8 @@ export interface SampleVerdict {
   action: 'BUY' | 'HOLD' | 'SELL' | 'AVOID';
   conviction: number;
   rationale: string;
-  signals: { name: string; value: string; contribution: number }[];
-  contraSignals: { name: string; value: string; contribution: number }[];
+  signals: { name: string; value: string | number; contribution: number }[];
+  contraSignals: { name: string; value: string | number; contribution: number }[];
 }
 
 export interface SampleRecommendation {

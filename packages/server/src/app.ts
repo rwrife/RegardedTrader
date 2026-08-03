@@ -34,6 +34,13 @@ import {
   DuckDuckGoSearch,
   computeIndicators,
   MentionStore,
+  SnapshotStore,
+  Recommendation,
+  RecommendationStore,
+  AIRecommender,
+  RecommenderOrchestrator,
+  buildRecommendationContext,
+  hardGatesRule,
   SentimentSource,
   SentimentSnapshot,
   EventKind,
@@ -41,6 +48,7 @@ import {
   type ScoredMention,
   type WebSearch,
   type LLM,
+  type Recommendation as RecommendationValue,
   type AppConfig as AppConfigT,
   type AiProvider as AiProviderT,
   type WatchlistEntry,
@@ -107,6 +115,15 @@ export interface AppDeps {
     quoteEveryMs?: number;
     newsEveryMs?: number;
   };
+  /** Optional injectable snapshot store (tests). */
+  snapshots?: SnapshotStore;
+  /** Optional injectable recommendation store (tests). */
+  recommendations?: RecommendationStore;
+  /**
+   * Optional recompute hook override (tests). When omitted, createApp wires
+   * the in-process recommender pipeline from core.
+   */
+  recomputeRecommendation?: (symbol: string) => Promise<RecommendationValue>;
   /**
    * Optional runtime auth gate for dashboard sessions (#18). Tests and
    * internal dev mode can omit this to keep the app unauthenticated.
@@ -127,6 +144,7 @@ export interface AppHandle {
   /** Currently-active config (mutated by /config endpoints). Read for tests. */
   getConfig: () => AppConfigT;
   emitSentimentUpdate: (symbol: string, snapshot: SentimentSnapshot | null) => void;
+  emitRecommendationUpdate: (symbol: string, recommendation: RecommendationValue) => void;
 }
 
 /**
@@ -139,6 +157,10 @@ export function createApp(deps: AppDeps): AppHandle {
   const mentionStore = deps.mentions ?? new MentionStore();
   const authToken = process.env.REGARDEDTRADER_AUTH_TOKEN?.trim() || null;
   const briefings = deps.briefings ?? new BriefingStore();
+  const snapshotStore =
+    deps.snapshots ?? new SnapshotStore({ root: mentionStore.rootDir });
+  const recommendationStore =
+    deps.recommendations ?? new RecommendationStore({ root: mentionStore.rootDir });
 
   // --- Market data registry (#91) ---
   // Rebuilt whenever the marketData config changes so route handlers always
@@ -180,6 +202,93 @@ export function createApp(deps: AppDeps): AppHandle {
     );
   }
 
+  function activeProviderModel(config: AppConfigT): {
+    provider: string;
+    model: string;
+  } {
+    const activeId = config.activeProvider;
+    if (!activeId) return { provider: 'unconfigured', model: 'unconfigured' };
+    const provider = config.providers[activeId];
+    if (!provider) return { provider: activeId, model: 'unknown' };
+    const model =
+      provider.kind === 'openai-compatible'
+        ? provider.model
+        : provider.model ?? provider.backend;
+    return { provider: activeId, model };
+  }
+
+  function gatherRecommendationSources(
+    context: Awaited<ReturnType<typeof buildRecommendationContext>>,
+  ): Array<{ name: string; url: string }> {
+    const out = new Map<string, { name: string; url: string }>();
+    for (const item of context.news?.items ?? []) {
+      const entry = { name: item.source || 'news', url: item.url };
+      if (entry.url) out.set(entry.url, entry);
+    }
+    for (const item of context.opinions?.items ?? []) {
+      if (!item.url) continue;
+      const entry = { name: item.source || 'opinion', url: item.url };
+      out.set(entry.url, entry);
+    }
+    return Array.from(out.values());
+  }
+
+  function makeRecommendationOrchestrator(): RecommenderOrchestrator | null {
+    const llm = deps.llmFromConfig(cfg);
+    if (!llm) return null;
+    const ai = new AIRecommender(llm);
+    const snapshots = {
+      async readLatest(symbol: string) {
+        const latest = await snapshotStore.readLatest(symbol);
+        const entries = Object.fromEntries(
+          Object.entries(latest.entries ?? {}).map(([k, v]) => [
+            k,
+            { ts: v.ts, data: v.data ?? null },
+          ]),
+        );
+        return { ...latest, entries };
+      },
+      async *readRange(
+        symbol: string,
+        kind: 'quote' | 'options' | 'news',
+        since?: Date,
+        until?: Date,
+      ) {
+        for await (const entry of snapshotStore.readRange(symbol, kind, since, until)) {
+          yield { ts: entry.ts, data: entry.data ?? null };
+        }
+      },
+    };
+    return new RecommenderOrchestrator({
+      recommender: ai,
+      store: recommendationStore,
+      buildContext: async (symbol) =>
+        buildRecommendationContext({
+          symbol,
+          snapshots,
+          mentions: mentionStore,
+          forbidNakedShorts: cfg.risk.forbidNakedShorts,
+          maxLossUsd: cfg.risk.maxLossUsd,
+        }),
+      stampFor: (context) => {
+        const p = activeProviderModel(cfg);
+        const sources = gatherRecommendationSources(context);
+        return {
+          asOf: {
+            quote: context.quote.asOf ?? new Date(0).toISOString(),
+            options: context.options?.asOf ?? null,
+            sentiment: context.sentiment?.asOf ?? null,
+            news: context.news?.asOf ?? null,
+          },
+          sources,
+          modelInfo: { provider: p.provider, model: p.model },
+        };
+      },
+      rules: [hardGatesRule],
+      onEvent: (e) => emitRecommendationUpdate(e.symbol, e.recommendation),
+    });
+  }
+
   let orchestrator = makeOrchestrator();
   const polling = new PollingCoordinator(
     deps.watchlist,
@@ -190,6 +299,11 @@ export function createApp(deps: AppDeps): AppHandle {
     },
   );
   polling.start();
+  let recommendationOrchestrator = makeRecommendationOrchestrator();
+  function refreshOrchestrators(): void {
+    orchestrator = makeOrchestrator();
+    recommendationOrchestrator = makeRecommendationOrchestrator();
+  }
   const paperStore = deps.paperStore ?? new PaperStore();
   function makePaperBroker(): PaperBroker {
     return new PaperBroker({ market: registry.client, store: paperStore });
@@ -265,6 +379,13 @@ export function createApp(deps: AppDeps): AppHandle {
     id: string;
     at: string;
   };
+  type RecommendationSsePayload = {
+    type: 'recommendation.update';
+    symbol: string;
+    recommendation: RecommendationValue;
+    id: string;
+    at: string;
+  };
   const sseClients = new Set<express.Response>();
   let calendarRefreshFlight: Promise<CalendarRefreshResponse> | null = null;
 
@@ -306,6 +427,18 @@ export function createApp(deps: AppDeps): AppHandle {
       status: update.status,
     };
     const frame = `event: calendar.update\ndata: ${JSON.stringify(payload)}\n\n`;
+    for (const client of sseClients) client.write(frame);
+  }
+
+  function emitRecommendationUpdate(symbol: string, recommendation: RecommendationValue): void {
+    const payload: RecommendationSsePayload = {
+      type: 'recommendation.update',
+      symbol,
+      recommendation,
+      id: randomUUID(),
+      at: new Date().toISOString(),
+    };
+    const frame = `event: recommendation.update\ndata: ${JSON.stringify(payload)}\n\n`;
     for (const client of sseClients) client.write(frame);
   }
 
@@ -1403,6 +1536,97 @@ export function createApp(deps: AppDeps): AppHandle {
     return entry;
   }
 
+  function requireRecommendationOrchestrator(
+    res: express.Response,
+  ): RecommenderOrchestrator | null {
+    if (!recommendationOrchestrator && !deps.recomputeRecommendation) {
+      res.status(503).json({
+        error: 'AI provider not configured',
+        hint: 'Run `regard config` (CLI) or open Settings in the dashboard.',
+      });
+      return null;
+    }
+    return recommendationOrchestrator;
+  }
+
+  const RecommendationHistoryQuery = z.object({
+    days: z.coerce.number().int().min(1).max(365).optional().default(30),
+  });
+
+  app.get('/recommendations/:symbol/latest', requireDashboardToken, async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
+      const latest = await recommendationStore.readLatest(symbol);
+      if (!latest) {
+        res.status(404).json({ error: `No recommendation found for ${symbol}.` });
+        return;
+      }
+      res.json(Recommendation.parse(latest));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/recommendations/:symbol', requireDashboardToken, async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
+      const q = RecommendationHistoryQuery.parse(req.query);
+      const now = new Date();
+      const since = new Date(now.getTime() - q.days * 24 * 60 * 60 * 1000);
+      const items: RecommendationValue[] = [];
+      for await (const rec of recommendationStore.readRange(symbol, since, now)) {
+        items.push(Recommendation.parse(rec));
+      }
+      items.sort((a, b) => Date.parse(a.generatedAt) - Date.parse(b.generatedAt));
+      res.json({ symbol, items });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.post('/recommendations/:symbol/recompute', requireDashboardToken, async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
+      const known = await requireKnownSymbol(res, symbol);
+      if (!known) return;
+      const custom = deps.recomputeRecommendation;
+      if (custom) {
+        const rec = Recommendation.parse(await custom(symbol));
+        emitRecommendationUpdate(symbol, rec);
+        res.json({ ok: true, symbol, recommendation: rec, persisted: true });
+        return;
+      }
+      const runner = requireRecommendationOrchestrator(res);
+      if (!runner) return;
+      const out = await runner.runOnce(symbol);
+      if (out.status === 'skipped') {
+        const latest = await recommendationStore.readLatest(symbol);
+        if (!latest) {
+          res.status(409).json({
+            error: `Recommendation recompute for ${symbol} is already running.`,
+          });
+          return;
+        }
+        res.json({
+          ok: true,
+          symbol,
+          recommendation: Recommendation.parse(latest),
+          persisted: false,
+          skipped: true,
+        });
+        return;
+      }
+      res.json({
+        ok: true,
+        symbol,
+        recommendation: Recommendation.parse(out.recommendation),
+        persisted: out.persisted,
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
   // Technician agent surface (issue #74). Standalone endpoint so the CLI
   // `regard tech <SYM>` and the web `Chart` tab can render TA commentary
   // without rerunning the full briefing pipeline.
@@ -1672,7 +1896,7 @@ export function createApp(deps: AppDeps): AppHandle {
       const next = AppConfig.parse(req.body);
       await saveConfig(next);
       cfg = next;
-      orchestrator = makeOrchestrator();
+      refreshOrchestrators();
       rebuildRegistry();
       res.json({ ok: true, aiConfigured: orchestrator !== null, config: redactConfig(cfg) });
     } catch (e) {
@@ -1689,7 +1913,7 @@ export function createApp(deps: AppDeps): AppHandle {
       const risk = RiskConfig.parse(req.body);
       cfg.risk = risk;
       await saveConfig(cfg);
-      orchestrator = makeOrchestrator();
+      refreshOrchestrators();
       res.json({ ok: true, aiConfigured: orchestrator !== null, config: redactConfig(cfg) });
     } catch (e) {
       next(e);
@@ -1831,7 +2055,7 @@ export function createApp(deps: AppDeps): AppHandle {
       cfg.providers[id] = provider;
       cfg.activeProvider = id;
       await saveConfig(cfg);
-      orchestrator = makeOrchestrator();
+      refreshOrchestrators();
       res.json({ ok: true, aiConfigured: orchestrator !== null, config: redactConfig(cfg) });
     } catch (e) {
       next(e);
@@ -1848,7 +2072,7 @@ export function createApp(deps: AppDeps): AppHandle {
       delete cfg.providers[id];
       if (cfg.activeProvider === id) cfg.activeProvider = null;
       await saveConfig(cfg);
-      orchestrator = makeOrchestrator();
+      refreshOrchestrators();
       res.json({ ok: true, aiConfigured: orchestrator !== null, config: redactConfig(cfg) });
     } catch (e) {
       next(e);
@@ -1866,7 +2090,7 @@ export function createApp(deps: AppDeps): AppHandle {
       }
       cfg.activeProvider = id;
       await saveConfig(cfg);
-      orchestrator = makeOrchestrator();
+      refreshOrchestrators();
       res.json({ ok: true, aiConfigured: orchestrator !== null, config: redactConfig(cfg) });
     } catch (e) {
       next(e);
@@ -2001,7 +2225,7 @@ export function createApp(deps: AppDeps): AppHandle {
     },
   );
 
-  return { app, getConfig: () => cfg, emitSentimentUpdate };
+  return { app, getConfig: () => cfg, emitSentimentUpdate, emitRecommendationUpdate };
 }
 
 function makePlanId(symbol: string, index: number): string {

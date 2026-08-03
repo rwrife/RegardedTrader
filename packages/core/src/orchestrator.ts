@@ -35,6 +35,7 @@ export interface BriefingOptions {
   thesis?: string;
   maxLossUsd?: number;
   expiry?: string;
+  /** Optional pre-fetched sentiment snapshot injected by the server route. */
   sentimentSnapshot?: SentimentSnapshot;
   nextEarnings?: {
     date: string;
