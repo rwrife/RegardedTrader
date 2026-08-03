@@ -25,6 +25,12 @@ export interface AnalystUserPromptInput {
   indicators: Indicators;
   news: NewsItem[];
   sentiment?: SentimentSnapshot;
+  nextEarnings?: {
+    date: string;
+    daysUntil: number;
+    title?: string;
+    startUtc?: string;
+  };
 }
 
 export function buildUserPrompt(input: AnalystUserPromptInput): string {
@@ -50,6 +56,12 @@ If provided headlines include an \`id\` field (e.g. "h1"), cite relevant IDs
 inline inside bullCase/bearCase/catalysts/risks like "[h1]" so downstream
 surfaces can trace each claim.
 ${sentimentBlock}
+
+If \`nextEarnings\` is present:
+- when \`nextEarnings.daysUntil <= 7\`, explicitly treat speculative options
+  setups as elevated event risk and recommend avoiding new options exposure.
+- when \`nextEarnings.daysUntil <= 1\`, explicitly call out potential IV crush
+  risk in the \`risks\` list.
 
 Data:
 ${JSON.stringify(input, null, 2)}`;

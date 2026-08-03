@@ -43,6 +43,7 @@ import type {
   ContextSentimentSparkPoint,
   RecommendationContext,
 } from './rules/index.js';
+import type { EventKind } from '../schemas/calendar.js';
 import type {
   MentionItem,
   ScoredMention,
@@ -134,6 +135,20 @@ export interface MentionReader {
   ): AsyncIterable<SentimentSnapshot>;
 }
 
+/**
+ * Narrow calendar-reader port used to surface near-term earnings context
+ * into recommendations/briefings without coupling to CalendarStore.
+ */
+export interface CalendarReader {
+  nextEvent(
+    symbol?: string | null,
+    query?: {
+      fromUtc?: string;
+      kinds?: ReadonlyArray<EventKind>;
+    },
+  ): Promise<{ kind: EventKind; startUtc: string; title: string } | null>;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Public options                                                             */
 /* -------------------------------------------------------------------------- */
@@ -142,6 +157,8 @@ export interface BuildContextOptions {
   readonly symbol: string;
   readonly snapshots: SnapshotReader;
   readonly mentions?: MentionReader;
+  /** Optional calendar reader for near-term earnings context. */
+  readonly calendar?: CalendarReader;
   /** Mirrors `AppConfig.risk.forbidNakedShorts`. Default `false`. */
   readonly forbidNakedShorts?: boolean;
   /** Optional risk cap propagated for safety-copy clamping in recommendations. */
@@ -268,6 +285,10 @@ export async function buildRecommendationContext(
       )
     : null;
 
+  const nextEarnings = opts.calendar
+    ? await buildNextEarnings(opts.calendar, symbol, now)
+    : undefined;
+
   const opinions = opts.mentions
     ? await buildOpinionsSection(
         opts.mentions,
@@ -328,6 +349,7 @@ export async function buildRecommendationContext(
     sentiment: budgetReport.sentiment,
     news: budgetReport.news,
     opinions: budgetReport.opinions,
+    ...(nextEarnings ? { nextEarnings } : {}),
     budget: budgetReport.report,
     truncated,
   };
@@ -681,6 +703,28 @@ async function buildOpinionsSection(
     asOf,
     stale: isStale(asOf, now, cadenceMs * 2),
     items,
+  };
+}
+
+async function buildNextEarnings(
+  calendar: CalendarReader,
+  symbol: string,
+  now: Date,
+): Promise<RecommendationContext['nextEarnings']> {
+  const event = await calendar.nextEvent(symbol, {
+    fromUtc: now.toISOString(),
+    kinds: ['earnings'],
+  });
+  if (!event || event.kind !== 'earnings') return undefined;
+  const startMs = Date.parse(event.startUtc);
+  if (!Number.isFinite(startMs)) return undefined;
+  const daysUntil = Math.floor((startMs - now.getTime()) / (24 * 60 * 60 * 1000));
+  if (daysUntil < 0 || daysUntil > 14) return undefined;
+  return {
+    date: event.startUtc.slice(0, 10),
+    startUtc: event.startUtc,
+    title: event.title,
+    daysUntil,
   };
 }
 

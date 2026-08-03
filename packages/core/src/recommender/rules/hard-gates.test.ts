@@ -246,6 +246,59 @@ describe('HardGates', () => {
     expect(out.riskFlags).toContain(HARD_GATE_FLAGS.lowConfidence);
   });
 
+  it('downgrades naked call/put to AVOID and flags when earnings are within 7d', () => {
+    const out = new HardGates().apply(
+      ctx({
+        nextEarnings: {
+          date: '2026-06-14',
+          startUtc: '2026-06-14T20:00:00.000Z',
+          title: 'NVDA earnings',
+          daysUntil: 7,
+        },
+      }),
+      rec({
+        options: {
+          coveredCall: v({ action: 'BUY', conviction: 0.6 }),
+          coveredPut: v({ action: 'BUY', conviction: 0.6 }),
+          nakedCall: v({ action: 'SELL', conviction: 0.8 }),
+          nakedPut: v({ action: 'SELL', conviction: 0.8 }),
+        },
+      }),
+    );
+    expect(out.options.nakedCall?.action).toBe('AVOID');
+    expect(out.options.nakedPut?.action).toBe('AVOID');
+    expect(out.options.coveredCall?.action).toBe('BUY');
+    expect(out.options.coveredPut?.action).toBe('BUY');
+    expect(out.riskFlags).toContain('earnings within 7d');
+  });
+
+  it('downgrades all options stances and adds iv-crush risk when earnings are <= 1d away', () => {
+    const out = new HardGates().apply(
+      ctx({
+        nextEarnings: {
+          date: '2026-06-08',
+          startUtc: '2026-06-08T20:00:00.000Z',
+          title: 'NVDA earnings',
+          daysUntil: 1,
+        },
+      }),
+      rec({
+        options: {
+          coveredCall: v({ action: 'BUY', conviction: 0.7 }),
+          coveredPut: v({ action: 'SELL', conviction: 0.7 }),
+          nakedCall: v({ action: 'SELL', conviction: 0.9 }),
+          nakedPut: v({ action: 'BUY', conviction: 0.9 }),
+        },
+      }),
+    );
+    expect(out.options.coveredCall?.action).toBe('AVOID');
+    expect(out.options.coveredPut?.action).toBe('AVOID');
+    expect(out.options.nakedCall?.action).toBe('AVOID');
+    expect(out.options.nakedPut?.action).toBe('AVOID');
+    expect(out.riskFlags).toContain('iv crush risk');
+    expect(out.riskFlags).toContain('earnings within 7d');
+  });
+
   it('produces output that re-validates against the Recommendation schema', () => {
     const out = new HardGates().apply(
       ctx({

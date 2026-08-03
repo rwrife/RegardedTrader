@@ -63,6 +63,11 @@ export interface RecommendationContext {
    * minimal rule-engine usage.
    */
   readonly options: ContextOptionsSection | null;
+  /**
+   * Upcoming earnings marker used by both prompt guardrails and hard gates.
+   * Present only when the next earnings event is within 14 days.
+   */
+  readonly nextEarnings?: ContextNextEarnings;
   /** Last 30d of daily OHLCV. `null` when no history was available. */
   readonly history?: ContextHistorySection | null;
   /** Indicators (RSI/MACD/SMA/EMA/ATR) computed from `history`. */
@@ -134,6 +139,17 @@ export interface ContextOptionsSection {
   readonly asOf?: string;
   readonly stale?: boolean;
   readonly expiries?: readonly ContextOptionsExpiryDigest[];
+}
+
+export interface ContextNextEarnings {
+  /** UTC `YYYY-MM-DD` date of the next earnings event. */
+  readonly date: string;
+  /** Full event timestamp, for display/audit surfaces. */
+  readonly startUtc: string;
+  /** Human-readable event title from calendar data. */
+  readonly title: string;
+  /** Whole days from "now" until `startUtc` (floor, non-negative). */
+  readonly daysUntil: number;
 }
 
 export interface ContextHistoryBar {

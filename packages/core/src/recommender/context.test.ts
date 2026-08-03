@@ -12,6 +12,7 @@ import type {
   ScoredMention,
   SentimentSnapshot,
 } from '../schemas/sentiment.js';
+import type { CalendarEvent } from '../schemas/calendar.js';
 
 /* -------------------------------------------------------------------------- */
 /* Fakes                                                                      */
@@ -93,6 +94,20 @@ function makeMentionReader(
         yield s;
       }
     },
+  };
+}
+
+function makeEarningsEvent(startUtc: string): CalendarEvent {
+  return {
+    id: `earn-${startUtc}`,
+    kind: 'earnings',
+    symbol: 'NVDA',
+    startUtc,
+    endUtc: startUtc,
+    allDay: false,
+    title: 'NVDA earnings',
+    sources: [{ name: 'Yahoo', url: 'https://finance.yahoo.com' }],
+    fetchedAt: NOW.toISOString(),
   };
 }
 
@@ -252,6 +267,45 @@ describe('buildRecommendationContext', () => {
     expect(ctx.options!.hasChain).toBe(true);
     expect(ctx.options!.expiries?.[0]?.atmIv).toBe(0.45);
     expect(ctx.options!.expiries?.[0]?.putCallRatio).toBe(0.8);
+  });
+
+  it('adds nextEarnings when the next earnings date is within 14 days', async () => {
+    const latest: ContextLatestSnapshot = {
+      symbol: 'NVDA',
+      updatedAt: NOW.toISOString(),
+      entries: {},
+    };
+    const ctx = await buildRecommendationContext({
+      symbol: 'NVDA',
+      snapshots: makeSnapshotReader(latest),
+      calendar: {
+        nextEvent: async () => makeEarningsEvent('2026-06-18T20:00:00.000Z'),
+      },
+      now,
+    });
+    expect(ctx.nextEarnings).toEqual({
+      date: '2026-06-18',
+      startUtc: '2026-06-18T20:00:00.000Z',
+      title: 'NVDA earnings',
+      daysUntil: 11,
+    });
+  });
+
+  it('omits nextEarnings when the next earnings date is more than 14 days out', async () => {
+    const latest: ContextLatestSnapshot = {
+      symbol: 'NVDA',
+      updatedAt: NOW.toISOString(),
+      entries: {},
+    };
+    const ctx = await buildRecommendationContext({
+      symbol: 'NVDA',
+      snapshots: makeSnapshotReader(latest),
+      calendar: {
+        nextEvent: async () => makeEarningsEvent('2026-06-25T20:00:00.000Z'),
+      },
+      now,
+    });
+    expect(ctx.nextEarnings).toBeUndefined();
   });
 
   it('marks options without a metrics block as no-chain', async () => {
