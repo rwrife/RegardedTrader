@@ -15,7 +15,9 @@ const cli = meow(
     add <SYM>...               Validate ticker(s) via web search + LLM and add to watchlist
     ls                         List validated tickers
     rm <SYM>                   Remove a ticker from the watchlist
-    watch <ls|add|rm> [SYM...] Managed watchlist surface (parity twin of /watchlist)
+    watch [SYMBOL...]          Open live tape stream (SSE): last/Δ/Δ%/RSI/headline
+    tail <SYMBOL>              Follow per-symbol news line-by-line (tail -F style)
+    polling <status|pause|resume> Polling subsystem controls
     paper <submit|orders|positions> Simulated paper-trading surface (no live orders)
     cal [--from=today] [--days=14]  Tiny calendar with holidays + watchlist earnings
     cal earnings <SYM> [--past] [--upcoming]  Per-symbol earnings table
@@ -44,6 +46,7 @@ const cli = meow(
     --upcoming                 (cal earnings) Include upcoming earnings events (default)
     --holidays                 (cal refresh) Refresh holidays source set
     --earnings                 (cal refresh) Refresh earnings source set
+    --quotes                   (tail) Include quote ticks in the tail stream
 
   Examples
     $ regard
@@ -69,6 +72,7 @@ const cli = meow(
       upcoming: { type: 'boolean', default: false },
       holidays: { type: 'boolean', default: false },
       earnings: { type: 'boolean', default: false },
+      quotes: { type: 'boolean', default: false },
       help: { type: 'boolean', shortFlag: 'h' },
     },
   },
@@ -100,6 +104,7 @@ if (!command) {
         upcoming: cli.flags.upcoming,
         holidays: cli.flags.holidays,
         earnings: cli.flags.earnings,
+        quotes: cli.flags.quotes,
       }}
     />,
   );
