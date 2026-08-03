@@ -7,6 +7,7 @@ import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import {
   BriefingStore,
+  CalendarStore,
   MentionStore,
   WatchlistStore,
   PaperStore,
@@ -632,6 +633,179 @@ describe('Sentiment routes + SSE (#39)', () => {
     };
     expect(healthJson.sentimentSources.reddit.lastSuccess).toBeTruthy();
     expect(healthJson.sentimentSources.reddit.lastError).toBeNull();
+  });
+});
+
+describe('Calendar endpoints + SSE (#62)', () => {
+  let prevToken: string | undefined;
+
+  beforeEach(() => {
+    prevToken = process.env.REGARDEDTRADER_AUTH_TOKEN;
+    process.env.REGARDEDTRADER_AUTH_TOKEN = 'dash-token-62';
+  });
+
+  afterEach(() => {
+    if (prevToken === undefined) delete process.env.REGARDEDTRADER_AUTH_TOKEN;
+    else process.env.REGARDEDTRADER_AUTH_TOKEN = prevToken;
+  });
+
+  async function makeCalendarApp() {
+    const watchlist = new WatchlistStore({ path: join(dir, 'watchlist.json') });
+    await watchlist.upsert({
+      symbol: 'NVDA',
+      name: 'NVIDIA Corporation',
+      exchange: 'NASDAQ',
+      sector: 'Technology',
+      industry: 'Semiconductors',
+      description: 'Designs GPUs and AI chips.',
+      sources: ['https://example.com/nvda'],
+      validatedAt: '2026-07-01T12:00:00.000Z',
+    });
+
+    const store = new CalendarStore({ root: join(dir, 'calendar'), staleMs: 7 * 24 * 60 * 60 * 1000 });
+    await store.upsertEvents([
+      {
+        id: 'holiday-1',
+        kind: 'market_holiday',
+        symbol: null,
+        startUtc: '2026-07-03T00:00:00.000Z',
+        endUtc: '2026-07-04T00:00:00.000Z',
+        allDay: true,
+        title: 'Independence Day (Observed)',
+        sources: [{ name: 'nyse', url: 'https://example.com/nyse' }],
+        fetchedAt: '2026-07-01T12:00:00.000Z',
+      },
+      {
+        id: 'earnings-1',
+        kind: 'earnings',
+        symbol: 'NVDA',
+        startUtc: '2026-07-10T20:00:00.000Z',
+        endUtc: '2026-07-10T20:30:00.000Z',
+        allDay: false,
+        title: 'NVDA earnings',
+        details: { when: 'amc', epsEstimate: 1.23 },
+        sources: [{ name: 'sec', url: 'https://example.com/sec' }],
+        fetchedAt: '2026-07-01T12:00:00.000Z',
+      },
+    ]);
+
+    const { CalendarService } = await import('./calendarService.js');
+    const calendar = new CalendarService({
+      store,
+      now: () => new Date('2026-07-01T12:00:00.000Z'),
+      minManualRefreshMs: 60_000,
+    });
+
+    calendar.maybeRefreshForRead = async () => {};
+    calendar.refreshManually = async () => ({
+      holidays: { ok: true, events: 1, staleSources: [], errors: [] },
+      earnings: { ok: true, events: 1, staleSources: [], errors: [] },
+    });
+
+    return createApp({
+      market: {
+        quote: async () => ({ symbol: 'NVDA', price: 0, change: 0, changePercent: 0, volume: 0, asOf: '' }),
+        history: async () => [],
+        news: async () => [],
+        optionsChain: async () => [],
+      },
+      webSearch: fakeWebSearch(),
+      watchlist,
+      calendar,
+      initialConfig: {
+        version: 1,
+        providers: {},
+        activeProvider: null,
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
+        server: { host: '127.0.0.1', port: 4317 },
+        marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
+      },
+      llmFromConfig: () => null,
+    });
+  }
+
+  it('exposes auth-gated calendar holiday/earnings/next endpoints and emits calendar.update SSE', async () => {
+    const { app } = await makeCalendarApp();
+    baseUrl = await listen(app);
+
+    const denied = await fetch(`${baseUrl}/calendar/holidays?from=2026-07-01&to=2026-07-15`);
+    expect(denied.status).toBe(401);
+
+    const holidays = await fetch(`${baseUrl}/calendar/holidays?from=2026-07-01&to=2026-07-15`, {
+      headers: { Authorization: 'dash-token-62' },
+    });
+    expect(holidays.status).toBe(200);
+    const holidaysJson = (await holidays.json()) as { events: Array<{ kind: string }> };
+    expect(holidaysJson.events).toHaveLength(1);
+    expect(holidaysJson.events[0]?.kind).toBe('market_holiday');
+
+    const earnings = await fetch(
+      `${baseUrl}/calendar/earnings?symbol=NVDA&from=2026-07-01&to=2026-07-31`,
+      { headers: { Authorization: 'dash-token-62' } },
+    );
+    expect(earnings.status).toBe(200);
+    const earningsJson = (await earnings.json()) as { symbol: string; events: Array<{ kind: string }> };
+    expect(earningsJson.symbol).toBe('NVDA');
+    expect(earningsJson.events).toHaveLength(1);
+    expect(earningsJson.events[0]?.kind).toBe('earnings');
+
+    const next = await fetch(`${baseUrl}/calendar/next?symbol=NVDA&kind=earnings&from=2026-07-01`, {
+      headers: { Authorization: 'dash-token-62' },
+    });
+    expect(next.status).toBe(200);
+    const nextJson = (await next.json()) as { event: { kind: string; symbol: string | null } | null };
+    expect(nextJson.event?.kind).toBe('earnings');
+    expect(nextJson.event?.symbol).toBe('NVDA');
+
+    const blockedRefresh = await fetch(`${baseUrl}/calendar/refresh`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'dash-token-62',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ holidays: true }),
+    });
+    expect(blockedRefresh.status).toBe(403);
+
+    const ac = new AbortController();
+    const sse = await fetch(`${baseUrl}/events?t=dash-token-62`, { signal: ac.signal });
+    expect(sse.status).toBe(200);
+
+    const refreshed = await fetch(`${baseUrl}/calendar/refresh`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'dash-token-62',
+        'x-regardedtrader-admin': 'true',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ holidays: true }),
+    });
+    expect(refreshed.status).toBe(200);
+
+    const reader = sse.body?.getReader();
+    expect(reader).toBeDefined();
+    const decoder = new TextDecoder();
+    let text = '';
+    const started = Date.now();
+    while (Date.now() - started < 1500 && !text.includes('event: calendar.update')) {
+      const chunk = await reader!.read();
+      if (chunk.done) break;
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    expect(text).toContain('event: calendar.update');
+    ac.abort();
+
+    const health = await fetch(`${baseUrl}/health`);
+    expect(health.status).toBe(200);
+    const healthJson = (await health.json()) as {
+      calendar: {
+        stale: boolean;
+        sources: { nyse: { lastSuccessAt: string | null; lastError: string | null } };
+      };
+    };
+    expect(typeof healthJson.calendar.stale).toBe('boolean');
+    expect(healthJson.calendar.sources.nyse).toBeDefined();
   });
 });
 
