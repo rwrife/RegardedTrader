@@ -41,6 +41,7 @@ import {
   RecommenderOrchestrator,
   buildRecommendationContext,
   hardGatesRule,
+  computeImpliedMoves,
   SentimentSource,
   SentimentSnapshot,
   EventKind,
@@ -60,6 +61,7 @@ import {
   TradePlan,
   type BriefingStorePort,
   type OHLCV,
+  OptionsChainResponse,
 } from '@regardedtrader/core';
 import { liveQuote, type LiveQuoteSource, type YahooQuoteLike } from './liveQuote.js';
 import { isLoopbackOrigin } from './bind-guard.js';
@@ -729,7 +731,21 @@ export function createApp(deps: AppDeps): AppHandle {
     try {
       const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
       const expiry = typeof req.query.expiry === 'string' ? req.query.expiry : undefined;
-      res.json(await registry.client.optionsChain(symbol, expiry));
+      const contracts = await registry.client.optionsChain(symbol, expiry);
+      let spot = 0;
+      try {
+        const quote = await registry.client.quote(symbol);
+        spot = quote.price;
+      } catch {
+        spot = 0;
+      }
+      const impliedMoves = computeImpliedMoves(contracts, spot);
+      res.json(
+        OptionsChainResponse.parse({
+          contracts,
+          impliedMoves,
+        }),
+      );
     } catch (e) {
       next(e);
     }

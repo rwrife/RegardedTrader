@@ -133,6 +133,20 @@ export const OptionContract = z.object({
 });
 export type OptionContract = z.infer<typeof OptionContract>;
 
+export const ImpliedMoveRow = z.object({
+  expiry: z.string(),
+  straddleMid: z.number(),
+  impliedMoveAbs: z.number(),
+  impliedMovePct: z.number(),
+});
+export type ImpliedMoveRow = z.infer<typeof ImpliedMoveRow>;
+
+export const OptionsChainResponse = z.object({
+  contracts: z.array(OptionContract),
+  impliedMoves: z.array(ImpliedMoveRow),
+});
+export type OptionsChainResponse = z.infer<typeof OptionsChainResponse>;
+
 export const TradePlanLeg = z.object({
   action: z.enum(['buy', 'sell']),
   qty: z.number().int().positive(),
