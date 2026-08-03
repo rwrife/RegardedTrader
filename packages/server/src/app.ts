@@ -86,6 +86,19 @@ export interface AppDeps {
   paperStore?: PaperStore;
   /** Optional injectable calendar service (tests). */
   calendar?: CalendarService;
+  /**
+   * Optional runtime auth gate for dashboard sessions (#18). Tests and
+   * internal dev mode can omit this to keep the app unauthenticated.
+   */
+  auth?:
+    | {
+        mode: 'required';
+        token: string;
+        dashboardOrigin: string;
+      }
+    | {
+        mode: 'allow-no-auth';
+      };
 }
 
 export interface AppHandle {
@@ -252,6 +265,73 @@ export function createApp(deps: AppDeps): AppHandle {
 
   const app = express();
   app.use(express.json({ limit: '1mb' }));
+
+  // Runtime auth gate for dashboard-launched sessions (#18). All endpoints
+  // except GET /health require the launch token.
+  if (deps.auth?.mode === 'required') {
+    const token = Buffer.from(deps.auth.token, 'utf8');
+    const failWindowMs = 60_000;
+    const maxFailsPerWindow = 20;
+    const authFails = new Map<string, { count: number; resetAt: number }>();
+    const now = deps.now ?? Date.now;
+
+    function safeTokenEquals(candidate: string): boolean {
+      const c = Buffer.from(candidate, 'utf8');
+      return c.length === token.length && timingSafeEqual(c, token);
+    }
+
+    function isRateLimited(ip: string): boolean {
+      const t = now();
+      const cur = authFails.get(ip);
+      if (!cur || t > cur.resetAt) {
+        authFails.set(ip, { count: 0, resetAt: t + failWindowMs });
+        return false;
+      }
+      return cur.count >= maxFailsPerWindow;
+    }
+
+    function markFailed(ip: string): void {
+      const t = now();
+      const cur = authFails.get(ip);
+      if (!cur || t > cur.resetAt) {
+        authFails.set(ip, { count: 1, resetAt: t + failWindowMs });
+        return;
+      }
+      cur.count += 1;
+      authFails.set(ip, cur);
+    }
+
+    app.use((req, res, next) => {
+      if (req.method === 'GET' && req.path === '/health') {
+        next();
+        return;
+      }
+
+      const ip = req.socket.remoteAddress ?? req.ip ?? 'unknown';
+      if (isRateLimited(ip)) {
+        logger.warn(`[auth] rate-limited failed auth attempts from ${ip}`);
+        res.status(429).json({ error: 'Too many failed auth attempts. Try again shortly.' });
+        return;
+      }
+
+      const authHeader = req.headers.authorization;
+      const bearer =
+        typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
+          ? authHeader.slice('Bearer '.length).trim()
+          : '';
+      const queryToken = typeof req.query.t === 'string' ? req.query.t : '';
+      const candidate = bearer || queryToken;
+      if (candidate && safeTokenEquals(candidate)) {
+        next();
+        return;
+      }
+
+      markFailed(ip);
+      logger.warn(`[auth] unauthorized request from ${ip} to ${req.method} ${req.path}`);
+      res.status(401).json({ error: 'Unauthorized dashboard session token.' });
+    });
+  }
+
   // Defence-in-depth Origin guard (AGENTS.md rule #1, issue #128):
   // hard-reject any cross-origin request whose `Origin` header is not a
   // loopback URL. Runs BEFORE the `cors` middleware so a non-loopback caller
@@ -269,7 +349,17 @@ export function createApp(deps: AppDeps): AppHandle {
     next();
   });
   app.use(
-    cors({ origin: [/^http:\/\/127\.0\.0\.1:\d+$/, /^http:\/\/localhost:\d+$/, /^http:\/\/\[::1\]:\d+$/] }),
+    cors(
+      deps.auth?.mode === 'required'
+        ? { origin: [deps.auth.dashboardOrigin] }
+        : {
+            origin: [
+              /^http:\/\/127\.0\.0\.1:\d+$/,
+              /^http:\/\/localhost:\d+$/,
+              /^http:\/\/\[::1\]:\d+$/,
+            ],
+          },
+    ),
   );
 
   // Dedicated version endpoint (issue #179). Deliberately separate from
@@ -1419,7 +1509,10 @@ function makePlanId(symbol: string, index: number): string {
 }
 
 /** Default factory used by the entrypoint. */
-export function createDefaultApp(cfg: AppConfigT): AppHandle {
+export function createDefaultApp(
+  cfg: AppConfigT,
+  auth?: AppDeps['auth'],
+): AppHandle {
   return createApp({
     market: new YahooClient(),
     webSearch: new DuckDuckGoSearch(),
@@ -1451,5 +1544,6 @@ export function createDefaultApp(cfg: AppConfigT): AppHandle {
         return null;
       }
     },
+    auth,
   });
 }

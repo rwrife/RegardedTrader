@@ -21,9 +21,11 @@ git clone https://github.com/rwrife/RegardedTrader.git
 cd RegardedTrader
 npm install
 cp .env.example .env       # add your OPENAI_API_KEY
-npm run dev                # server + web dashboard at http://127.0.0.1:5173
+npm run build
+npm run cli -- dashboard   # canonical dashboard entrypoint
+# or, after `npm link`: regard dashboard
 # in another terminal:
-npm run cli -- briefing NVDA   # or, after `npm link`: `regard briefing NVDA`
+npm run cli -- briefing NVDA
 ```
 
 Node **>= 20** required.
@@ -71,13 +73,16 @@ canonical [`docs/domain-glossary.md`](./docs/domain-glossary.md).
 
 | command                | does                                            |
 | ---------------------- | ----------------------------------------------- |
-| `npm run dev`          | server + web concurrently                       |
-| `npm run dev:server`   | local API at `http://127.0.0.1:4317`            |
-| `npm run dev:web`      | Vite dashboard at `http://127.0.0.1:5173`       |
+| `npm run dev`          | contributor mode (unauthenticated dev servers)  |
+| `npm run dev:server`   | unauthenticated local API (dev-only convenience)|
+| `npm run dev:web`      | Vite dashboard dev server                        |
 | `npm run cli -- ...`   | run the Ink CLI (installed globally as `regard`)|
 | `npm run build`        | build all workspaces                            |
 | `npm test`             | vitest across workspaces                        |
 | `npm run lint`         | tsc + prettier check                            |
+
+For the security model and token lifecycle used by `regard dashboard`, see
+[`docs/security.md`](./docs/security.md).
 
 ## License
 
