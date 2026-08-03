@@ -1,10 +1,6 @@
 import type { LLM } from './llm.js';
-import type {
-  Briefing,
-  Indicators,
-  NewsItem,
-  Quote,
-} from '../schemas/index.js';
+import type { Briefing, Indicators, NewsItem, Quote } from '../schemas/index.js';
+import type { Recommendation } from '../schemas/recommendation.js';
 import type { SentimentSnapshot } from '../schemas/sentiment.js';
 import { AnalystOutputSchema } from '../schemas/index.js';
 import { DISCLAIMER } from './llm.js';
@@ -23,6 +19,7 @@ export interface AnalystInput {
     title?: string;
     startUtc?: string;
   };
+  latestRecommendation?: Recommendation;
 }
 
 export class Analyst {

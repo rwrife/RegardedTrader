@@ -1,6 +1,7 @@
 import type { LLM } from './llm.js';
 import { DISCLAIMER } from './llm.js';
 import type { OptionContract, TradePlan, RiskGraphSeries } from '../schemas/index.js';
+import type { Recommendation, Verdict } from '../schemas/recommendation.js';
 import { StrategistOutputSchema } from '../schemas/index.js';
 import { AgentParseError } from './errors.js';
 import { riskGraph, type RiskGraphLeg } from '../options/index.js';
@@ -11,6 +12,7 @@ export interface StrategistInput {
   thesis: string;
   maxLossUsd: number;
   chain: OptionContract[];
+  latestRecommendation?: Recommendation;
 }
 
 export class OptionsStrategist {
@@ -40,7 +42,8 @@ export class OptionsStrategist {
       );
       throw new AgentParseError('OptionsStrategist', issues, raw);
     }
-    return result.data.plans.map((p) => attachRiskGraph(p));
+    const withRisk = result.data.plans.map((p) => attachRiskGraph(p));
+    return prioritizeAndAnnotatePlans(withRisk, input);
   }
 }
 
@@ -98,4 +101,115 @@ function toRiskGraphLegs(p: TradePlan): RiskGraphLeg[] | null {
     });
   }
   return out;
+}
+
+type Direction = 'bullish' | 'bearish' | 'neutral';
+
+function prioritizeAndAnnotatePlans(
+  plans: TradePlan[],
+  input: StrategistInput,
+): TradePlan[] {
+  const latest = input.latestRecommendation;
+  if (!latest) return plans;
+
+  const conflictNote = thesisConflictNote(input.thesis, latest);
+  return plans
+    .map((plan, index) => ({
+      plan: conflictNote ? appendPlanNote(plan, conflictNote) : plan,
+      score: planRecommendationScore(plan, latest),
+      index,
+    }))
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map((x) => x.plan);
+}
+
+function thesisConflictNote(thesis: string, recommendation: Recommendation): string | null {
+  const thesisDirection = inferDirection(thesis);
+  if (thesisDirection === 'neutral') return null;
+
+  const action = recommendation.equity.action;
+  const recommendationDirection: Direction =
+    action === 'BUY'
+      ? 'bullish'
+      : action === 'SELL' || action === 'AVOID'
+        ? 'bearish'
+        : 'neutral';
+
+  if (recommendationDirection === 'neutral' || thesisDirection === recommendationDirection) {
+    return null;
+  }
+
+  return `Latest recommendation conflict: thesis is ${thesisDirection}, but the latest equity recommendation is ${action} (conviction ${recommendation.equity.conviction.toFixed(2)}).`;
+}
+
+function appendPlanNote(plan: TradePlan, note: string): TradePlan {
+  const existing = plan.notes ?? '';
+  if (existing.includes(note)) return plan;
+  return { ...plan, notes: existing ? `${existing} ${note}` : note };
+}
+
+function planRecommendationScore(plan: TradePlan, recommendation: Recommendation): number {
+  const { hasShortCall, hasShortPut } = legFlags(plan);
+  const planDirection = inferPlanDirection(plan);
+
+  let score = 0;
+  score += verdictWeight(recommendation.options.coveredCall, hasShortCall);
+  score += verdictWeight(recommendation.options.coveredPut, hasShortPut);
+
+  if (planDirection === 'bullish') {
+    score += equityDirectionWeight(recommendation.equity.action, 'bullish');
+  } else if (planDirection === 'bearish') {
+    score += equityDirectionWeight(recommendation.equity.action, 'bearish');
+  }
+
+  return score;
+}
+
+function verdictWeight(verdict: Verdict | null, applies: boolean): number {
+  if (!applies || !verdict) return 0;
+  if (verdict.action === 'BUY') return 3;
+  if (verdict.action === 'HOLD') return 1;
+  if (verdict.action === 'SELL') return -3;
+  return -1;
+}
+
+function equityDirectionWeight(
+  action: Recommendation['equity']['action'],
+  direction: Direction,
+): number {
+  if (action === 'HOLD') return 0;
+  if (direction === 'bullish') return action === 'BUY' ? 2 : -2;
+  if (direction === 'bearish') return action === 'SELL' || action === 'AVOID' ? 2 : -2;
+  return 0;
+}
+
+function legFlags(plan: TradePlan): { hasShortCall: boolean; hasShortPut: boolean } {
+  let hasShortCall = false;
+  let hasShortPut = false;
+  for (const leg of plan.legs) {
+    if (leg.action !== 'sell') continue;
+    if (leg.contract.type === 'call') hasShortCall = true;
+    if (leg.contract.type === 'put') hasShortPut = true;
+  }
+  return { hasShortCall, hasShortPut };
+}
+
+function inferPlanDirection(plan: TradePlan): Direction {
+  let net = 0;
+  for (const leg of plan.legs) {
+    const qty = leg.qty * (leg.action === 'buy' ? 1 : -1);
+    net += leg.contract.type === 'call' ? qty : -qty;
+  }
+  if (net > 0) return 'bullish';
+  if (net < 0) return 'bearish';
+  return 'neutral';
+}
+
+function inferDirection(text: string): Direction {
+  const t = text.toLowerCase();
+  const bullish = /\b(bull|bullish|upside|uptrend|rally|breakout|long|calls?)\b/.test(t);
+  const bearish = /\b(bear|bearish|downside|downtrend|selloff|breakdown|short|puts?)\b/.test(t);
+  if (bullish && !bearish) return 'bullish';
+  if (bearish && !bullish) return 'bearish';
+  return 'neutral';
 }

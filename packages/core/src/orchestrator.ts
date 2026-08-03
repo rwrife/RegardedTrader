@@ -1,5 +1,6 @@
 import type { MarketDataClient } from './clients/index.js';
 import { computeIndicators } from './indicators/index.js';
+import type { Recommendation } from './schemas/recommendation.js';
 import {
   Analyst,
   OptionsStrategist,
@@ -42,6 +43,7 @@ export interface BriefingOptions {
     title: string;
     startUtc: string;
   };
+  latestRecommendation?: Recommendation;
 }
 
 export interface OrchestratorAgents {
@@ -128,6 +130,7 @@ export class Orchestrator {
       indicators,
       news: analystNews,
       sentiment: opts.sentimentSnapshot,
+      latestRecommendation: opts.latestRecommendation,
       ...(opts.nextEarnings ? { nextEarnings: opts.nextEarnings } : {}),
     });
 
@@ -171,6 +174,7 @@ export class Orchestrator {
     thesis: string;
     maxLossUsd: number;
     expiry?: string;
+    latestRecommendation?: Recommendation;
   }): Promise<PlansResponse> {
     const chain = await this.market.optionsChain(input.symbol, input.expiry);
     const plans = await this.strategist.propose({ ...input, chain });
@@ -209,6 +213,7 @@ export class Orchestrator {
         thesis: opts.thesis,
         maxLossUsd: opts.maxLossUsd,
         chain,
+        latestRecommendation: opts.latestRecommendation,
       });
     } catch (err) {
       if (err instanceof AgentParseError) {
