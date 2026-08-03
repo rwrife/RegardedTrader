@@ -22,4 +22,24 @@ describe('AnalystPrompts', () => {
     expect(user).toMatch(/risks/);
     expect(user).toMatch(/NVDA/);
   });
+
+  it('includes sentiment guardrails when a recent sentiment snapshot is supplied', () => {
+    const user = AnalystPrompts.buildUserPrompt({
+      symbol: 'NVDA',
+      quote: { symbol: 'NVDA', price: 100 } as never,
+      indicators: { sma20: null, sma50: null, rsi14: null, macd: null, atr14: null } as never,
+      news: [],
+      sentiment: {
+        symbol: 'NVDA',
+        asOf: '2026-07-01T12:00:00.000Z',
+        score: 0.35,
+        confidence: 0.8,
+        volume: 25,
+        bySource: {},
+      },
+    });
+    expect(user).toMatch(/Sentiment context/);
+    expect(user).toMatch(/one input among many/i);
+    expect(user).toMatch(/not.*buy\/sell recommendation/i);
+  });
 });

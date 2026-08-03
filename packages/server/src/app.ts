@@ -114,6 +114,7 @@ export interface AppHandle {
  * (`index.ts`) wires defaults; tests pass mocks.
  */
 export function createApp(deps: AppDeps): AppHandle {
+  const BRIEFING_SENTIMENT_MAX_AGE_MS = 60 * 60 * 1000;
   let cfg: AppConfigT = AppConfig.parse(deps.initialConfig);
   const mentionStore = deps.mentions ?? new MentionStore();
   const authToken = process.env.REGARDEDTRADER_AUTH_TOKEN?.trim() || null;
@@ -247,6 +248,18 @@ export function createApp(deps: AppDeps): AppHandle {
     };
     const frame = `event: sentiment.update\ndata: ${JSON.stringify(payload)}\n\n`;
     for (const client of sseClients) client.write(frame);
+  }
+
+  async function readRecentSentimentSnapshot(
+    symbol: string,
+  ): Promise<SentimentSnapshot | undefined> {
+    const latest = await mentionStore.readLatest(symbol);
+    const snapshot = latest.sentiment;
+    if (!snapshot) return undefined;
+    const asOfMs = Date.parse(snapshot.asOf);
+    if (!Number.isFinite(asOfMs)) return undefined;
+    if (Date.now() - asOfMs > BRIEFING_SENTIMENT_MAX_AGE_MS) return undefined;
+    return snapshot;
   }
 
   function makeValidator(): TickerValidator | null {
@@ -1103,7 +1116,8 @@ export function createApp(deps: AppDeps): AppHandle {
       const symbol = Ticker.parse(candidate.toUpperCase());
       const known = await requireKnownSymbol(res, symbol);
       if (!known) return;
-      res.json(await o.briefing(symbol));
+      const sentimentSnapshot = await readRecentSentimentSnapshot(symbol);
+      res.json(await o.briefing(symbol, { sentimentSnapshot }));
     } catch (e) {
       next(e);
     }
@@ -1121,7 +1135,8 @@ export function createApp(deps: AppDeps): AppHandle {
       const known = await requireKnownSymbol(res, symbol);
       if (!known) return;
       const body = BriefingRequest.parse(req.body ?? {});
-      res.json(await o.briefing(symbol, body));
+      const sentimentSnapshot = await readRecentSentimentSnapshot(symbol);
+      res.json(await o.briefing(symbol, { ...body, sentimentSnapshot }));
     } catch (e) {
       next(e);
     }

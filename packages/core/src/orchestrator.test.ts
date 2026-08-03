@@ -212,6 +212,28 @@ describe('Orchestrator.briefing (#126)', () => {
     expect(optionsChain).not.toHaveBeenCalled();
   });
 
+  it('passes recent sentiment context into the analyst prompt when provided', async () => {
+    const complete = vi.fn(async () => analystReply);
+    const llm: LLM = { complete };
+    const o = new Orchestrator(fakeMarket(), llm);
+    await o.briefing('NVDA', {
+      sentimentSnapshot: {
+        symbol: 'NVDA',
+        asOf: '2026-07-01T12:00:00.000Z',
+        score: 0.42,
+        confidence: 0.78,
+        volume: 18,
+        bySource: {},
+      },
+    });
+    expect(complete).toHaveBeenCalledTimes(1);
+    const firstCall = complete.mock.calls[0] as [{ user?: string }] | undefined;
+    const userPrompt = String(firstCall?.[0]?.user ?? '');
+    expect(userPrompt).toContain('Sentiment context');
+    expect(userPrompt).toContain('0.42');
+    expect(userPrompt).toMatch(/one input among many/i);
+  });
+
   it('continues without technical output when Technician throws, and logs once', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
