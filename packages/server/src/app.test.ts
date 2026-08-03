@@ -152,6 +152,7 @@ describe('POST /tickers/validate', () => {
             risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
             server: { host: '127.0.0.1', port: 4317 },
             marketData: { providers: {}, activeProvider: null },
+            polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
           },
           llmFromConfig: () => null,
           paperStore: new PaperStore({ homeDir: dir }),
@@ -1461,5 +1462,3 @@ describe('Config routes coverage (#105)', () => {
     expect(badHost.status).toBe(400);
   });
 });
-
-
