@@ -1091,6 +1091,26 @@ describe('GET /health (#180)', () => {
     expect(j.aiConfigured).toBe(false);
     expect(j.activeProvider).toBeNull();
   });
+
+  it('surfaces calendar stale state for fail-open visibility (#55)', async () => {
+    const { app } = makeMinimalApp();
+    baseUrl = await listen(app);
+    const r = await fetch(`${baseUrl}/health`);
+    expect(r.status).toBe(200);
+    const j = (await r.json()) as {
+      calendar?: {
+        stale: boolean;
+        holidaysStale: boolean;
+        earningsStale: boolean;
+        marketState: string;
+      };
+    };
+    expect(j.calendar).toBeDefined();
+    expect(j.calendar?.stale).toBe(false);
+    expect(j.calendar?.holidaysStale).toBe(false);
+    expect(j.calendar?.earningsStale).toBe(false);
+    expect(typeof j.calendar?.marketState).toBe('string');
+  });
 });
 
 describe('Origin loopback guard (#128)', () => {
