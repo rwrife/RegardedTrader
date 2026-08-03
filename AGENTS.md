@@ -131,6 +131,7 @@ Use it when authoring prompts, schema docs, and user-facing analysis copy.
 - Never auto-place. Output is a *trade plan*, not an order.
 
 ### Agents (in `core/src/agents/`)
+- Authoring guide: [`docs/agents.md`](./docs/agents.md)
 - `Analyst` — high-level company/ticker brief.
 - `Technician` — chart-pattern / indicator commentary.
 - `OptionsStrategist` — structures + risk graph data.

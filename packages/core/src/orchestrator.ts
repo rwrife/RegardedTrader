@@ -1,5 +1,6 @@
 import type { MarketDataClient } from './clients/index.js';
 import { computeIndicators } from './indicators/index.js';
+import type { Recommendation } from './schemas/recommendation.js';
 import {
   Analyst,
   OptionsStrategist,
@@ -23,6 +24,7 @@ import {
   type RiskReview,
   type TradePlan,
 } from './schemas/index.js';
+import type { SentimentSnapshot } from './schemas/sentiment.js';
 import type { BriefingStorePort } from './storage/briefings.js';
 
 /**
@@ -34,6 +36,15 @@ export interface BriefingOptions {
   thesis?: string;
   maxLossUsd?: number;
   expiry?: string;
+  /** Optional pre-fetched sentiment snapshot injected by the server route. */
+  sentimentSnapshot?: SentimentSnapshot;
+  nextEarnings?: {
+    date: string;
+    daysUntil: number;
+    title: string;
+    startUtc: string;
+  };
+  latestRecommendation?: Recommendation;
 }
 
 export interface OrchestratorAgents {
@@ -119,6 +130,9 @@ export class Orchestrator {
       quote,
       indicators,
       news: analystNews,
+      sentiment: opts.sentimentSnapshot,
+      latestRecommendation: opts.latestRecommendation,
+      ...(opts.nextEarnings ? { nextEarnings: opts.nextEarnings } : {}),
     });
 
     // Aggregate risk verdict for the briefing. Briefing-only calls do not
@@ -161,6 +175,7 @@ export class Orchestrator {
     thesis: string;
     maxLossUsd: number;
     expiry?: string;
+    latestRecommendation?: Recommendation;
   }): Promise<PlansResponse> {
     const chain = await this.market.optionsChain(input.symbol, input.expiry);
     const plans = await this.strategist.propose({ ...input, chain });
@@ -199,6 +214,7 @@ export class Orchestrator {
         thesis: opts.thesis,
         maxLossUsd: opts.maxLossUsd,
         chain,
+        latestRecommendation: opts.latestRecommendation,
       });
     } catch (err) {
       if (err instanceof AgentParseError) {

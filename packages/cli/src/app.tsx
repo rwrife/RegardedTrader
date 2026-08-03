@@ -16,6 +16,7 @@ import { PaperScreen } from './screens/paper.js';
 import { ChartScreen } from './screens/chart.js';
 import { CalendarScreen } from './screens/calendar.js';
 import { TailScreen, PollingStatusScreen, PollingToggleScreen } from './screens/polling.js';
+import { MentionsScreen, SentimentScreen } from './screens/sentiment.js';
 
 export interface AppProps {
   command: string;
@@ -34,6 +35,10 @@ export interface AppProps {
     holidays?: boolean;
     earnings?: boolean;
     quotes?: boolean;
+    window?: string;
+    watch?: boolean;
+    source?: string;
+    limit?: number;
   };
 }
 
@@ -67,6 +72,24 @@ export function App({ command, args, serverUrl, flags }: AppProps) {
       return <TechScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
     case 'news':
       return <NewsScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
+    case 'sentiment':
+      return (
+        <SentimentScreen
+          symbol={args[0] ?? ''}
+          serverUrl={serverUrl}
+          window={flags?.window}
+          watch={flags?.watch}
+        />
+      );
+    case 'mentions':
+      return (
+        <MentionsScreen
+          symbol={args[0] ?? ''}
+          serverUrl={serverUrl}
+          source={flags?.source}
+          limit={flags?.limit}
+        />
+      );
     case 'plan':
       return <PlanScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
     case 'dashboard':

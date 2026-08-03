@@ -45,6 +45,7 @@ export {
   type ContextLatestSnapshot,
   type SnapshotReader,
   type MentionReader,
+  type CalendarReader,
 } from './context.js';
 export type {
   ContextBudgetReport,
@@ -57,6 +58,7 @@ export type {
   ContextOpinionsSection,
   ContextOptionsExpiryDigest,
   ContextOptionsSection,
+  ContextNextEarnings,
   ContextQuoteSection,
   ContextSectionMeta,
   ContextSentimentSection,

@@ -19,6 +19,7 @@ import {
   RiskConfig,
   BriefingRequest,
   PlansResponse,
+  Recommendation,
   ConfigTestResult,
   CORE_VERSION,
   ServerVersion,
@@ -34,12 +35,20 @@ import {
   DuckDuckGoSearch,
   computeIndicators,
   MentionStore,
+  SnapshotStore,
+  RecommendationStore,
+  AIRecommender,
+  RecommenderOrchestrator,
+  buildRecommendationContext,
+  hardGatesRule,
   SentimentSource,
   SentimentSnapshot,
+  EventKind,
   type MentionItem,
   type ScoredMention,
   type WebSearch,
   type LLM,
+  type Recommendation as RecommendationValue,
   type AppConfig as AppConfigT,
   type AiProvider as AiProviderT,
   type WatchlistEntry,
@@ -51,22 +60,27 @@ import {
   TradePlan,
   type BriefingStorePort,
   type OHLCV,
-  SnapshotStore,
-  RecommendationStore,
-  AIRecommender,
-  RecommenderOrchestrator,
-  HardGates,
-  buildRecommendationContext,
   StaleInputError,
-  type Recommendation,
   type RecommendationSource,
   type SnapshotReader,
 } from '@regardedtrader/core';
 import { liveQuote, type LiveQuoteSource, type YahooQuoteLike } from './liveQuote.js';
 import { isLoopbackOrigin } from './bind-guard.js';
 import { SERVER_VERSION } from './version.js';
-import { CalendarService, todayEt, toEtDateKey } from './calendarService.js';
+import {
+  CalendarService,
+  type CalendarRefreshResponse,
+  type CalendarStatus,
+  todayEt,
+  toEtDateKey,
+} from './calendarService.js';
 import { PollingCoordinator } from './polling.js';
+
+function addDaysEt(dateEt: string, days: number): string {
+  const d = new Date(`${dateEt}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
 
 export interface AppDeps {
   /**
@@ -85,10 +99,8 @@ export interface AppDeps {
   buildLLMForProvider?: (provider: AiProviderT) => LLM;
   watchlist: WatchlistStore;
   mentions?: MentionStore;
-  snapshots?: SnapshotStore;
-  recommendations?: RecommendationStore;
   briefings?: BriefingStorePort;
-  initialConfig: AppConfigT;
+  initialConfig: Partial<AppConfigT>;
   /**
    * Built-in live-quote source used when no provider is configured (or when
    * the configured provider is `yahoo`). Production wires the lazy
@@ -106,6 +118,15 @@ export interface AppDeps {
     quoteEveryMs?: number;
     newsEveryMs?: number;
   };
+  /** Optional injectable snapshot store (tests). */
+  snapshots?: SnapshotStore;
+  /** Optional injectable recommendation store (tests). */
+  recommendations?: RecommendationStore;
+  /**
+   * Optional recompute hook override (tests). When omitted, createApp wires
+   * the in-process recommender pipeline from core.
+   */
+  recomputeRecommendation?: (symbol: string) => Promise<RecommendationValue>;
   /**
    * Optional runtime auth gate for dashboard sessions (#18). Tests and
    * internal dev mode can omit this to keep the app unauthenticated.
@@ -128,8 +149,8 @@ export interface AppHandle {
   emitSentimentUpdate: (symbol: string, snapshot: SentimentSnapshot | null) => void;
   emitRecommendationUpdate: (
     symbol: string,
-    recommendation: Recommendation,
-    persisted: boolean,
+    recommendation: RecommendationValue,
+    persisted?: boolean,
   ) => void;
 }
 
@@ -140,8 +161,8 @@ export interface AppHandle {
 export function createApp(deps: AppDeps): AppHandle {
   let cfg: AppConfigT = AppConfig.parse(deps.initialConfig);
   const mentionStore = deps.mentions ?? new MentionStore();
-  const snapshotStore = deps.snapshots ?? new SnapshotStore();
-  const recommendationStore = deps.recommendations ?? new RecommendationStore();
+  const snapshotStore = deps.snapshots ?? new SnapshotStore({ root: mentionStore.rootDir });
+  const recommendationStore = deps.recommendations ?? new RecommendationStore({ root: mentionStore.rootDir });
   const authToken = process.env.REGARDEDTRADER_AUTH_TOKEN?.trim() || null;
   const briefings = deps.briefings ?? new BriefingStore();
   const recommendationSnapshotReader: SnapshotReader = {
@@ -205,6 +226,71 @@ export function createApp(deps: AppDeps): AppHandle {
     );
   }
 
+  function activeProviderModel(config: AppConfigT): {
+    provider: string;
+    model: string;
+  } {
+    const activeId = config.activeProvider;
+    if (!activeId) return { provider: 'unconfigured', model: 'unconfigured' };
+    const provider = config.providers[activeId];
+    if (!provider) return { provider: activeId, model: 'unknown' };
+    const model =
+      provider.kind === 'openai-compatible'
+        ? provider.model
+        : provider.model ?? provider.backend;
+    return { provider: activeId, model };
+  }
+
+  function gatherRecommendationSources(
+    context: Awaited<ReturnType<typeof buildRecommendationContext>>,
+  ): Array<{ name: string; url: string }> {
+    const out = new Map<string, { name: string; url: string }>();
+    for (const item of context.news?.items ?? []) {
+      const entry = { name: item.source || 'news', url: item.url };
+      if (entry.url) out.set(entry.url, entry);
+    }
+    for (const item of context.opinions?.items ?? []) {
+      if (!item.url) continue;
+      const entry = { name: item.source || 'opinion', url: item.url };
+      out.set(entry.url, entry);
+    }
+    return Array.from(out.values());
+  }
+
+  function makeRecommendationOrchestrator(): RecommenderOrchestrator | null {
+    const llm = deps.llmFromConfig(cfg);
+    if (!llm) return null;
+    const ai = new AIRecommender(llm);
+    return new RecommenderOrchestrator({
+      recommender: ai,
+      store: recommendationStore,
+      buildContext: async (symbol) =>
+        buildRecommendationContext({
+          symbol,
+          snapshots: recommendationSnapshotReader,
+          mentions: mentionStore,
+          forbidNakedShorts: cfg.risk.forbidNakedShorts,
+          maxLossUsd: cfg.risk.maxLossUsd,
+        }),
+      stampFor: (context) => {
+        const p = activeProviderModel(cfg);
+        const sources = gatherRecommendationSources(context);
+        return {
+          asOf: {
+            quote: context.quote.asOf ?? new Date(0).toISOString(),
+            options: context.options?.asOf ?? null,
+            sentiment: context.sentiment?.asOf ?? null,
+            news: context.news?.asOf ?? null,
+          },
+          sources,
+          modelInfo: { provider: p.provider, model: p.model },
+        };
+      },
+      rules: [hardGatesRule],
+      onEvent: (e) => emitRecommendationUpdate(e.symbol, e.recommendation),
+    });
+  }
+
   let orchestrator = makeOrchestrator();
   const polling = new PollingCoordinator(
     deps.watchlist,
@@ -215,6 +301,11 @@ export function createApp(deps: AppDeps): AppHandle {
     },
   );
   polling.start();
+  let recommendationOrchestrator = makeRecommendationOrchestrator();
+  function refreshOrchestrators(): void {
+    orchestrator = makeOrchestrator();
+    recommendationOrchestrator = makeRecommendationOrchestrator();
+  }
   const paperStore = deps.paperStore ?? new PaperStore();
   function makePaperBroker(): PaperBroker {
     return new PaperBroker({ market: registry.client, store: paperStore });
@@ -325,12 +416,13 @@ export function createApp(deps: AppDeps): AppHandle {
   type RecommendationSsePayload = {
     type: 'recommendation.update';
     symbol: string;
-    recommendation: Recommendation;
+    recommendation: RecommendationValue;
     persisted: boolean;
     id: string;
     at: string;
   };
   const sseClients = new Set<express.Response>();
+  let calendarRefreshFlight: Promise<CalendarRefreshResponse> | null = null;
 
   function emitSentimentUpdate(symbol: string, snapshot: SentimentSnapshot | null): void {
     const payload: SentimentSsePayload = {
@@ -344,10 +436,27 @@ export function createApp(deps: AppDeps): AppHandle {
     for (const client of sseClients) client.write(frame);
   }
 
+  function emitCalendarUpdate(update: {
+    refresh?: CalendarRefreshResponse;
+    status: CalendarStatus;
+    reason: 'manual-refresh' | 'read-refresh';
+  }): void {
+    const payload = {
+      type: 'calendar.update' as const,
+      id: randomUUID(),
+      at: new Date().toISOString(),
+      reason: update.reason,
+      refresh: update.refresh,
+      status: update.status,
+    };
+    const frame = `event: calendar.update\ndata: ${JSON.stringify(payload)}\n\n`;
+    for (const client of sseClients) client.write(frame);
+  }
+
   function emitRecommendationUpdate(
     symbol: string,
-    recommendation: Recommendation,
-    persisted: boolean,
+    recommendation: RecommendationValue,
+    persisted = true,
   ): void {
     const payload: RecommendationSsePayload = {
       type: 'recommendation.update',
@@ -517,6 +626,7 @@ export function createApp(deps: AppDeps): AppHandle {
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([symbol, health]) => [symbol, health]),
     );
+    const calendarStatus = calendar.status();
     res.json({
       ok: true,
       name: 'regardedtrader-server',
@@ -528,6 +638,13 @@ export function createApp(deps: AppDeps): AppHandle {
       activeProvider: cfg.activeProvider,
       sentimentSources: sentimentHealth,
       recommendationBySymbol,
+      calendar: {
+        stale: calendarStatus.stale,
+        holidaysStale: calendarStatus.holidaysStale,
+        earningsStale: calendarStatus.earningsStale,
+        marketState: calendarStatus.marketState,
+        sources: calendarStatus.sources,
+      },
     });
   });
 
@@ -999,7 +1116,7 @@ export function createApp(deps: AppDeps): AppHandle {
 
   app.get('/polling/tail/:symbol', async (req, res, next) => {
     try {
-      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
       const includeQuotes = String(req.query.quotes ?? 'false').toLowerCase() === 'true';
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -1156,7 +1273,7 @@ export function createApp(deps: AppDeps): AppHandle {
         res.status(404).json({ error: `No recommendation found for ${symbol}.` });
         return;
       }
-      res.json(latest);
+      res.json(Recommendation.parse(latest));
     } catch (e) {
       next(e);
     }
@@ -1170,9 +1287,9 @@ export function createApp(deps: AppDeps): AppHandle {
       const q = RecommendationRangeQuery.parse(req.query);
       const since = q.since ? new Date(q.since) : undefined;
       const until = q.until ? new Date(q.until) : undefined;
-      const items: Recommendation[] = [];
+      const items: RecommendationValue[] = [];
       for await (const rec of recommendationStore.readRange(symbol, since, until)) {
-        items.push(rec);
+        items.push(Recommendation.parse(rec));
       }
       items.sort((a, b) => Date.parse(a.generatedAt) - Date.parse(b.generatedAt));
       res.json({ symbol, items });
@@ -1200,8 +1317,17 @@ export function createApp(deps: AppDeps): AppHandle {
         return;
       }
 
-      const recommender = makeRecommendationOrchestrator();
-      if (!recommender) {
+      const custom = deps.recomputeRecommendation;
+      if (custom) {
+        const recommendation = Recommendation.parse(await custom(symbol));
+        emitRecommendationUpdate(symbol, recommendation, true);
+        setRecommendationSuccess(symbol);
+        res.json({ symbol, persisted: true, recommendation });
+        return;
+      }
+
+      const runner = recommendationOrchestrator;
+      if (!runner) {
         res.status(503).json({
           error: 'AI provider not configured',
           hint: 'Run `regard config` (CLI) or open Settings in the dashboard.',
@@ -1210,7 +1336,7 @@ export function createApp(deps: AppDeps): AppHandle {
       }
 
       recommendationRecomputeAtBySymbol.set(symbol, nowMs);
-      const result = await recommender.runOnce(symbol);
+      const result = await runner.runOnce(symbol);
       if (result.status === 'skipped') {
         res.status(409).json({
           error: `Recommendation recompute for ${symbol} is already in flight.`,
@@ -1233,9 +1359,7 @@ export function createApp(deps: AppDeps): AppHandle {
         });
         return;
       }
-      if (req?.params?.symbol) {
-        setRecommendationError(String(req.params.symbol).toUpperCase(), e);
-      }
+      setRecommendationError(String(req.params.symbol).toUpperCase(), e);
       next(e);
     }
   });
@@ -1273,6 +1397,21 @@ export function createApp(deps: AppDeps): AppHandle {
   });
 
   // --- Calendar ---
+  const DateEt = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+  const CalendarHolidaysQuery = z.object({
+    from: DateEt.optional(),
+    to: DateEt.optional(),
+  });
+  const CalendarEarningsRangeQuery = z.object({
+    symbol: Ticker,
+    from: DateEt.optional(),
+    to: DateEt.optional(),
+  });
+  const CalendarNextQuery = z.object({
+    symbol: Ticker.optional(),
+    kind: EventKind.optional(),
+    from: DateEt.optional(),
+  });
   const CalendarWindowQuery = z.object({
     from: z.string().optional(),
     days: z.coerce.number().int().min(1).max(90).optional().default(14),
@@ -1286,7 +1425,114 @@ export function createApp(deps: AppDeps): AppHandle {
     earnings: z.boolean().optional().default(false),
   });
 
-  app.get('/calendar/events', async (req, res, next) => {
+  function validateDateRange(from: string, to: string): { fromEt: string; days: number } {
+    const start = new Date(`${from}T00:00:00.000Z`);
+    const end = new Date(`${to}T00:00:00.000Z`);
+    const diffDays = Math.ceil((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000));
+    if (diffDays <= 0) {
+      throw new Error(`Invalid calendar range: "to" (${to}) must be after "from" (${from}).`);
+    }
+    return { fromEt: from, days: diffDays };
+  }
+
+  function requireCalendarAdmin(
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ): void {
+    if (!authToken) {
+      next();
+      return;
+    }
+    const adminHeader = req.header('x-regardedtrader-admin');
+    if (adminHeader === '1' || adminHeader?.toLowerCase() === 'true') {
+      next();
+      return;
+    }
+    res.status(403).json({
+      error: 'Calendar refresh is admin-only.',
+      hint: 'Retry with header `x-regardedtrader-admin: true`.',
+    });
+  }
+
+  app.get('/calendar/holidays', requireDashboardToken, async (req, res, next) => {
+    try {
+      const q = CalendarHolidaysQuery.parse(req.query);
+      const fromEt = q.from ?? todayEt();
+      const toEt = q.to ?? addDaysEt(fromEt, 14);
+      const range = validateDateRange(fromEt, toEt);
+      await calendar.maybeRefreshForRead([]);
+      const window = await calendar.getWindow({ fromEt: range.fromEt, days: range.days, symbols: [] });
+      const events = window.events.filter(
+        (ev) => ev.kind === 'market_holiday' || ev.kind === 'market_early_close',
+      );
+      emitCalendarUpdate({ reason: 'read-refresh', status: calendar.status() });
+      res.json({
+        fromEt,
+        toEtExclusive: toEt,
+        events,
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/calendar/earnings', requireDashboardToken, async (req, res, next) => {
+    try {
+      const q = CalendarEarningsRangeQuery.parse({
+        ...req.query,
+        symbol: String(req.query.symbol ?? '').toUpperCase(),
+      });
+      const known = await deps.watchlist.get(q.symbol);
+      if (!known) {
+        res.status(422).json({
+          error: `Unknown ticker "${q.symbol}". Add it first with \`regard add ${q.symbol}\`.`,
+          hint: 'POST /tickers/validate or `regard add <SYM>`',
+        });
+        return;
+      }
+      const fromEt = q.from ?? todayEt();
+      const toEt = q.to ?? addDaysEt(fromEt, 30);
+      validateDateRange(fromEt, toEt);
+      await calendar.maybeRefreshForRead([q.symbol]);
+      const events = (await calendar.getSymbolEarnings({
+        symbol: q.symbol,
+        includePast: true,
+        includeUpcoming: true,
+      })).filter((ev) => {
+        const dateEt = toEtDateKey(ev.startUtc);
+        return dateEt >= fromEt && dateEt < toEt;
+      });
+      emitCalendarUpdate({ reason: 'read-refresh', status: calendar.status() });
+      res.json({
+        symbol: q.symbol,
+        fromEt,
+        toEtExclusive: toEt,
+        events,
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/calendar/next', requireDashboardToken, async (req, res, next) => {
+    try {
+      const q = CalendarNextQuery.parse({
+        ...req.query,
+        symbol: req.query.symbol ? String(req.query.symbol).toUpperCase() : undefined,
+      });
+      const event = await calendar.getNextEvent({
+        symbol: q.symbol ?? undefined,
+        kind: q.kind,
+        fromEt: q.from,
+      });
+      res.json({ event });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/calendar/events', requireDashboardToken, async (req, res, next) => {
     try {
       const q = CalendarWindowQuery.parse(req.query);
       const fromEt =
@@ -1301,15 +1547,16 @@ export function createApp(deps: AppDeps): AppHandle {
         days: q.days,
         symbols,
       });
+      emitCalendarUpdate({ reason: 'read-refresh', status: calendar.status() });
       res.json(window);
     } catch (e) {
       next(e);
     }
   });
 
-  app.get('/calendar/earnings/:symbol', async (req, res, next) => {
+  app.get('/calendar/earnings/:symbol', requireDashboardToken, async (req, res, next) => {
     try {
-      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
       const known = await deps.watchlist.get(symbol);
       if (!known) {
         res.status(422).json({
@@ -1327,39 +1574,55 @@ export function createApp(deps: AppDeps): AppHandle {
         includePast,
         includeUpcoming,
       });
+      emitCalendarUpdate({ reason: 'read-refresh', status: calendar.status() });
       res.json({ symbol, events });
     } catch (e) {
       next(e);
     }
   });
 
-  app.post('/calendar/refresh', async (req, res, next) => {
-    try {
-      const body = CalendarRefreshBody.parse(req.body ?? {});
-      const watch = await deps.watchlist.list();
-      const out = await calendar.refreshManually({
-        holidays: body.holidays,
-        earnings: body.earnings,
-        symbols: watch.map((w) => w.profile.symbol),
-      });
-      if (out.skipped && out.skipped.length > 0 && !out.holidays && !out.earnings) {
-        const retryAfterMs = Math.max(...out.skipped.map((s) => s.retryAfterMs));
-        res.setHeader('Retry-After', Math.max(1, Math.ceil(retryAfterMs / 1000)).toString());
-        res.status(429).json(out);
-        return;
+  app.post(
+    '/calendar/refresh',
+    requireDashboardToken,
+    requireCalendarAdmin,
+    async (req, res, next) => {
+      try {
+        const body = CalendarRefreshBody.parse(req.body ?? {});
+        if (calendarRefreshFlight) {
+          const coalesced = await calendarRefreshFlight;
+          res.setHeader('X-Calendar-Refresh-Coalesced', '1');
+          res.json(coalesced);
+          return;
+        }
+        const watch = await deps.watchlist.list();
+        calendarRefreshFlight = calendar.refreshManually({
+          holidays: body.holidays,
+          earnings: body.earnings,
+          symbols: watch.map((w) => w.profile.symbol),
+        });
+        const out = await calendarRefreshFlight;
+        if (out.skipped && out.skipped.length > 0 && !out.holidays && !out.earnings) {
+          const retryAfterMs = Math.max(...out.skipped.map((s) => s.retryAfterMs));
+          res.setHeader('Retry-After', Math.max(1, Math.ceil(retryAfterMs / 1000)).toString());
+          res.status(429).json(out);
+          return;
+        }
+        emitCalendarUpdate({ reason: 'manual-refresh', refresh: out, status: calendar.status() });
+        res.json(out);
+      } catch (e) {
+        next(e);
+      } finally {
+        calendarRefreshFlight = null;
       }
-      res.json(out);
-    } catch (e) {
-      next(e);
-    }
-  });
+    },
+  );
 
-  app.get('/calendar/status', (_req, res) => {
+  app.get('/calendar/status', requireDashboardToken, (_req, res) => {
     res.json(calendar.status());
   });
 
   // Compatibility endpoint used by the web CalendarStrip. Market-only list.
-  app.get('/calendar/upcoming', async (req, res, next) => {
+  app.get('/calendar/upcoming', requireDashboardToken, async (req, res, next) => {
     try {
       const q = CalendarWindowQuery.parse(req.query);
       const fromEt = todayEt();
@@ -1379,6 +1642,7 @@ export function createApp(deps: AppDeps): AppHandle {
           kind: ev.kind,
           title: ev.title,
         }));
+      emitCalendarUpdate({ reason: 'read-refresh', status: calendar.status() });
       res.json({ today: fromEt, events });
     } catch (e) {
       next(e);
@@ -1398,57 +1662,6 @@ export function createApp(deps: AppDeps): AppHandle {
     return orchestrator;
   }
 
-  function makeRecommendationOrchestrator(): RecommenderOrchestrator | null {
-    const llm = deps.llmFromConfig(cfg);
-    if (!llm) return null;
-    const recommender = new AIRecommender(llm);
-    const activeProvider = cfg.activeProvider ? cfg.providers[cfg.activeProvider] : null;
-    return new RecommenderOrchestrator({
-      recommender,
-      store: recommendationStore,
-      buildContext: async (symbol) =>
-        buildRecommendationContext({
-          symbol,
-          snapshots: recommendationSnapshotReader,
-          mentions: mentionStore,
-          forbidNakedShorts: cfg.risk.forbidNakedShorts,
-          maxLossUsd: cfg.risk.maxLossUsd,
-        }),
-      stampFor: (context) => {
-        const sources: RecommendationSource[] = [];
-        const seen = new Set<string>();
-        const pushSource = (name: string, url: string | undefined) => {
-          if (!url || seen.has(url)) return;
-          seen.add(url);
-          sources.push({ name, url });
-        };
-        for (const item of context.news?.items ?? []) {
-          pushSource(item.source, item.url);
-        }
-        for (const item of context.opinions?.items ?? []) {
-          pushSource(item.source, item.url);
-        }
-        return {
-          asOf: {
-            quote: context.quote.asOf ?? new Date(0).toISOString(),
-            options: context.options?.asOf ?? null,
-            sentiment: context.sentiment?.asOf ?? null,
-            news: context.news?.asOf ?? null,
-          },
-          sources,
-          modelInfo: {
-            provider: cfg.activeProvider ?? 'unknown',
-            model: activeProvider?.model ?? 'unknown',
-          },
-        };
-      },
-      rules: [new HardGates()],
-      onEvent: (evt) => {
-        emitRecommendationUpdate(evt.symbol, evt.recommendation, evt.persisted);
-      },
-    });
-  }
-
   async function requireKnownSymbol(
     res: express.Response,
     symbol: string,
@@ -1463,6 +1676,7 @@ export function createApp(deps: AppDeps): AppHandle {
     }
     return entry;
   }
+
 
   // Technician agent surface (issue #74). Standalone endpoint so the CLI
   // `regard tech <SYM>` and the web `Chart` tab can render TA commentary
@@ -1485,6 +1699,9 @@ export function createApp(deps: AppDeps): AppHandle {
 
   const BriefingHistoryQuery = z.object({
     limit: z.coerce.number().int().positive().max(200).optional().default(20),
+  });
+  const BriefingReqWithRecommendation = BriefingRequest.extend({
+    latestRecommendation: Recommendation.optional(),
   });
 
   app.get('/briefing/:symbol/history', async (req, res, next) => {
@@ -1554,7 +1771,7 @@ export function createApp(deps: AppDeps): AppHandle {
       const symbol = Ticker.parse(req.params.symbol.toUpperCase());
       const known = await requireKnownSymbol(res, symbol);
       if (!known) return;
-      const body = BriefingRequest.parse(req.body ?? {});
+      const body = BriefingReqWithRecommendation.parse(req.body ?? {});
       res.json(await o.briefing(symbol, body));
     } catch (e) {
       next(e);
@@ -1566,6 +1783,7 @@ export function createApp(deps: AppDeps): AppHandle {
     thesis: z.string().min(3),
     maxLossUsd: z.number().positive().max(100_000),
     expiry: z.string().optional(),
+    latestRecommendation: Recommendation.optional(),
   });
 
   app.post('/plans', async (req, res, next) => {
@@ -1664,7 +1882,7 @@ export function createApp(deps: AppDeps): AppHandle {
       const next = AppConfig.parse(req.body);
       await saveConfig(next);
       cfg = next;
-      orchestrator = makeOrchestrator();
+      refreshOrchestrators();
       rebuildRegistry();
       res.json({ ok: true, aiConfigured: orchestrator !== null, config: redactConfig(cfg) });
     } catch (e) {
@@ -1681,7 +1899,7 @@ export function createApp(deps: AppDeps): AppHandle {
       const risk = RiskConfig.parse(req.body);
       cfg.risk = risk;
       await saveConfig(cfg);
-      orchestrator = makeOrchestrator();
+      refreshOrchestrators();
       res.json({ ok: true, aiConfigured: orchestrator !== null, config: redactConfig(cfg) });
     } catch (e) {
       next(e);
@@ -1823,7 +2041,7 @@ export function createApp(deps: AppDeps): AppHandle {
       cfg.providers[id] = provider;
       cfg.activeProvider = id;
       await saveConfig(cfg);
-      orchestrator = makeOrchestrator();
+      refreshOrchestrators();
       res.json({ ok: true, aiConfigured: orchestrator !== null, config: redactConfig(cfg) });
     } catch (e) {
       next(e);
@@ -1840,7 +2058,7 @@ export function createApp(deps: AppDeps): AppHandle {
       delete cfg.providers[id];
       if (cfg.activeProvider === id) cfg.activeProvider = null;
       await saveConfig(cfg);
-      orchestrator = makeOrchestrator();
+      refreshOrchestrators();
       res.json({ ok: true, aiConfigured: orchestrator !== null, config: redactConfig(cfg) });
     } catch (e) {
       next(e);
@@ -1858,7 +2076,7 @@ export function createApp(deps: AppDeps): AppHandle {
       }
       cfg.activeProvider = id;
       await saveConfig(cfg);
-      orchestrator = makeOrchestrator();
+      refreshOrchestrators();
       res.json({ ok: true, aiConfigured: orchestrator !== null, config: redactConfig(cfg) });
     } catch (e) {
       next(e);

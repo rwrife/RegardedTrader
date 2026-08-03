@@ -106,6 +106,43 @@ export const PollingConfig = z
         'google-news': { enabled: true, weight: 1.1 },
         googleNewsOpinion: { enabled: true, weight: 0.9 },
       }),
+    sentimentAlerts: z
+      .object({
+        enabled: z.boolean().default(false),
+        stdDevThreshold: z.number().positive().default(2),
+        windowSize: z.number().int().min(2).default(12),
+        minSamples: z.number().int().min(2).optional().default(8),
+      })
+      .optional(),
+    recommendations: z
+      .object({
+        /**
+         * Enables the background recommendation polling job. This controls
+         * generation only; consumers read the latest persisted recommendation.
+         */
+        enabled: z.boolean().default(true),
+        /**
+         * Recommendation polling is read-only from briefing/plan call paths:
+         * those flows consume `latestRecommendation` context but never write.
+         */
+        readOnly: z.boolean().default(true),
+        cadenceMs: z
+          .object({
+            rth: z.number().int().positive().default(15 * 60 * 1000),
+            pre: z.number().int().positive().default(60 * 60 * 1000),
+            post: z.number().int().positive().default(60 * 60 * 1000),
+            closed: z.number().int().positive().default(4 * 60 * 60 * 1000),
+            holiday: z.number().int().positive().default(4 * 60 * 60 * 1000),
+          })
+          .default({
+            rth: 15 * 60 * 1000,
+            pre: 60 * 60 * 1000,
+            post: 60 * 60 * 1000,
+            closed: 4 * 60 * 60 * 1000,
+            holiday: 4 * 60 * 60 * 1000,
+          }),
+      })
+      .optional(),
   })
   .default({
     sentimentSources: {
@@ -115,6 +152,23 @@ export const PollingConfig = z
       cnn: { enabled: true, weight: 1.2 },
       'google-news': { enabled: true, weight: 1.1 },
       googleNewsOpinion: { enabled: true, weight: 0.9 },
+    },
+    recommendations: {
+      enabled: true,
+      readOnly: true,
+      cadenceMs: {
+        rth: 15 * 60 * 1000,
+        pre: 60 * 60 * 1000,
+        post: 60 * 60 * 1000,
+        closed: 4 * 60 * 60 * 1000,
+        holiday: 4 * 60 * 60 * 1000,
+      },
+    },
+    sentimentAlerts: {
+      enabled: false,
+      stdDevThreshold: 2,
+      windowSize: 12,
+      minSamples: 8,
     },
   });
 export type PollingConfig = z.infer<typeof PollingConfig>;

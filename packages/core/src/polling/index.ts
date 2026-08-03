@@ -155,6 +155,9 @@ export {
   DEFAULT_CADENCE_MS,
   type AggregateSentimentOptions,
   type AggregateSentimentResult,
+  type SentimentAlertEvent,
+  type SentimentAlertSettings,
+  type SentimentEvent,
   type SentimentUpdateEvent,
 } from './jobs/sentiment-aggregate.js';
 export {

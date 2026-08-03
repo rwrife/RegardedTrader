@@ -69,6 +69,28 @@ describe('<Watchlist />', () => {
     expect(screen.getByText(/Not financial advice/i)).toBeDefined();
   });
 
+  it('right-aligns numeric watchlist columns', () => {
+    const { container } = render(
+      <Watchlist
+        initialEntries={[entry({ symbol: 'NVDA' })]}
+        disableLiveQuotes
+      />,
+    );
+    const table = screen.getByRole('table', { name: 'Watchlist' });
+    const headerRow = table.querySelector('thead tr');
+    const bodyRow = table.querySelector('tbody tr');
+    expect(headerRow).toBeTruthy();
+    expect(bodyRow).toBeTruthy();
+
+    const headerCells = Array.from(headerRow!.querySelectorAll('th'));
+    const bodyCells = Array.from(bodyRow!.querySelectorAll('td'));
+    expect(headerCells[2]!.className).toContain('text-right');
+    expect(headerCells[3]!.className).toContain('text-right');
+    expect(bodyCells[2]!.className).toContain('text-right');
+    expect(bodyCells[3]!.className).toContain('text-right');
+    expect(container.textContent).toContain('—');
+  });
+
   it('renders the empty state when the server returns no entries', async () => {
     const fetchImpl = vi.fn(async () =>
       new Response(JSON.stringify({ entries: [] }), {

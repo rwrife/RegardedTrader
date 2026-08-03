@@ -47,9 +47,41 @@ server is running unless you also `kill -HUP` (or restart) the server.
     "accountSizeUsd": 0,        // #181 — 0 = unknown; enables the % cap when > 0
     "maxPctOfAccount": 0.02     // #181 — fraction of accountSizeUsd (2%)
   },
+  "polling": {
+    "sentimentSources": {
+      "reddit": { "enabled": true, "weight": 1 },
+      "stocktwits": { "enabled": true, "weight": 0.7 },
+      "hn": { "enabled": true, "weight": 0.4 },
+      "cnn": { "enabled": true, "weight": 1.2 },
+      "google-news": { "enabled": true, "weight": 1.1 },
+      "googleNewsOpinion": { "enabled": true, "weight": 0.9 }
+    },
+    "sentimentAlerts": {
+      "enabled": false,         // #42 — gate alert events
+      "stdDevThreshold": 2,     // fire when |z-score| >= threshold
+      "windowSize": 12,         // trailing sentiment snapshots in baseline window
+      "minSamples": 8           // minimum baseline points required to alert
+    },
+    "recommendations": {
+      "enabled": true,
+      "readOnly": true,
+      "cadenceMs": {
+        "rth": 900000,
+        "pre": 3600000,
+        "post": 3600000,
+        "closed": 14400000,
+        "holiday": 14400000
+      }
+    }
+  },
   "server": { "host": "127.0.0.1", "port": 4317 }
 }
 ```
+
+`polling.recommendations` controls only the background recommendation
+generation cadence. Briefings and plan generation consume the most recent
+persisted recommendation as read-only context (when present); they do not write
+or mutate recommender state.
 
 ## Risk caps
 
@@ -70,7 +102,34 @@ configs load with these defaults applied automatically (the Zod schema
 supplies them on `parse`), so no migration step is required. The pct-of-
 account cap stays inactive until the user sets `accountSizeUsd > 0`.
 
+## Recommender earnings hard-gates
+
+The recommender's `HardGates` layer applies fixed earnings guardrails (not
+user-configurable):
+
+- If `nextEarnings.daysUntil <= 7`, it appends risk flag `"earnings within 7d"`
+  and downgrades `nakedCall` / `nakedPut` verdict actions to `AVOID`.
+- If `nextEarnings.daysUntil <= 1`, it appends `"iv crush risk"` and
+  downgrades every non-null options verdict action to `HOLD/AVOID`
+  (buy/sell stances are forced to `AVOID`).
+
 ## Provider kinds
+
+## Sentiment polling + alert hook
+
+`config.polling.sentimentAlerts` controls whether sentiment-shift alerts are
+emitted from the sentiment aggregation job:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Master gate. When false, no sentiment alert events are emitted. |
+| `stdDevThreshold` | `2` | Alert threshold in standard deviations (`|z-score| >= threshold`). |
+| `windowSize` | `12` | Number of trailing sentiment snapshots used to compute baseline mean/std-dev. |
+| `minSamples` | `8` | Minimum baseline sample count required before alerting. |
+
+This hook emits a structured `sentiment.alert` event intended for existing
+alerts surfaces. It is intentionally disabled by default to avoid noisy
+notifications on fresh installs.
 
 ### `openai-compatible`
 
