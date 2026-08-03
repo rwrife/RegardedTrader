@@ -18,6 +18,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { QuoteSchema, type LiveQuote } from '@regardedtrader/core/schemas';
 import { isUsMarketOpen } from '@regardedtrader/core/marketHours';
+import { streamUrl } from '../api.js';
 
 const INTERVAL_MARKET_MS = 10_000;
 const INTERVAL_OFF_HOURS_MS = 60_000;
@@ -34,8 +35,12 @@ export interface UseLiveQuoteOptions {
   fetchImpl?: typeof fetch;
   /** Override base URL prefix; defaults to `/api`. */
   base?: string;
+  /** Transport selector. Defaults to HTTP polling for compatibility. */
+  transport?: 'http' | 'ws';
   /** Disable polling entirely (e.g. demo mode). */
   enabled?: boolean;
+  /** Optional WebSocket factory override (tests). */
+  createWebSocket?: (url: string) => WebSocket;
 }
 
 function intervalFor(quote: LiveQuote | null): number {
@@ -50,7 +55,13 @@ export function useLiveQuote(
   symbol: string | null | undefined,
   opts: UseLiveQuoteOptions = {},
 ): UseLiveQuoteResult {
-  const { fetchImpl, base = '/api', enabled = true } = opts;
+  const {
+    fetchImpl,
+    base = '/api',
+    enabled = true,
+    transport = 'http',
+    createWebSocket,
+  } = opts;
   const [quote, setQuote] = useState<LiveQuote | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,13 +74,15 @@ export function useLiveQuote(
   useEffect(() => {
     if (!enabled || !symbol) return;
     const f = fetchImpl ?? (typeof fetch !== 'undefined' ? fetch : null);
-    if (!f) return;
+    if (transport === 'http' && !f) return;
 
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let socket: WebSocket | null = null;
 
     const tick = async (): Promise<void> => {
       if (cancelled) return;
+      if (!f) return;
       // Pause when tab is hidden; visibilitychange listener (below) will
       // re-prime the chain when the tab becomes visible again.
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
@@ -114,10 +127,49 @@ export function useLiveQuote(
       }, delay);
     };
 
+    const startWebSocket = (): void => {
+      const wsFactory = createWebSocket ?? ((url: string) => new WebSocket(url));
+      socket = wsFactory(streamUrl(base));
+      socket.addEventListener('open', () => {
+        socket?.send(
+          JSON.stringify({
+            type: 'sub',
+            channel: 'quote',
+            symbol: symbol.toUpperCase(),
+          }),
+        );
+      });
+      socket.addEventListener('message', (event) => {
+        if (cancelled) return;
+        try {
+          const parsed = JSON.parse(String(event.data)) as unknown;
+          if (!parsed || typeof parsed !== 'object') return;
+          const payload = parsed as { type?: string; data?: unknown };
+          if (payload.type !== 'quote') return;
+          const validated = QuoteSchema.parse(payload.data);
+          setQuote(validated);
+          setError(null);
+          setLastUpdatedAt(new Date());
+          setIsLoading(false);
+        } catch (error) {
+          setError(error instanceof Error ? error.message : 'unknown error');
+        }
+      });
+      socket.addEventListener('error', () => {
+        if (!cancelled) setError('WebSocket stream error');
+      });
+    };
+
     const onVisibility = (): void => {
       if (cancelled) return;
       if (typeof document === 'undefined') return;
       if (document.visibilityState === 'visible') {
+        if (transport === 'ws') {
+          if (!socket || socket.readyState === socket.CLOSED) {
+            startWebSocket();
+          }
+          return;
+        }
         // Resume immediately when the tab regains focus.
         if (timer) {
           clearTimeout(timer);
@@ -125,6 +177,11 @@ export function useLiveQuote(
         }
         void tick();
       } else {
+        if (transport === 'ws') {
+          socket?.close();
+          socket = null;
+          return;
+        }
         // Hidden — cancel the pending wakeup so we don't fire while hidden.
         if (timer) {
           clearTimeout(timer);
@@ -137,16 +194,35 @@ export function useLiveQuote(
       document.addEventListener('visibilitychange', onVisibility);
     }
 
-    void tick();
+    if (transport === 'ws') {
+      setIsLoading(true);
+      startWebSocket();
+    } else {
+      void tick();
+    }
 
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
+      if (socket) {
+        try {
+          socket.send(
+            JSON.stringify({
+              type: 'unsub',
+              channel: 'quote',
+              symbol: symbol.toUpperCase(),
+            }),
+          );
+        } catch {
+          // no-op
+        }
+        socket.close();
+      }
       if (typeof document !== 'undefined') {
         document.removeEventListener('visibilitychange', onVisibility);
       }
     };
-  }, [symbol, enabled, fetchImpl, base]);
+  }, [symbol, enabled, fetchImpl, base, transport, createWebSocket]);
 
   return { quote, isLoading, error, lastUpdatedAt };
 }

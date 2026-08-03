@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { DISCLAIMER } from '../constants.js';
 export { AiOutputEnvelope, envelope, type AiEnvelope } from './envelope.js';
+export * from './stream.js';
 export {
   ContextBudgetOptionsSchema,
   ContextBudgetSectionCharsSchema,
