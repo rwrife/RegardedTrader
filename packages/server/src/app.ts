@@ -877,22 +877,59 @@ export function createApp(deps: AppDeps): AppHandle {
    * feedback that their key works.
    */
   app.post('/config/market-data/test', async (req, res) => {
-    const probeSymbol = typeof req.body?.symbol === 'string' ? req.body.symbol.toUpperCase() : 'AAPL';
-    const source = resolveLiveQuoteSource();
+    const bodyParsed = z.object({
+      symbol: z.string().optional(),
+      providerId: z.string().optional(),
+    }).safeParse(req.body);
+    const probeSymbol = (bodyParsed.success && bodyParsed.data.symbol)
+      ? bodyParsed.data.symbol.toUpperCase()
+      : 'AAPL';
+    const testProviderId = bodyParsed.success ? bodyParsed.data.providerId : undefined;
+
+    let source: LiveQuoteSource | null;
+    let resolvedId: string | null;
+
+    if (testProviderId) {
+      const testProvCfg = cfg.marketData.providers[testProviderId];
+      if (!testProvCfg) {
+        res.json({ ok: false, error: `Market-data provider "${testProviderId}" not found` });
+        return;
+      }
+      const testReg = createMarketDataRegistry(
+        { providers: { [testProviderId]: testProvCfg }, activeProvider: testProviderId },
+        { fallback: deps.market },
+      );
+      source = testReg.liveQuoteSource != null
+        ? (testReg.liveQuoteSource as unknown as LiveQuoteSource)
+        : (deps.liveQuoteSource ?? null);
+      resolvedId = testProviderId;
+    } else {
+      source = resolveLiveQuoteSource();
+      resolvedId = registry.activeId;
+    }
+
     if (!source) {
-      res.status(503).json({ ok: false, error: 'No market-data provider configured' });
+      res.json({ ok: false, error: 'No market-data provider configured. Add one in Settings → Market Data.' });
       return;
     }
     try {
       const raw = (await source(probeSymbol)) as YahooQuoteLike;
       res.json({
         ok: true,
-        provider: registry.activeId,
+        provider: resolvedId,
         symbol: probeSymbol,
         price: raw.regularMarketPrice ?? null,
       });
     } catch (e) {
-      res.status(502).json({ ok: false, error: (e as Error).message });
+      const rawMsg = (e as Error).message;
+      let friendly = rawMsg;
+      if (/too many requests|429|rate[\s-]?limit/i.test(rawMsg)) {
+        friendly =
+          'Yahoo Finance is rate-limited (HTTP 429). This unofficial API throttles heavy usage. ' +
+          'Switch to Finnhub for reliable real-time data.';
+      }
+      // Always return 200 — success/failure is in the `ok` field, not the HTTP status.
+      res.json({ ok: false, error: friendly });
     }
   });
 
@@ -902,7 +939,7 @@ export function createApp(deps: AppDeps): AppHandle {
     try {
       const { id, provider } = ProviderUpsert.parse(req.body);
       cfg.providers[id] = provider;
-      if (!cfg.activeProvider) cfg.activeProvider = id;
+      cfg.activeProvider = id;
       await saveConfig(cfg);
       orchestrator = makeOrchestrator();
       res.json({ ok: true, aiConfigured: orchestrator !== null, config: redactConfig(cfg) });
@@ -1007,7 +1044,7 @@ export function createApp(deps: AppDeps): AppHandle {
     }
 
     const model = provider.kind === 'openai-compatible' ? provider.model : provider.model;
-    const TIMEOUT_MS = 10_000;
+    const TIMEOUT_MS = provider.kind === 'cli' ? 90_000 : 10_000;
     const started = Date.now();
     try {
       const llm = (deps.buildLLMForProvider ?? buildLLM)(provider);
