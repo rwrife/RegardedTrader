@@ -11,7 +11,7 @@ Lifecycle:
 1. **Input received** (usually via Orchestrator, server route, or polling job).
 2. **Prompt/build context** from typed input.
 3. **Call dependencies** (LLM, market/news/web clients) through injected interfaces.
-4. **Parse and validate** output with Zod schemas from `core/src/schemas/`.
+4. **Parse and validate** output with Zod schemas from `packages/core/src/schemas/`.
 5. **Return typed result** (or throw typed parse/domain errors when appropriate).
 
 Use capability interfaces for orchestrator wiring (current examples: `TechnicianAgent`, `NewsScoutAgent` in `packages/core/src/agents/index.ts`), and keep one public method per agent (`brief`, `analyze`, `propose`, `scout`, `validate`, etc.).
@@ -78,18 +78,14 @@ For AI-generated output:
 
 ## 7) Minimal worked example: `HelloAgent` (~50 lines)
 
+In real code, define `HelloAgentOutput` in `packages/core/src/schemas/` and import it into the agent. The snippet below follows that pattern.
+
 ```ts
-import { z } from 'zod';
 import type { LLM } from './llm.js';
 import { DISCLAIMER } from '../constants.js';
 import { AgentParseError } from './errors.js';
-
-const HelloAgentOutput = z.object({
-  summary: z.string().min(1),
-  sourcesUsed: z.array(z.string().url()).default([]),
-});
-
-export type HelloAgentOutput = z.infer<typeof HelloAgentOutput>;
+import { HelloAgentOutputSchema } from '../schemas/hello-agent.js';
+import type { HelloAgentOutput } from '../schemas/hello-agent.js';
 
 export interface HelloAgentInput {
   symbol: string;
@@ -113,7 +109,7 @@ export class HelloAgent {
       throw new AgentParseError('HelloAgent', [(err as Error).message], raw);
     }
 
-    const result = HelloAgentOutput.safeParse(parsedJson);
+    const result = HelloAgentOutputSchema.safeParse(parsedJson);
     if (!result.success) {
       throw new AgentParseError(
         'HelloAgent',
@@ -126,3 +122,7 @@ export class HelloAgent {
   }
 }
 ```
+
+## Follow-up dependency for `packages/core/README.md`
+
+Issue #129 also asks for a `packages/core/README.md` link once #104 lands. That file does not exist yet in this branch, so this PR implements the AGENTS link now and leaves the core README link for the #104 follow-up.
