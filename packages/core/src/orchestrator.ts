@@ -36,6 +36,12 @@ export interface BriefingOptions {
   maxLossUsd?: number;
   expiry?: string;
   sentimentSnapshot?: SentimentSnapshot;
+  nextEarnings?: {
+    date: string;
+    daysUntil: number;
+    title: string;
+    startUtc: string;
+  };
 }
 
 export interface OrchestratorAgents {
@@ -122,6 +128,7 @@ export class Orchestrator {
       indicators,
       news: analystNews,
       sentiment: opts.sentimentSnapshot,
+      ...(opts.nextEarnings ? { nextEarnings: opts.nextEarnings } : {}),
     });
 
     // Aggregate risk verdict for the briefing. Briefing-only calls do not

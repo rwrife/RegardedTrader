@@ -86,6 +86,17 @@ configs load with these defaults applied automatically (the Zod schema
 supplies them on `parse`), so no migration step is required. The pct-of-
 account cap stays inactive until the user sets `accountSizeUsd > 0`.
 
+## Recommender earnings hard-gates
+
+The recommender's `HardGates` layer applies fixed earnings guardrails (not
+user-configurable):
+
+- If `nextEarnings.daysUntil <= 7`, it appends risk flag `"earnings within 7d"`
+  and downgrades `nakedCall` / `nakedPut` verdict actions to `AVOID`.
+- If `nextEarnings.daysUntil <= 1`, it appends `"iv crush risk"` and
+  downgrades every non-null options verdict action to `HOLD/AVOID`
+  (buy/sell stances are forced to `AVOID`).
+
 ## Provider kinds
 
 ## Sentiment polling + alert hook

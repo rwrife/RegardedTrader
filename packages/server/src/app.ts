@@ -1477,7 +1477,40 @@ export function createApp(deps: AppDeps): AppHandle {
       const known = await requireKnownSymbol(res, symbol);
       if (!known) return;
       const sentimentSnapshot = await readRecentSentimentSnapshot(symbol);
-      res.json(await o.briefing(symbol, { sentimentSnapshot }));
+      let nextEarnings:
+        | { date: string; daysUntil: number; title: string; startUtc: string }
+        | undefined;
+      try {
+        const upcoming = await calendar.getSymbolEarnings({
+          symbol,
+          includePast: false,
+          includeUpcoming: true,
+        });
+        const next = upcoming[0];
+        if (next) {
+          const startMs = Date.parse(next.startUtc);
+          if (Number.isFinite(startMs)) {
+            const nowMs = deps.now ? deps.now() : Date.now();
+            const daysUntil = Math.floor((startMs - nowMs) / (24 * 60 * 60 * 1000));
+            if (daysUntil >= 0 && daysUntil <= 14) {
+              nextEarnings = {
+                date: next.startUtc.slice(0, 10),
+                startUtc: next.startUtc,
+                title: next.title,
+                daysUntil,
+              };
+            }
+          }
+        }
+      } catch {
+        // Best-effort enrichment: briefing should still render if calendar refresh fails.
+      }
+      res.json(
+        await o.briefing(symbol, {
+          sentimentSnapshot,
+          ...(nextEarnings ? { nextEarnings } : {}),
+        }),
+      );
     } catch (e) {
       next(e);
     }
@@ -1496,7 +1529,41 @@ export function createApp(deps: AppDeps): AppHandle {
       if (!known) return;
       const body = BriefingRequest.parse(req.body ?? {});
       const sentimentSnapshot = await readRecentSentimentSnapshot(symbol);
-      res.json(await o.briefing(symbol, { ...body, sentimentSnapshot }));
+      const nowMs = deps.now ? deps.now() : Date.now();
+      let nextEarnings:
+        | { date: string; daysUntil: number; title: string; startUtc: string }
+        | undefined;
+      try {
+        const upcoming = await calendar.getSymbolEarnings({
+          symbol,
+          includePast: false,
+          includeUpcoming: true,
+        });
+        const next = upcoming[0];
+        if (next) {
+          const startMs = Date.parse(next.startUtc);
+          if (Number.isFinite(startMs)) {
+            const daysUntil = Math.floor((startMs - nowMs) / (24 * 60 * 60 * 1000));
+            if (daysUntil >= 0 && daysUntil <= 14) {
+              nextEarnings = {
+                date: next.startUtc.slice(0, 10),
+                startUtc: next.startUtc,
+                title: next.title,
+                daysUntil,
+              };
+            }
+          }
+        }
+      } catch {
+        // Best-effort enrichment: briefing should still render if calendar refresh fails.
+      }
+      res.json(
+        await o.briefing(symbol, {
+          ...body,
+          sentimentSnapshot,
+          ...(nextEarnings ? { nextEarnings } : {}),
+        }),
+      );
     } catch (e) {
       next(e);
     }

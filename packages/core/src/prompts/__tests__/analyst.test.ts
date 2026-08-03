@@ -15,12 +15,15 @@ describe('AnalystPrompts', () => {
       quote: { symbol: 'NVDA', price: 100 } as never,
       indicators: { sma20: null, sma50: null, rsi14: null, macd: null, atr14: null } as never,
       news: [],
+      nextEarnings: { date: '2026-06-18', daysUntil: 11, title: 'NVDA earnings' },
     });
     expect(user).toMatch(/bullCase/);
     expect(user).toMatch(/bearCase/);
     expect(user).toMatch(/catalysts/);
     expect(user).toMatch(/risks/);
     expect(user).toMatch(/NVDA/);
+    expect(user).toMatch(/nextEarnings/);
+    expect(user).toMatch(/avoid.*options/i);
   });
 
   it('includes sentiment guardrails when a recent sentiment snapshot is supplied', () => {

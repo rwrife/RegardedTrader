@@ -17,6 +17,12 @@ export interface AnalystInput {
   indicators: Indicators;
   news: NewsItem[];
   sentiment?: SentimentSnapshot;
+  nextEarnings?: {
+    date: string;
+    daysUntil: number;
+    title?: string;
+    startUtc?: string;
+  };
 }
 
 export class Analyst {
