@@ -98,9 +98,9 @@ RegardedTrader never handles auth itself.
 
 | backend       | default command | how it's invoked                                        |
 | ------------- | --------------- | ------------------------------------------------------- |
-| `codex-cli`   | `codex`         | `codex exec --json --color never --sandbox workspace-write --skip-git-repo-check` |
-| `claude-cli`  | `claude`        | `claude -p --output-format stream-json --verbose`       |
-| `copilot-cli` | `gh`            | `gh copilot explain` (richer Copilot Chat support is a follow-up issue) |
+| `codex-cli`   | `codex`         | `codex exec --json --color never --sandbox workspace-write --skip-git-repo-check` (follow-up turns use `codex exec resume <sessionId>`) |
+| `claude-cli`  | `claude`        | `claude -p --output-format stream-json --verbose` (follow-up turns pass `--resume <sessionId>` when available) |
+| `copilot-cli` | `copilot`       | `copilot -p "<prompt>"` (standalone `@github/copilot` CLI chat mode; preferred over `gh copilot explain/suggest`) |
 
 You can override the binary path (`command`), append flags (`args`), set the
 model (`model`), and inject env vars (`env`) per-provider.
@@ -115,9 +115,9 @@ codex auth login
 claude auth login
 claude auth status --text
 
-# GitHub Copilot CLI
+# GitHub Copilot CLI (standalone)
 gh auth login
-gh extension install github/gh-copilot
+npm install -g @github/copilot
 ```
 
 ## CLI surface

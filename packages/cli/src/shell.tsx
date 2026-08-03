@@ -11,6 +11,7 @@ import { ListScreen, RemoveScreen } from './screens/watchlist.js';
 import { WatchScreen } from './screens/watch.js';
 import { DashboardScreen } from './screens/dashboard.js';
 import { PaperScreen } from './screens/paper.js';
+import { ChartScreen } from './screens/chart.js';
 
 /**
  * Fancy modal-style shell inspired by Copilot CLI / Claude Code. Everything is
@@ -27,6 +28,7 @@ type SlashId =
   | 'quote'
   | 'tech'
   | 'plan'
+  | 'chart'
   | 'add'
   | 'ls'
   | 'rm'
@@ -51,6 +53,7 @@ const COMMANDS: SlashCommand[] = [
   { id: 'quote',    name: '/quote',    usage: '/quote <SYM>',    blurb: 'Quick price snapshot',                    needsArgs: true },
   { id: 'tech',     name: '/tech',     usage: '/tech <SYM>',     blurb: 'Technician (TA) commentary',              needsArgs: true },
   { id: 'plan',     name: '/plan',     usage: '/plan <SYM>',     blurb: 'Interactive options trade-plan wizard',   needsArgs: true },
+  { id: 'chart',    name: '/chart',    usage: '/chart <SYM>',    blurb: 'ASCII sparkline + RSI/MACD readout',      needsArgs: true },
   { id: 'add',      name: '/add',      usage: '/add <SYM>...',   blurb: 'Validate ticker(s) and add to watchlist', needsArgs: true },
   { id: 'ls',       name: '/ls',       usage: '/ls',             blurb: 'Show watchlist' },
   { id: 'rm',       name: '/rm',       usage: '/rm <SYM>',       blurb: 'Remove a ticker from watchlist',          needsArgs: true },
@@ -283,6 +286,8 @@ function RunningBody({
       return <TechScreen symbol={(args[0] ?? '').toUpperCase()} serverUrl={serverUrl} onDone={onDone} />;
     case 'plan':
       return <PlanScreen symbol={(args[0] ?? '').toUpperCase()} serverUrl={serverUrl} onDone={onDone} />;
+    case 'chart':
+      return <ChartScreen symbol={(args[0] ?? '').toUpperCase()} serverUrl={serverUrl} onDone={onDone} />;
     case 'add':
       return (
         <AddScreen

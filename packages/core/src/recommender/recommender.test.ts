@@ -5,7 +5,10 @@ import {
   type RecommenderStamp,
 } from './recommender.js';
 import type { LLM } from '../agents/llm.js';
-import { RECOMMENDATION_DISCLAIMER } from '../schemas/recommendation.js';
+import {
+  RECOMMENDATION_DISCLAIMER,
+  Recommendation as RecommendationSchema,
+} from '../schemas/recommendation.js';
 import type { RecommendationContext } from './rules/index.js';
 
 function fakeLLM(replies: string | string[]): {
@@ -25,7 +28,7 @@ function fakeLLM(replies: string | string[]): {
 
 const CTX: RecommendationContext = {
   symbol: 'NVDA',
-  risk: { forbidNakedShorts: true },
+  risk: { forbidNakedShorts: true, maxLossUsd: 500 },
   quote: {
     stale: false,
     asOf: '2026-06-10T15:00:00.000Z',
@@ -93,6 +96,15 @@ describe('AIRecommender', () => {
     expect(rec.sources).toEqual(STAMP.sources);
     expect(rec.generatedAt).toBe(STAMP.generatedAt);
     expect(rec.asOf).toEqual(STAMP.asOf);
+  });
+
+  it('snapshot: prompt + canned output stays stable and schema-valid', async () => {
+    const { llm, calls } = fakeLLM(JSON.stringify(GOOD_OUTPUT));
+    const rec = await new AIRecommender(llm).recommend(CTX, STAMP);
+
+    expect(calls[0]).toMatchSnapshot();
+    expect(rec).toMatchSnapshot();
+    expect(() => RecommendationSchema.parse(rec)).not.toThrow();
   });
 
   it('retries ONCE on malformed JSON and succeeds on the fix-up', async () => {
@@ -174,5 +186,23 @@ describe('AIRecommender', () => {
     await new AIRecommender(llm).recommend(CTX, STAMP);
     expect(calls[0]!.system).toMatch(/chain-of-thought/i);
     expect(calls[0]!.system).toMatch(/STRICT JSON/);
+  });
+
+  it('scrubs unsafe certainty claims and sizing above maxLossUsd', async () => {
+    const unsafe = {
+      ...GOOD_OUTPUT,
+      equity: {
+        ...GOOD_OUTPUT.equity,
+        rationale:
+          'Guaranteed winner and risk-free setup. Size the position to $1000 risk.',
+      },
+    };
+    const { llm } = fakeLLM(JSON.stringify(unsafe));
+    const rec = await new AIRecommender(llm).recommend(CTX, STAMP);
+
+    expect(rec.equity.rationale.toLowerCase()).not.toContain('guaranteed');
+    expect(rec.equity.rationale.toLowerCase()).not.toContain('risk-free');
+    expect(rec.equity.rationale).not.toContain('$1000');
+    expect(rec.equity.rationale).toContain('$500');
   });
 });

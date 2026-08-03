@@ -10,6 +10,8 @@
  *   - The store interfaces are typed structurally (see {@link SnapshotReader}
  *     / {@link MentionReader}) so tests can inject lightweight fakes
  *     without spinning up a real `SnapshotStore`.
+ *   - Missing quote input is a hard failure (`stale-input`), per the epic:
+ *     this builder never performs network fetches to fill gaps.
  *   - Every section carries its own ISO `asOf` and a boolean `stale` flag
  *     computed as "older than 2× the section's expected cadence" (the
  *     recommender epic's freshness rule).
@@ -142,6 +144,8 @@ export interface BuildContextOptions {
   readonly mentions?: MentionReader;
   /** Mirrors `AppConfig.risk.forbidNakedShorts`. Default `false`. */
   readonly forbidNakedShorts?: boolean;
+  /** Optional risk cap propagated for safety-copy clamping in recommendations. */
+  readonly maxLossUsd?: number;
   /** Override "now" for tests. */
   readonly now?: () => Date;
   /** Override per-section cadences (ms). */
@@ -186,6 +190,23 @@ export interface BuildContextOptions {
   readonly historyDays?: number;
 }
 
+/**
+ * Raised when required snapshot inputs are unavailable for context assembly.
+ * Recommender callers can surface `code: 'stale-input'` without guessing from
+ * message text.
+ */
+export class StaleInputError extends Error {
+  readonly code = 'stale-input' as const;
+
+  constructor(
+    readonly symbol: string,
+    readonly reason: 'missing-quote-snapshot' | 'invalid-quote-timestamp',
+  ) {
+    super(`stale-input: ${symbol} ${reason}`);
+    this.name = 'StaleInputError';
+  }
+}
+
 /* -------------------------------------------------------------------------- */
 /* Builder                                                                    */
 /* -------------------------------------------------------------------------- */
@@ -202,6 +223,16 @@ export async function buildRecommendationContext(
   const historyDays = opts.historyDays ?? DEFAULT_HISTORY_DAYS;
 
   const latest = await opts.snapshots.readLatest(symbol);
+  const latestQuote = latest.entries?.quote;
+  if (!latestQuote) {
+    throw new StaleInputError(symbol, 'missing-quote-snapshot');
+  }
+  if (
+    typeof latestQuote.ts !== 'string' ||
+    !Number.isFinite(Date.parse(latestQuote.ts))
+  ) {
+    throw new StaleInputError(symbol, 'invalid-quote-timestamp');
+  }
   const quote = buildQuoteSection(latest, now, cadences.quote);
   const options = buildOptionsSection(latest, now, cadences.options);
 
@@ -284,7 +315,12 @@ export async function buildRecommendationContext(
 
   return {
     symbol,
-    risk: { forbidNakedShorts: opts.forbidNakedShorts ?? false },
+    risk: {
+      forbidNakedShorts: opts.forbidNakedShorts ?? false,
+      ...(typeof opts.maxLossUsd === 'number' && Number.isFinite(opts.maxLossUsd)
+        ? { maxLossUsd: opts.maxLossUsd }
+        : {}),
+    },
     quote,
     options,
     history: budgetReport.history,

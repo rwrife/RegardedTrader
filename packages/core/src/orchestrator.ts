@@ -22,6 +22,7 @@ import {
   type RiskReview,
   type TradePlan,
 } from './schemas/index.js';
+import type { BriefingStorePort } from './storage/briefings.js';
 
 /**
  * Optional inputs to `Orchestrator.briefing` (issue #126). Supplying a
@@ -39,24 +40,31 @@ export interface OrchestratorAgents {
   newsScout?: NewsScoutAgent;
 }
 
+export interface OrchestratorStores {
+  briefings?: BriefingStorePort;
+}
+
 export class Orchestrator {
   private readonly analyst: Analyst;
   private readonly strategist: OptionsStrategist;
   private readonly risk: RiskOfficer;
   private readonly technician?: TechnicianAgent;
   private readonly newsScout?: NewsScoutAgent;
+  private readonly briefings?: BriefingStorePort;
 
   constructor(
     private readonly market: MarketDataClient,
     llm: LLM,
     caps: RiskCaps = { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true },
     agents: OrchestratorAgents = {},
+    stores: OrchestratorStores = {},
   ) {
     this.analyst = new Analyst(llm);
     this.strategist = new OptionsStrategist(llm);
     this.risk = new RiskOfficer(caps);
     this.technician = agents.technician;
     this.newsScout = agents.newsScout;
+    this.briefings = stores.briefings;
   }
 
   /**
@@ -123,7 +131,20 @@ export class Orchestrator {
     };
 
     // Validate at the seam — every emitted briefing must conform.
-    return Briefing.parse(candidate);
+    const out = Briefing.parse(candidate);
+    // Best-effort persistence (#141): callers still get the live response if
+    // the local history write fails (disk full, permissions, etc.).
+    if (this.briefings) {
+      try {
+        await this.briefings.saveBriefing(out);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[Orchestrator.briefing] persisted-history write failed for ${symbol.toUpperCase()}: ${msg}`,
+        );
+      }
+    }
+    return out;
   }
 
   async proposePlans(input: {

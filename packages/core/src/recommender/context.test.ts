@@ -29,9 +29,26 @@ function makeSnapshotReader(
     options?: StreamEntry[];
     news?: StreamEntry[];
   } = {},
+  options: { ensureQuote?: boolean } = {},
 ): SnapshotReader {
+  const ensureQuote = options.ensureQuote ?? true;
+  const seedQuoteTs = '2026-06-07T14:59:00.000Z';
+  const seededLatest: ContextLatestSnapshot =
+    ensureQuote && !latest.entries.quote
+      ? {
+          ...latest,
+          entries: {
+            ...latest.entries,
+            quote: {
+              ts: seedQuoteTs,
+              data: { price: 100, change: 0, changePercent: 0, volume: 1 },
+            },
+          },
+        }
+      : latest;
+
   return {
-    readLatest: async () => latest,
+    readLatest: async () => seededLatest,
     readRange: async function* (
       _symbol: string,
       kind: 'quote' | 'options' | 'news',
@@ -160,23 +177,46 @@ describe('buildRecommendationContext', () => {
     expect(ctx.quote.stale).toBe(true);
   });
 
-  it('handles missing quote without throwing', async () => {
+  it('fails with stale-input when quote snapshot is missing', async () => {
     const latest: ContextLatestSnapshot = {
       symbol: 'NVDA',
       updatedAt: NOW.toISOString(),
       entries: {},
     };
-    const ctx = await buildRecommendationContext({
+    await expect(
+      buildRecommendationContext({
+        symbol: 'NVDA',
+        snapshots: makeSnapshotReader(latest, {}, { ensureQuote: false }),
+        now,
+      }),
+    ).rejects.toMatchObject({
+      name: 'StaleInputError',
+      code: 'stale-input',
       symbol: 'NVDA',
-      snapshots: makeSnapshotReader(latest),
-      now,
+      reason: 'missing-quote-snapshot',
     });
-    expect(ctx.quote.last).toBeNull();
-    expect(ctx.quote.stale).toBe(true);
-    expect(ctx.options).toBeNull();
-    expect(ctx.history ?? null).toBeNull();
-    expect(ctx.indicators ?? null).toBeNull();
-    expect(ctx.news ?? null).toBeNull();
+  });
+
+  it('fails with stale-input when quote timestamp is invalid', async () => {
+    const latest: ContextLatestSnapshot = {
+      symbol: 'NVDA',
+      updatedAt: NOW.toISOString(),
+      entries: {
+        quote: { ts: 'not-a-date', data: { price: 123 } },
+      },
+    };
+    await expect(
+      buildRecommendationContext({
+        symbol: 'NVDA',
+        snapshots: makeSnapshotReader(latest),
+        now,
+      }),
+    ).rejects.toMatchObject({
+      name: 'StaleInputError',
+      code: 'stale-input',
+      symbol: 'NVDA',
+      reason: 'invalid-quote-timestamp',
+    });
   });
 
   it('builds an options digest from a latest options entry', async () => {

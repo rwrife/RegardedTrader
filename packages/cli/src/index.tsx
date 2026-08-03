@@ -17,12 +17,17 @@ const cli = meow(
     rm <SYM>                   Remove a ticker from the watchlist
     watch <ls|add|rm> [SYM...] Managed watchlist surface (parity twin of /watchlist)
     paper <submit|orders|positions> Simulated paper-trading surface (no live orders)
+    cal [--from=today] [--days=14]  Tiny calendar with holidays + watchlist earnings
+    cal earnings <SYM> [--past] [--upcoming]  Per-symbol earnings table
+    cal refresh [--holidays] [--earnings]     Force out-of-cycle calendar refresh
+    cal status                   Calendar source health + market state
     briefing <SYMBOL>          Generate an AI briefing for a ticker
     brief <SYMBOL>             Full briefing pipeline (analyst + TA + news + strategist)
     quote <SYMBOL>             Quick quote
     tech <SYMBOL>              Technician (TA) commentary for a ticker
     plan <SYMBOL>              Interactive options trade-plan wizard
     options <SYMBOL>           Options-chain explorer (calls/puts/greeks)
+    chart <SYMBOL>             ASCII sparkline + RSI/MACD indicator readout
     config [show|test [id]]    Configure AI providers, risk caps, server
     dashboard                  Open the local web dashboard
 
@@ -33,6 +38,12 @@ const cli = meow(
     --max-loss <usd>           (brief) Max-loss budget in USD for strategist
     --expiry <YYYY-MM-DD>      (brief/options) Target option expiry
     --paper                    (paper submit) Required safety flag for simulated execution
+    --from <YYYY-MM-DD|today>  (cal) Start date in ET (default today)
+    --days <N>                 (cal) Calendar window length (default 14, max 90)
+    --past                     (cal earnings) Include past earnings events
+    --upcoming                 (cal earnings) Include upcoming earnings events (default)
+    --holidays                 (cal refresh) Refresh holidays source set
+    --earnings                 (cal refresh) Refresh earnings source set
 
   Examples
     $ regard
@@ -41,6 +52,7 @@ const cli = meow(
     $ regard rm NVDA
     $ regard config
     $ regard briefing NVDA
+    $ regard chart NVDA
 `,
   {
     importMeta: import.meta,
@@ -51,6 +63,12 @@ const cli = meow(
       maxLoss: { type: 'number' },
       expiry: { type: 'string' },
       paper: { type: 'boolean', default: false },
+      from: { type: 'string', default: 'today' },
+      days: { type: 'number', default: 14 },
+      past: { type: 'boolean', default: false },
+      upcoming: { type: 'boolean', default: false },
+      holidays: { type: 'boolean', default: false },
+      earnings: { type: 'boolean', default: false },
       help: { type: 'boolean', shortFlag: 'h' },
     },
   },
@@ -76,6 +94,12 @@ if (!command) {
         maxLoss: cli.flags.maxLoss,
         expiry: cli.flags.expiry,
         paper: cli.flags.paper,
+        from: cli.flags.from,
+        days: cli.flags.days,
+        past: cli.flags.past,
+        upcoming: cli.flags.upcoming,
+        holidays: cli.flags.holidays,
+        earnings: cli.flags.earnings,
       }}
     />,
   );

@@ -27,7 +27,10 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { Ticker } from '../../schemas/index.js';
+import { MentionItem } from '../../schemas/sentiment.js';
+import type { MentionStore } from '../mention-store.js';
 import type { SnapshotStore } from '../store.js';
+import opinionOutlets from './opinion-outlets.json';
 
 /**
  * Source identifiers for the news poller. Kept distinct from the sentiment
@@ -80,6 +83,12 @@ export interface NewsNewEvent {
 export interface PollNewsOptions {
   readonly symbol: string;
   readonly store: SnapshotStore;
+  /**
+   * Optional mention store. When present, Google News items from curated
+   * opinion outlets are routed into the mentions pipeline instead of the
+   * headline news stream.
+   */
+  readonly mentionStore?: MentionStore;
   /** Injectable fetch (defaults to global `fetch`). */
   readonly fetchImpl?: typeof fetch;
   /** Subset of sources to poll. Defaults to all enabled. */
@@ -95,6 +104,7 @@ export interface PollNewsOptions {
 export interface PollNewsResult {
   readonly fetched: number;
   readonly inserted: number;
+  readonly routedToMentions: number;
   readonly bySource: Record<NewsSource, { fetched: number; inserted: number; error?: string }>;
 }
 
@@ -221,18 +231,36 @@ export function parseRssItems(xml: string): Array<{
   link?: string;
   pubDate?: string;
   description?: string;
+  sourceName?: string;
+  sourceUrl?: string;
 }> {
-  const items: Array<{ title?: string; link?: string; pubDate?: string; description?: string }> =
-    [];
+  const items: Array<{
+    title?: string;
+    link?: string;
+    pubDate?: string;
+    description?: string;
+    sourceName?: string;
+    sourceUrl?: string;
+  }> = [];
   const re = /<(item|entry)\b[\s\S]*?<\/\1>/gi;
   for (const m of xml.matchAll(re)) {
     const block = m[0];
+    const sourceMatch = /<source\b([^>]*)>([\s\S]*?)<\/source>/i.exec(block);
+    const sourceAttrs = sourceMatch?.[1] ?? '';
+    const sourceUrlMatch = /\burl=["']([^"']+)["']/i.exec(sourceAttrs);
+    const sourceNameRaw = sourceMatch?.[2];
+    const sourceName =
+      typeof sourceNameRaw === 'string'
+        ? decodeEntities(stripCdata(sourceNameRaw)).trim() || undefined
+        : undefined;
     items.push({
       title: pickTag(block, 'title'),
       link: pickLink(block),
       pubDate:
         pickTag(block, 'pubDate') ?? pickTag(block, 'published') ?? pickTag(block, 'updated'),
       description: pickTag(block, 'description') ?? pickTag(block, 'summary'),
+      sourceName,
+      sourceUrl: sourceUrlMatch?.[1] ? decodeEntities(sourceUrlMatch[1]) : undefined,
     });
   }
   return items;
@@ -257,7 +285,61 @@ export function parseNasdaqNews(xml: string, symbol: string): NewsPollerItem[] {
 }
 
 export function parseGoogleNews(xml: string, symbol: string): NewsPollerItem[] {
-  const out: NewsPollerItem[] = [];
+  return parseGoogleNewsWithMeta(xml, symbol).map((it) => it.item);
+}
+
+type GoogleNewsWithMeta = {
+  item: NewsPollerItem;
+  sourceDomain?: string;
+};
+
+function normalizeHost(host: string): string {
+  return host.trim().toLowerCase().replace(/^www\./, '');
+}
+
+function hostnameFromUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    return normalizeHost(new URL(url).hostname);
+  } catch {
+    return undefined;
+  }
+}
+
+function hostMatchesDomain(host: string, domain: string): boolean {
+  return host === domain || host.endsWith(`.${domain}`);
+}
+
+const CURATED_OPINION_DOMAINS = new Set(
+  opinionOutlets.flatMap((entry) =>
+    (entry.domains ?? []).map((domain) => normalizeHost(String(domain))),
+  ),
+);
+
+function isCuratedOpinionDomain(domain: string | undefined): boolean {
+  if (!domain) return false;
+  for (const curated of CURATED_OPINION_DOMAINS) {
+    if (hostMatchesDomain(domain, curated)) return true;
+  }
+  return false;
+}
+
+function toOpinionMention(item: NewsPollerItem, symbol: string, fetchedAt: string): MentionItem {
+  return MentionItem.parse({
+    source: 'googleNewsOpinion',
+    sourceId: `google-news-opinion:${urlHash(item.url)}`,
+    symbol,
+    title: item.title,
+    url: item.url,
+    text: [item.title, item.summary].filter(Boolean).join('\n\n'),
+    publishedAt: item.publishedAt,
+    fetchedAt,
+  });
+}
+
+function parseGoogleNewsWithMeta(xml: string, symbol: string): GoogleNewsWithMeta[] {
+  const sym = symbol.toUpperCase();
+  const withMeta: GoogleNewsWithMeta[] = [];
   for (const it of parseRssItems(xml)) {
     if (!it.title || !it.link) continue;
     const candidate = {
@@ -266,12 +348,17 @@ export function parseGoogleNews(xml: string, symbol: string): NewsPollerItem[] {
       source: 'google-news' as const,
       publishedAt: toIso(it.pubDate),
       summary: it.description,
-      tickers: [symbol.toUpperCase()],
+      tickers: [sym],
     };
     const safe = NewsPollerItem.safeParse(candidate);
-    if (safe.success) out.push(safe.data);
+    if (safe.success) {
+      withMeta.push({
+        item: safe.data,
+        sourceDomain: hostnameFromUrl(it.sourceUrl),
+      });
+    }
   }
-  return out;
+  return withMeta;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -326,6 +413,7 @@ export async function pollNews(opts: PollNewsOptions): Promise<PollNewsResult> {
   };
 
   const items: NewsPollerItem[] = [];
+  const opinionMentions: MentionItem[] = [];
 
   if (toggles.yahoo) {
     const r = await safeFetchText(fetchImpl, yahooNewsUrl(sym));
@@ -362,9 +450,15 @@ export async function pollNews(opts: PollNewsOptions): Promise<PollNewsResult> {
       bySource['google-news'].error = r.error;
       opts.onError?.('google-news', new Error(r.error));
     } else {
-      const parsed = parseGoogleNews(r.text, sym);
+      const parsed = parseGoogleNewsWithMeta(r.text, sym);
       bySource['google-news'].fetched = parsed.length;
-      items.push(...parsed);
+      for (const entry of parsed) {
+        if (opts.mentionStore && isCuratedOpinionDomain(entry.sourceDomain)) {
+          opinionMentions.push(toOpinionMention(entry.item, sym, now().toISOString()));
+          continue;
+        }
+        items.push(entry.item);
+      }
     }
   }
 
@@ -396,5 +490,13 @@ export async function pollNews(opts: PollNewsOptions): Promise<PollNewsResult> {
     }
   }
 
-  return { fetched: unique.length, inserted, bySource };
+  let routedToMentions = 0;
+  if (opts.mentionStore) {
+    for (const mention of opinionMentions) {
+      const written = await opts.mentionStore.appendMention(mention);
+      if (written !== null) routedToMentions += 1;
+    }
+  }
+
+  return { fetched: unique.length + opinionMentions.length, inserted, routedToMentions, bySource };
 }

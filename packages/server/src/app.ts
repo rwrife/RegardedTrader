@@ -27,8 +27,9 @@ import {
   createMarketDataRegistry,
   TickerValidator,
   WatchlistStore,
+  BriefingStore,
+  looksLikeBriefingId,
   DuckDuckGoSearch,
-  MarketClock,
   type WebSearch,
   type LLM,
   type AppConfig as AppConfigT,
@@ -40,10 +41,12 @@ import {
   PaperBroker,
   PaperStore,
   TradePlan,
+  type BriefingStorePort,
 } from '@regardedtrader/core';
 import { liveQuote, type LiveQuoteSource, type YahooQuoteLike } from './liveQuote.js';
 import { isLoopbackOrigin } from './bind-guard.js';
 import { SERVER_VERSION } from './version.js';
+import { CalendarService, todayEt, toEtDateKey } from './calendarService.js';
 
 export interface AppDeps {
   /**
@@ -61,6 +64,7 @@ export interface AppDeps {
    */
   buildLLMForProvider?: (provider: AiProviderT) => LLM;
   watchlist: WatchlistStore;
+  briefings?: BriefingStorePort;
   initialConfig: AppConfigT;
   /**
    * Built-in live-quote source used when no provider is configured (or when
@@ -72,6 +76,8 @@ export interface AppDeps {
   now?: () => number;
   /** Optional paper-trading store override for tests. */
   paperStore?: PaperStore;
+  /** Optional injectable calendar service (tests). */
+  calendar?: CalendarService;
 }
 
 export interface AppHandle {
@@ -86,6 +92,7 @@ export interface AppHandle {
  */
 export function createApp(deps: AppDeps): AppHandle {
   let cfg: AppConfigT = deps.initialConfig;
+  const briefings = deps.briefings ?? new BriefingStore();
 
   // --- Market data registry (#91) ---
   // Rebuilt whenever the marketData config changes so route handlers always
@@ -123,6 +130,7 @@ export function createApp(deps: AppDeps): AppHandle {
       // Wire the Technician agent (issue #74) by default so /briefing
       // includes a TA section whenever an LLM is configured.
       { technician: new Technician(llm) },
+      { briefings },
     );
   }
 
@@ -137,6 +145,11 @@ export function createApp(deps: AppDeps): AppHandle {
     if (!llm) return null;
     return new TickerValidator({ webSearch: deps.webSearch, llm });
   }
+  const calendar =
+    deps.calendar ??
+    new CalendarService({
+      now: deps.now ? () => new Date(deps.now!()) : undefined,
+    });
 
   // Process start timestamp for `GET /version` (issue #179). Captured once
   // at app creation so consumers can spot silent restarts.
@@ -418,6 +431,94 @@ export function createApp(deps: AppDeps): AppHandle {
     }
   });
 
+  // Fast ticker add: shape-check + yahoo-finance2 (crumb-aware), no LLM or web search.
+  // Returns the same ValidationResult wire shape as /tickers/validate so the
+  // web TickerIntake can use it as a drop-in.
+  app.post('/tickers/quick-add', async (req, res, next) => {
+    try {
+      const body = ValidateBody.parse(req.body);
+      const results: ValidationResult[] = [];
+
+      for (const raw of body.symbols) {
+        const symbol = raw.trim().toUpperCase();
+
+        // 1. Check cache first (same TTL as full validate)
+        const cached = await getFreshCachedProfile(symbol, body.refresh);
+        if (cached) {
+          results.push({ ok: true, profile: cached, cached: true });
+          continue;
+        }
+
+        // 2. Shape check
+        if (!/^[A-Z.\-]{1,10}$/.test(symbol)) {
+          results.push({
+            ok: false,
+            symbol,
+            error: `"${raw}" is not a valid ticker shape (1-10 chars, A-Z . - only).`,
+            suggestions: [],
+          });
+          continue;
+        }
+
+        // 3. yahoo-finance2 quote — crumb-aware, lightweight, no LLM
+        let name = symbol;
+        let exchange = 'Unknown';
+        let sector = 'Unknown';
+        let industry = 'Unknown';
+        let description = '';
+
+        try {
+          const yf = await import('yahoo-finance2');
+          const q = await yf.default.quote(symbol);
+
+          if (!q || q.quoteType !== 'EQUITY') {
+            results.push({
+              ok: false,
+              symbol,
+              error: q
+                ? `"${symbol}" is not a US equity (type: ${q.quoteType ?? 'unknown'}).`
+                : `"${symbol}" was not found on Yahoo Finance. Check the ticker and try again.`,
+              suggestions: [],
+            });
+            continue;
+          }
+
+          name = q.longName ?? q.shortName ?? symbol;
+          exchange = q.fullExchangeName ?? q.exchangeName ?? 'Unknown';
+          // sector/industry not available from quote endpoint; filled in on briefing
+          description = `${name} — see briefing for full profile.`;
+        } catch {
+          results.push({
+            ok: false,
+            symbol,
+            error: `"${symbol}" was not found on Yahoo Finance. Check the ticker and try again.`,
+            suggestions: [],
+          });
+          continue;
+        }
+
+        const now = new Date().toISOString();
+        const fullProfile = {
+          symbol,
+          name: name || symbol,
+          exchange: exchange || 'Unknown',
+          sector: sector || 'Unknown',
+          industry: industry || 'Unknown',
+          description: (description as string) || `${name} (${symbol})`,
+          sources: [`https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}`],
+          validatedAt: now,
+        };
+
+        await deps.watchlist.upsert(fullProfile);
+        results.push({ ok: true, profile: fullProfile, cached: false });
+      }
+
+      res.json({ results });
+    } catch (e) {
+      next(e);
+    }
+  });
+
   // Compatibility endpoint for issue #16 clients that want a one-shot
   // resolve preview without mutating the stored watchlist.
   app.get('/tickers/resolve', async (req, res, next) => {
@@ -505,56 +606,116 @@ export function createApp(deps: AppDeps): AppHandle {
   });
 
   // --- Calendar ---
+  const CalendarWindowQuery = z.object({
+    from: z.string().optional(),
+    days: z.coerce.number().int().min(1).max(90).optional().default(14),
+  });
+  const CalendarEarningsQuery = z.object({
+    past: z.coerce.boolean().optional().default(false),
+    upcoming: z.coerce.boolean().optional().default(true),
+  });
+  const CalendarRefreshBody = z.object({
+    holidays: z.boolean().optional().default(false),
+    earnings: z.boolean().optional().default(false),
+  });
 
-  // Returns real upcoming market holidays and early closes for the next N days
-  // (default 14) derived from the bundled market-calendar.json. This replaces
-  // the static SAMPLE_CALENDAR in the web CalendarStrip.
-  app.get('/calendar/upcoming', (req, res) => {
-    const days = Math.min(Number(req.query.days ?? 14), 90);
-    const clock = new MarketClock();
-    const cal = clock.getCalendar();
-
-    // Build the set of dates to check (ET dates, YYYY-MM-DD).
-    const etFormatter = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'America/New_York',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    });
-
-    const now = new Date();
-    const todayEt = (() => {
-      const p = etFormatter.formatToParts(now);
-      const m: Record<string, string> = {};
-      for (const part of p) m[part.type] = part.value;
-      return `${m.year}-${m.month}-${m.day}`;
-    })();
-
-    const events: Array<{ dateOffset: number; kind: string; title: string }> = [];
-
-    for (let i = 0; i <= days; i++) {
-      const d = new Date(now);
-      d.setDate(d.getDate() + i);
-      const p = etFormatter.formatToParts(d);
-      const m: Record<string, string> = {};
-      for (const part of p) m[part.type] = part.value;
-      const date = `${m.year}-${m.month}-${m.day}`;
-
-      const offset = i; // relative to today (today = 0)
-
-      if (cal.holidays.has(date)) {
-        events.push({ dateOffset: offset, kind: 'market_holiday', title: holidayName(date) });
-      } else if (cal.earlyCloses.has(date)) {
-        const closeTime = cal.earlyCloses.get(date)!;
-        events.push({
-          dateOffset: offset,
-          kind: 'market_early_close',
-          title: `Early close ${closeTime} ET`,
-        });
-      }
+  app.get('/calendar/events', async (req, res, next) => {
+    try {
+      const q = CalendarWindowQuery.parse(req.query);
+      const fromEt =
+        q.from && q.from !== 'today'
+          ? z.string().regex(/^\d{4}-\d{2}-\d{2}$/).parse(q.from)
+          : todayEt();
+      const watch = await deps.watchlist.list();
+      const symbols = watch.map((w) => w.profile.symbol);
+      await calendar.maybeRefreshForRead(symbols);
+      const window = await calendar.getWindow({
+        fromEt,
+        days: q.days,
+        symbols,
+      });
+      res.json(window);
+    } catch (e) {
+      next(e);
     }
+  });
 
-    res.json({ today: todayEt, events });
+  app.get('/calendar/earnings/:symbol', async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+      const known = await deps.watchlist.get(symbol);
+      if (!known) {
+        res.status(422).json({
+          error: `Unknown ticker "${symbol}". Add it first with \`regard add ${symbol}\`.`,
+          hint: 'POST /tickers/validate or `regard add <SYM>`',
+        });
+        return;
+      }
+      const q = CalendarEarningsQuery.parse(req.query);
+      const includePast = q.past;
+      const includeUpcoming = q.upcoming || !q.past;
+      await calendar.maybeRefreshForRead([symbol]);
+      const events = await calendar.getSymbolEarnings({
+        symbol,
+        includePast,
+        includeUpcoming,
+      });
+      res.json({ symbol, events });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.post('/calendar/refresh', async (req, res, next) => {
+    try {
+      const body = CalendarRefreshBody.parse(req.body ?? {});
+      const watch = await deps.watchlist.list();
+      const out = await calendar.refreshManually({
+        holidays: body.holidays,
+        earnings: body.earnings,
+        symbols: watch.map((w) => w.profile.symbol),
+      });
+      if (out.skipped && out.skipped.length > 0 && !out.holidays && !out.earnings) {
+        const retryAfterMs = Math.max(...out.skipped.map((s) => s.retryAfterMs));
+        res.setHeader('Retry-After', Math.max(1, Math.ceil(retryAfterMs / 1000)).toString());
+        res.status(429).json(out);
+        return;
+      }
+      res.json(out);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/calendar/status', (_req, res) => {
+    res.json(calendar.status());
+  });
+
+  // Compatibility endpoint used by the web CalendarStrip. Market-only list.
+  app.get('/calendar/upcoming', async (req, res, next) => {
+    try {
+      const q = CalendarWindowQuery.parse(req.query);
+      const fromEt = todayEt();
+      await calendar.maybeRefreshForRead([]);
+      const window = await calendar.getWindow({ fromEt, days: q.days, symbols: [] });
+      const events = window.events
+        .filter((ev) => ev.kind === 'market_holiday' || ev.kind === 'market_early_close')
+        .map((ev) => ({
+          dateOffset: Math.max(
+            0,
+            Math.floor(
+              (new Date(`${toEtDateKey(ev.startUtc)}T00:00:00.000Z`).getTime() -
+                new Date(`${fromEt}T00:00:00.000Z`).getTime()) /
+                (24 * 60 * 60 * 1000),
+            ),
+          ),
+          kind: ev.kind,
+          title: ev.title,
+        }));
+      res.json({ today: fromEt, events });
+    } catch (e) {
+      next(e);
+    }
   });
 
   // --- AI ---
@@ -604,11 +765,38 @@ export function createApp(deps: AppDeps): AppHandle {
     }
   });
 
+  const BriefingHistoryQuery = z.object({
+    limit: z.coerce.number().int().positive().max(200).optional().default(20),
+  });
+
+  app.get('/briefing/:symbol/history', async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+      const { limit } = BriefingHistoryQuery.parse(req.query);
+      res.json({
+        symbol,
+        items: await briefings.listBriefings(symbol, limit),
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
   app.get('/briefing/:symbol', async (req, res, next) => {
     try {
+      const candidate = req.params.symbol;
+      if (looksLikeBriefingId(candidate)) {
+        const stored = await briefings.getBriefing(candidate);
+        if (!stored) {
+          res.status(404).json({ error: `briefing "${candidate}" not found` });
+          return;
+        }
+        res.json(stored.briefing);
+        return;
+      }
       const o = requireOrchestrator(res);
       if (!o) return;
-      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+      const symbol = Ticker.parse(candidate.toUpperCase());
       const known = await requireKnownSymbol(res, symbol);
       if (!known) return;
       res.json(await o.briefing(symbol));
@@ -773,7 +961,7 @@ export function createApp(deps: AppDeps): AppHandle {
     try {
       const { id, provider } = MarketProviderUpsert.parse(req.body);
       cfg.marketData.providers[id] = provider;
-      if (!cfg.marketData.activeProvider) cfg.marketData.activeProvider = id;
+      cfg.marketData.activeProvider = id; // always activate the newly configured provider
       await saveConfig(cfg);
       rebuildRegistry();
       res.json({
@@ -1033,45 +1221,6 @@ export function createApp(deps: AppDeps): AppHandle {
   return { app, getConfig: () => cfg };
 }
 
-/** Maps well-known NYSE holiday dates (YYYY-MM-DD) to human-readable names. */
-function holidayName(date: string): string {
-  // month-day suffix for recurring holidays
-  const md = date.slice(5); // MM-DD
-  // Fixed-date holidays
-  const fixed: Record<string, string> = {
-    '01-01': "New Year's Day — markets closed",
-    '06-19': 'Juneteenth — markets closed',
-    '12-25': 'Christmas Day — markets closed',
-  };
-  if (fixed[md]) return fixed[md];
-  // Variable holidays — use a small lookup of known dates
-  const known: Record<string, string> = {
-    '2025-01-09': 'National Day of Mourning — markets closed',
-    '2025-01-20': "Martin Luther King Jr. Day — markets closed",
-    '2025-02-17': "Presidents' Day — markets closed",
-    '2025-04-18': 'Good Friday — markets closed',
-    '2025-05-26': 'Memorial Day — markets closed',
-    '2025-09-01': 'Labor Day — markets closed',
-    '2025-11-27': 'Thanksgiving Day — markets closed',
-    '2026-01-19': "Martin Luther King Jr. Day — markets closed",
-    '2026-02-16': "Presidents' Day — markets closed",
-    '2026-04-03': 'Good Friday — markets closed',
-    '2026-05-25': 'Memorial Day — markets closed',
-    '2026-09-07': 'Labor Day — markets closed',
-    '2026-11-26': 'Thanksgiving Day — markets closed',
-    '2027-01-18': "Martin Luther King Jr. Day — markets closed",
-    '2027-02-15': "Presidents' Day — markets closed",
-    '2027-04-02': 'Good Friday — markets closed',
-    '2027-05-31': 'Memorial Day — markets closed',
-    '2027-09-06': 'Labor Day — markets closed',
-    '2027-11-25': 'Thanksgiving Day — markets closed',
-    '2027-12-24': 'Christmas Eve (observed) — markets closed',
-    '2026-07-03': 'Independence Day (observed) — markets closed',
-    '2027-07-05': 'Independence Day (observed) — markets closed',
-  };
-  return known[date] ?? `Market holiday — markets closed`;
-}
-
 function makePlanId(symbol: string, index: number): string {
   return `${symbol.toUpperCase()}-${Date.now().toString(36)}-${index + 1}`;
 }
@@ -1082,6 +1231,7 @@ export function createDefaultApp(cfg: AppConfigT): AppHandle {
     market: new YahooClient(),
     webSearch: new DuckDuckGoSearch(),
     watchlist: new WatchlistStore(),
+    briefings: new BriefingStore(),
     initialConfig: cfg,
     liveQuoteSource: async (symbol) => {
       // yahoo-finance2 is a direct server dep; import dynamically so test

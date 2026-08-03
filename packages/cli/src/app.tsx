@@ -12,6 +12,8 @@ import { ListScreen, RemoveScreen } from './screens/watchlist.js';
 import { WatchScreen } from './screens/watch.js';
 import { OptionsScreen } from './screens/options.js';
 import { PaperScreen } from './screens/paper.js';
+import { ChartScreen } from './screens/chart.js';
+import { CalendarScreen } from './screens/calendar.js';
 
 export interface AppProps {
   command: string;
@@ -23,6 +25,12 @@ export interface AppProps {
     maxLoss?: number;
     expiry?: string;
     paper?: boolean;
+    from?: string;
+    days?: number;
+    past?: boolean;
+    upcoming?: boolean;
+    holidays?: boolean;
+    earnings?: boolean;
   };
 }
 
@@ -36,6 +44,8 @@ export function App({ command, args, serverUrl, flags }: AppProps) {
           expiry={flags?.expiry}
         />
       );
+    case 'chart':
+      return <ChartScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
     case 'briefing':
       return <BriefingScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
     case 'brief':
@@ -74,6 +84,20 @@ export function App({ command, args, serverUrl, flags }: AppProps) {
       return <WatchScreen args={args} serverUrl={serverUrl} />;
     case 'paper':
       return <PaperScreen args={args} serverUrl={serverUrl} paperFlag={flags?.paper} />;
+    case 'cal':
+    case 'calendar':
+      return (
+        <CalendarScreen
+          args={args}
+          serverUrl={serverUrl}
+          from={flags?.from}
+          days={flags?.days}
+          past={!!flags?.past}
+          upcoming={!!flags?.upcoming}
+          holidays={!!flags?.holidays}
+          earnings={!!flags?.earnings}
+        />
+      );
     default:
       return (
         <Box flexDirection="column">
