@@ -16,6 +16,10 @@ const cli = meow(
     ls                         List validated tickers
     rm <SYM>                   Remove a ticker from the watchlist
     watch <ls|add|rm> [SYM...] Managed watchlist surface (parity twin of /watchlist)
+    cal [--from=today] [--days=14]  Tiny calendar with holidays + watchlist earnings
+    cal earnings <SYM> [--past] [--upcoming]  Per-symbol earnings table
+    cal refresh [--holidays] [--earnings]     Force out-of-cycle calendar refresh
+    cal status                   Calendar source health + market state
     briefing <SYMBOL>          Generate an AI briefing for a ticker
     brief <SYMBOL>             Full briefing pipeline (analyst + TA + news + strategist)
     quote <SYMBOL>             Quick quote
@@ -32,6 +36,12 @@ const cli = meow(
     --thesis <text>            (brief) Trade thesis to run strategist arm
     --max-loss <usd>           (brief) Max-loss budget in USD for strategist
     --expiry <YYYY-MM-DD>      (brief/options) Target option expiry
+    --from <YYYY-MM-DD|today>  (cal) Start date in ET (default today)
+    --days <N>                 (cal) Calendar window length (default 14, max 90)
+    --past                     (cal earnings) Include past earnings events
+    --upcoming                 (cal earnings) Include upcoming earnings events (default)
+    --holidays                 (cal refresh) Refresh holidays source set
+    --earnings                 (cal refresh) Refresh earnings source set
 
   Examples
     $ regard
@@ -50,6 +60,12 @@ const cli = meow(
       thesis: { type: 'string' },
       maxLoss: { type: 'number' },
       expiry: { type: 'string' },
+      from: { type: 'string', default: 'today' },
+      days: { type: 'number', default: 14 },
+      past: { type: 'boolean', default: false },
+      upcoming: { type: 'boolean', default: false },
+      holidays: { type: 'boolean', default: false },
+      earnings: { type: 'boolean', default: false },
       help: { type: 'boolean', shortFlag: 'h' },
     },
   },
@@ -74,6 +90,12 @@ if (!command) {
         thesis: cli.flags.thesis,
         maxLoss: cli.flags.maxLoss,
         expiry: cli.flags.expiry,
+        from: cli.flags.from,
+        days: cli.flags.days,
+        past: cli.flags.past,
+        upcoming: cli.flags.upcoming,
+        holidays: cli.flags.holidays,
+        earnings: cli.flags.earnings,
       }}
     />,
   );
