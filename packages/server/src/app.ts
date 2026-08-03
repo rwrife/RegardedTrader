@@ -27,6 +27,8 @@ import {
   createMarketDataRegistry,
   TickerValidator,
   WatchlistStore,
+  BriefingStore,
+  looksLikeBriefingId,
   DuckDuckGoSearch,
   MarketClock,
   type WebSearch,
@@ -37,6 +39,7 @@ import {
   type ValidationResult,
   type MarketDataClient,
   type LiveQuote,
+  type BriefingStorePort,
 } from '@regardedtrader/core';
 import { liveQuote, type LiveQuoteSource, type YahooQuoteLike } from './liveQuote.js';
 import { isLoopbackOrigin } from './bind-guard.js';
@@ -58,6 +61,7 @@ export interface AppDeps {
    */
   buildLLMForProvider?: (provider: AiProviderT) => LLM;
   watchlist: WatchlistStore;
+  briefings?: BriefingStorePort;
   initialConfig: AppConfigT;
   /**
    * Built-in live-quote source used when no provider is configured (or when
@@ -81,6 +85,7 @@ export interface AppHandle {
  */
 export function createApp(deps: AppDeps): AppHandle {
   let cfg: AppConfigT = deps.initialConfig;
+  const briefings = deps.briefings ?? new BriefingStore();
 
   // --- Market data registry (#91) ---
   // Rebuilt whenever the marketData config changes so route handlers always
@@ -118,6 +123,7 @@ export function createApp(deps: AppDeps): AppHandle {
       // Wire the Technician agent (issue #74) by default so /briefing
       // includes a TA section whenever an LLM is configured.
       { technician: new Technician(llm) },
+      { briefings },
     );
   }
 
@@ -595,11 +601,38 @@ export function createApp(deps: AppDeps): AppHandle {
     }
   });
 
+  const BriefingHistoryQuery = z.object({
+    limit: z.coerce.number().int().positive().max(200).optional().default(20),
+  });
+
+  app.get('/briefing/:symbol/history', async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+      const { limit } = BriefingHistoryQuery.parse(req.query);
+      res.json({
+        symbol,
+        items: await briefings.listBriefings(symbol, limit),
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
   app.get('/briefing/:symbol', async (req, res, next) => {
     try {
+      const candidate = req.params.symbol;
+      if (looksLikeBriefingId(candidate)) {
+        const stored = await briefings.getBriefing(candidate);
+        if (!stored) {
+          res.status(404).json({ error: `briefing "${candidate}" not found` });
+          return;
+        }
+        res.json(stored.briefing);
+        return;
+      }
       const o = requireOrchestrator(res);
       if (!o) return;
-      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+      const symbol = Ticker.parse(candidate.toUpperCase());
       const known = await requireKnownSymbol(res, symbol);
       if (!known) return;
       res.json(await o.briefing(symbol));
@@ -1001,6 +1034,7 @@ export function createDefaultApp(cfg: AppConfigT): AppHandle {
     market: new YahooClient(),
     webSearch: new DuckDuckGoSearch(),
     watchlist: new WatchlistStore(),
+    briefings: new BriefingStore(),
     initialConfig: cfg,
     liveQuoteSource: async (symbol) => {
       // yahoo-finance2 is a direct server dep; import dynamically so test
