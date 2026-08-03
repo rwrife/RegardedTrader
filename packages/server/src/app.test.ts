@@ -7,6 +7,7 @@ import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import {
   BriefingStore,
+  MentionStore,
   WatchlistStore,
   type BriefingStorePort,
   type LLM,
@@ -98,6 +99,7 @@ describe('POST /tickers/validate', () => {
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
       },
       llmFromConfig: () => fakeLLM(goodReply),
     });
@@ -149,6 +151,7 @@ describe('POST /tickers/validate', () => {
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
       },
       llmFromConfig: () => fakeLLM(goodReply),
     });
@@ -196,6 +199,7 @@ describe('POST /tickers/validate', () => {
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
       },
       llmFromConfig: () => fakeLLM(noMatchReply),
     });
@@ -230,6 +234,7 @@ describe('POST /tickers/validate', () => {
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
       },
       llmFromConfig: () => fakeLLM(goodReply),
     });
@@ -258,6 +263,7 @@ describe('POST /tickers/validate', () => {
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
       },
       llmFromConfig: () => null,
     });
@@ -268,6 +274,154 @@ describe('POST /tickers/validate', () => {
       body: JSON.stringify({ symbols: ['NVDA'] }),
     });
     expect(r.status).toBe(503);
+  });
+});
+
+describe('Sentiment routes + SSE (#39)', () => {
+  const nowIso = '2026-07-01T15:00:00.000Z';
+  let prevToken: string | undefined;
+
+  beforeEach(() => {
+    prevToken = process.env.REGARDEDTRADER_AUTH_TOKEN;
+    process.env.REGARDEDTRADER_AUTH_TOKEN = 'dash-token-39';
+  });
+  afterEach(() => {
+    if (prevToken === undefined) delete process.env.REGARDEDTRADER_AUTH_TOKEN;
+    else process.env.REGARDEDTRADER_AUTH_TOKEN = prevToken;
+  });
+
+  async function makeSentimentApp() {
+    const watchlist = new WatchlistStore({ path: join(dir, 'watchlist.json') });
+    const mentions = new MentionStore({ root: join(dir, 'snapshots') });
+    await mentions.appendScoredMention({
+      source: 'reddit',
+      sourceId: 'r1',
+      symbol: 'NVDA',
+      url: 'https://example.com/reddit/r1',
+      title: 'Bullish flow',
+      text: 'Strong demand setup',
+      publishedAt: '2026-07-01T14:30:00.000Z',
+      fetchedAt: '2026-07-01T14:31:00.000Z',
+      sentiment: { score: 0.7, confidence: 0.8, label: 'bullish' },
+      scoredAt: '2026-07-01T14:31:30.000Z',
+    });
+    await mentions.appendSentiment({
+      symbol: 'NVDA',
+      asOf: nowIso,
+      score: 0.52,
+      confidence: 0.76,
+      volume: 11,
+      bySource: {
+        reddit: { score: 0.7, confidence: 0.8, volume: 5 },
+        'google-news': { score: 0.3, confidence: 0.7, volume: 6 },
+      },
+    });
+    return createApp({
+      market: {
+        quote: async () => ({ symbol: 'NVDA', price: 0, change: 0, changePercent: 0, volume: 0, asOf: '' }),
+        history: async () => [],
+        news: async () => [],
+        optionsChain: async () => [],
+      },
+      webSearch: fakeWebSearch(),
+      watchlist,
+      mentions,
+      initialConfig: {
+        version: 1,
+        providers: {},
+        activeProvider: null,
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
+        server: { host: '127.0.0.1', port: 4317 },
+        marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
+      },
+      llmFromConfig: () => null,
+    });
+  }
+
+  it('requires dashboard auth token on sentiment/mentions endpoints', async () => {
+    const { app } = await makeSentimentApp();
+    baseUrl = await listen(app);
+
+    const denied = await fetch(`${baseUrl}/sentiment/NVDA/latest`);
+    expect(denied.status).toBe(401);
+
+    const allowed = await fetch(`${baseUrl}/sentiment/NVDA/latest?t=dash-token-39`);
+    expect(allowed.status).toBe(200);
+  });
+
+  it('serves latest and ranged sentiment snapshots plus mention filtering', async () => {
+    const { app } = await makeSentimentApp();
+    baseUrl = await listen(app);
+
+    const latest = await fetch(`${baseUrl}/sentiment/NVDA/latest`, {
+      headers: { Authorization: 'Bearer dash-token-39' },
+    });
+    expect(latest.status).toBe(200);
+    const latestJson = (await latest.json()) as { symbol: string; score: number; volume: number };
+    expect(latestJson.symbol).toBe('NVDA');
+    expect(latestJson.score).toBeCloseTo(0.52);
+    expect(latestJson.volume).toBe(11);
+
+    const ranged = await fetch(
+      `${baseUrl}/sentiment/NVDA?since=2026-07-01T14:00:00.000Z&until=2026-07-01T16:00:00.000Z`,
+      { headers: { Authorization: 'dash-token-39' } },
+    );
+    expect(ranged.status).toBe(200);
+    const rangedJson = (await ranged.json()) as { items: Array<{ asOf: string }> };
+    expect(rangedJson.items).toHaveLength(1);
+    expect(rangedJson.items[0]?.asOf).toBe(nowIso);
+
+    const mentions = await fetch(
+      `${baseUrl}/mentions/NVDA?source=reddit&limit=5&since=2026-07-01T14:00:00.000Z`,
+      { headers: { Authorization: 'dash-token-39' } },
+    );
+    expect(mentions.status).toBe(200);
+    const mentionsJson = (await mentions.json()) as { items: Array<{ source: string }> };
+    expect(mentionsJson.items.length).toBeGreaterThan(0);
+    expect(mentionsJson.items.every((x) => x.source === 'reddit')).toBe(true);
+  });
+
+  it('streams sentiment.update events over SSE and exposes source health in /health', async () => {
+    const { app, emitSentimentUpdate } = await makeSentimentApp();
+    baseUrl = await listen(app);
+    const ac = new AbortController();
+    const sse = await fetch(`${baseUrl}/events?t=dash-token-39`, { signal: ac.signal });
+    expect(sse.status).toBe(200);
+
+    emitSentimentUpdate('NVDA', {
+      symbol: 'NVDA',
+      asOf: '2026-07-01T16:00:00.000Z',
+      score: 0.6,
+      confidence: 0.8,
+      volume: 12,
+      bySource: {},
+    });
+
+    const reader = sse.body?.getReader();
+    expect(reader).toBeDefined();
+    const decoder = new TextDecoder();
+    let text = '';
+    const started = Date.now();
+    while (Date.now() - started < 1500 && !text.includes('event: sentiment.update')) {
+      const chunk = await reader!.read();
+      if (chunk.done) break;
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    expect(text).toContain('event: sentiment.update');
+    expect(text).toContain('"symbol":"NVDA"');
+    ac.abort();
+
+    const m = await fetch(`${baseUrl}/mentions/NVDA?source=reddit`, {
+      headers: { Authorization: 'dash-token-39' },
+    });
+    expect(m.status).toBe(200);
+    const health = await fetch(`${baseUrl}/health`);
+    const healthJson = (await health.json()) as {
+      sentimentSources: { reddit: { lastSuccess: string | null; lastError: string | null } };
+    };
+    expect(healthJson.sentimentSources.reddit.lastSuccess).toBeTruthy();
+    expect(healthJson.sentimentSources.reddit.lastError).toBeNull();
   });
 });
 
@@ -302,6 +456,7 @@ describe('POST /config/test', () => {
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
       },
       llmFromConfig: () => fakeLLM(goodReply),
       buildLLMForProvider: opts.buildLLM,
@@ -412,6 +567,7 @@ describe('GET /version (#179)', () => {
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
       },
       llmFromConfig: () => null,
     });
@@ -472,6 +628,7 @@ describe('GET /health (#180)', () => {
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
       },
       llmFromConfig: () => null,
     });
@@ -529,6 +686,7 @@ describe('Origin loopback guard (#128)', () => {
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
       },
       llmFromConfig: () => null,
     });
@@ -606,6 +764,7 @@ describe('POST /briefing/:symbol (#138)', () => {
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
       },
       // Analyst tolerates missing fields, strategist returns []; both safe.
       llmFromConfig: () => fakeLLM({ bullCase: 'b', bearCase: 'b', catalysts: [], risks: [], plans: [] }),
@@ -741,6 +900,7 @@ describe('POST /config/risk', () => {
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
       },
       llmFromConfig: () => fakeLLM(goodReply),
     });
@@ -861,6 +1021,15 @@ describe('Config routes coverage (#105)', () => {
           providers: opts?.marketProviders ?? {},
           activeProvider: opts?.activeMarketProvider ?? null,
         },
+        polling: {
+          sentimentSources: {
+            reddit: { enabled: true, weight: 1 },
+            stocktwits: { enabled: true, weight: 0.7 },
+            hn: { enabled: true, weight: 0.4 },
+            cnn: { enabled: true, weight: 1.2 },
+            'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 },
+          },
+        },
       },
       llmFromConfig: () => fakeLLM(goodReply),
       buildLLMForProvider: (provider) => ({
@@ -898,11 +1067,37 @@ describe('Config routes coverage (#105)', () => {
       activeMarketProvider: 'finnhub',
     });
 
+    const current = (await (await fetch(`${baseUrl}/config`)).json()) as Record<string, unknown>;
+    const withToken = {
+      ...current,
+      polling: {
+        sentimentSources: {
+          ...((current.polling as { sentimentSources: Record<string, unknown> }).sentimentSources ?? {}),
+          reddit: {
+            ...(((current.polling as { sentimentSources: Record<string, unknown> }).sentimentSources?.reddit ??
+              {}) as Record<string, unknown>),
+            apiToken: 'rdt-secret-12345',
+          },
+        },
+      },
+    };
+    const put = await fetch(`${baseUrl}/config`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(withToken),
+    });
+    expect(put.status).toBe(200);
+
     const r = await fetch(`${baseUrl}/config`);
     expect(r.status).toBe(200);
     const j = (await r.json()) as {
       providers: Record<string, { apiKey?: string }>;
       marketData: { providers: Record<string, { apiKey?: string }> };
+      polling: {
+        sentimentSources: {
+          reddit: { apiToken?: string };
+        };
+      };
     };
 
     expect(j.providers.openai?.apiKey).toBeDefined();
@@ -911,10 +1106,13 @@ describe('Config routes coverage (#105)', () => {
     expect(j.marketData.providers.finnhub?.apiKey).toBeDefined();
     expect(j.marketData.providers.finnhub?.apiKey).not.toBe(mdKey);
     expect(j.marketData.providers.finnhub?.apiKey).toContain('••••');
+    expect(j.polling.sentimentSources.reddit.apiToken).toBeDefined();
+    expect(j.polling.sentimentSources.reddit.apiToken).toContain('••••');
 
     const raw = JSON.stringify(j);
     expect(raw).not.toContain(aiKey);
     expect(raw).not.toContain(mdKey);
+    expect(raw).not.toContain('rdt-secret-12345');
   });
 
   it('POST /config/providers supports happy path and rejects invalid payloads', async () => {
@@ -1102,8 +1300,12 @@ describe('Config routes coverage (#105)', () => {
         },
         server: { host: '0.0.0.0', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
       }),
     });
     expect(badHost.status).toBe(400);
   });
 });
+
+
+

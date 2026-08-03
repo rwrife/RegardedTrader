@@ -74,6 +74,51 @@ export const RiskConfig = z.object({
 });
 export type RiskConfig = z.infer<typeof RiskConfig>;
 
+export const PollingSentimentSourceConfig = z
+  .object({
+    enabled: z.boolean().default(true),
+    weight: z.number().nonnegative().default(1),
+    cadenceMs: z.number().int().positive().optional(),
+    apiToken: z.string().min(1).optional(),
+  })
+  .default({
+    enabled: true,
+    weight: 1,
+  });
+export type PollingSentimentSourceConfig = z.infer<typeof PollingSentimentSourceConfig>;
+
+export const PollingConfig = z
+  .object({
+    sentimentSources: z
+      .object({
+        reddit: PollingSentimentSourceConfig,
+        stocktwits: PollingSentimentSourceConfig,
+        hn: PollingSentimentSourceConfig,
+        cnn: PollingSentimentSourceConfig,
+        'google-news': PollingSentimentSourceConfig,
+        googleNewsOpinion: PollingSentimentSourceConfig,
+      })
+      .default({
+        reddit: { enabled: true, weight: 1 },
+        stocktwits: { enabled: true, weight: 0.7 },
+        hn: { enabled: true, weight: 0.4 },
+        cnn: { enabled: true, weight: 1.2 },
+        'google-news': { enabled: true, weight: 1.1 },
+        googleNewsOpinion: { enabled: true, weight: 0.9 },
+      }),
+  })
+  .default({
+    sentimentSources: {
+      reddit: { enabled: true, weight: 1 },
+      stocktwits: { enabled: true, weight: 0.7 },
+      hn: { enabled: true, weight: 0.4 },
+      cnn: { enabled: true, weight: 1.2 },
+      'google-news': { enabled: true, weight: 1.1 },
+      googleNewsOpinion: { enabled: true, weight: 0.9 },
+    },
+  });
+export type PollingConfig = z.infer<typeof PollingConfig>;
+
 export const AppConfig = z.object({
   /** Schema version for safe migrations */
   version: z.literal(1).default(1),
@@ -99,6 +144,7 @@ export const AppConfig = z.object({
     .default({ host: '127.0.0.1', port: 4317 }),
   /** Pluggable market-data provider config (#91). */
   marketData: MarketDataConfig,
+  polling: PollingConfig,
 });
 export type AppConfig = z.infer<typeof AppConfig>;
 
@@ -170,7 +216,39 @@ export function redactConfig(cfg: AppConfig): AppConfig {
       mdProviders[id] = p;
     }
   }
-  return { ...cfg, providers, marketData: { ...md, providers: mdProviders } };
+  const sentimentSources = cfg.polling.sentimentSources;
+  const redactedSentimentSources = {
+    reddit: sentimentSources.reddit.apiToken
+      ? { ...sentimentSources.reddit, apiToken: maskKey(sentimentSources.reddit.apiToken) }
+      : sentimentSources.reddit,
+    stocktwits: sentimentSources.stocktwits.apiToken
+      ? { ...sentimentSources.stocktwits, apiToken: maskKey(sentimentSources.stocktwits.apiToken) }
+      : sentimentSources.stocktwits,
+    hn: sentimentSources.hn.apiToken
+      ? { ...sentimentSources.hn, apiToken: maskKey(sentimentSources.hn.apiToken) }
+      : sentimentSources.hn,
+    cnn: sentimentSources.cnn.apiToken
+      ? { ...sentimentSources.cnn, apiToken: maskKey(sentimentSources.cnn.apiToken) }
+      : sentimentSources.cnn,
+    'google-news': sentimentSources['google-news'].apiToken
+      ? {
+          ...sentimentSources['google-news'],
+          apiToken: maskKey(sentimentSources['google-news'].apiToken),
+        }
+      : sentimentSources['google-news'],
+    googleNewsOpinion: sentimentSources.googleNewsOpinion.apiToken
+      ? {
+          ...sentimentSources.googleNewsOpinion,
+          apiToken: maskKey(sentimentSources.googleNewsOpinion.apiToken),
+        }
+      : sentimentSources.googleNewsOpinion,
+  };
+  return {
+    ...cfg,
+    providers,
+    marketData: { ...md, providers: mdProviders },
+    polling: { ...cfg.polling, sentimentSources: redactedSentimentSources },
+  };
 }
 
 function maskKey(k: string): string {
