@@ -144,6 +144,8 @@ export interface BuildContextOptions {
   readonly mentions?: MentionReader;
   /** Mirrors `AppConfig.risk.forbidNakedShorts`. Default `false`. */
   readonly forbidNakedShorts?: boolean;
+  /** Optional risk cap propagated for safety-copy clamping in recommendations. */
+  readonly maxLossUsd?: number;
   /** Override "now" for tests. */
   readonly now?: () => Date;
   /** Override per-section cadences (ms). */
@@ -313,7 +315,12 @@ export async function buildRecommendationContext(
 
   return {
     symbol,
-    risk: { forbidNakedShorts: opts.forbidNakedShorts ?? false },
+    risk: {
+      forbidNakedShorts: opts.forbidNakedShorts ?? false,
+      ...(typeof opts.maxLossUsd === 'number' && Number.isFinite(opts.maxLossUsd)
+        ? { maxLossUsd: opts.maxLossUsd }
+        : {}),
+    },
     quote,
     options,
     history: budgetReport.history,
