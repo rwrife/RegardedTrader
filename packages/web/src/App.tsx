@@ -24,6 +24,7 @@ import { useLiveQuote } from './hooks/useLiveQuote.js';
 import { useHistory } from './hooks/useHistory.js';
 import { CandleChart } from './components/CandleChart.js';
 import { LiveQuoteIndicator } from './components/LiveQuoteIndicator.js';
+import { AUTH_EXPIRED_EVENT } from './auth.js';
 import type { Tab } from './types.js';
 import type { WatchlistEntry } from './types.js';
 
@@ -109,6 +110,7 @@ export function App(): JSX.Element {
   // Demo mode is on whenever the backend is unreachable or ?demo=1 is set.
   const demoForced = typeof window !== 'undefined' && /[?&]demo=1\b/.test(window.location.search);
   const [demo, setDemo] = useState<boolean>(demoForced || true);
+  const [sessionEnded, setSessionEnded] = useState(false);
   // These hooks must be declared unconditionally so the order stays stable
   // across renders, even when a non-home route returns early below.
   const [active, setActive] = useState<string>('');
@@ -133,6 +135,25 @@ export function App(): JSX.Element {
       })
       .catch(() => { /* stay in demo */ });
   }, [demoForced]);
+
+  useEffect(() => {
+    const onExpired = (): void => setSessionEnded(true);
+    window.addEventListener(AUTH_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired);
+  }, []);
+
+  if (sessionEnded) {
+    return (
+      <div className="min-h-screen bg-app text-fg flex items-center justify-center px-6">
+        <div className="max-w-xl border border-border-subtle bg-surface rounded p-6">
+          <div className="text-sm font-semibold mb-2">Dashboard session ended</div>
+          <p className="text-xs text-fg-secondary">
+            Re-run <code>regard dashboard</code> from your terminal to start a new session.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   const ticker: SampleTicker | undefined = useMemo(() => {
     // In demo mode with nothing active yet, fall back to the first sample ticker.
