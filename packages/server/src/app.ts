@@ -51,6 +51,16 @@ import {
   TradePlan,
   type BriefingStorePort,
   type OHLCV,
+  SnapshotStore,
+  RecommendationStore,
+  AIRecommender,
+  RecommenderOrchestrator,
+  HardGates,
+  buildRecommendationContext,
+  StaleInputError,
+  type Recommendation,
+  type RecommendationSource,
+  type SnapshotReader,
 } from '@regardedtrader/core';
 import { liveQuote, type LiveQuoteSource, type YahooQuoteLike } from './liveQuote.js';
 import { isLoopbackOrigin } from './bind-guard.js';
@@ -75,6 +85,8 @@ export interface AppDeps {
   buildLLMForProvider?: (provider: AiProviderT) => LLM;
   watchlist: WatchlistStore;
   mentions?: MentionStore;
+  snapshots?: SnapshotStore;
+  recommendations?: RecommendationStore;
   briefings?: BriefingStorePort;
   initialConfig: AppConfigT;
   /**
@@ -114,6 +126,11 @@ export interface AppHandle {
   /** Currently-active config (mutated by /config endpoints). Read for tests. */
   getConfig: () => AppConfigT;
   emitSentimentUpdate: (symbol: string, snapshot: SentimentSnapshot | null) => void;
+  emitRecommendationUpdate: (
+    symbol: string,
+    recommendation: Recommendation,
+    persisted: boolean,
+  ) => void;
 }
 
 /**
@@ -123,8 +140,30 @@ export interface AppHandle {
 export function createApp(deps: AppDeps): AppHandle {
   let cfg: AppConfigT = AppConfig.parse(deps.initialConfig);
   const mentionStore = deps.mentions ?? new MentionStore();
+  const snapshotStore = deps.snapshots ?? new SnapshotStore();
+  const recommendationStore = deps.recommendations ?? new RecommendationStore();
   const authToken = process.env.REGARDEDTRADER_AUTH_TOKEN?.trim() || null;
   const briefings = deps.briefings ?? new BriefingStore();
+  const recommendationSnapshotReader: SnapshotReader = {
+    readLatest: async (symbol) => {
+      const latest = await snapshotStore.readLatest(symbol);
+      const entries = Object.fromEntries(
+        Object.entries(latest.entries ?? {}).map(([kind, entry]) => [
+          kind,
+          { ts: entry.ts, data: entry.data ?? null },
+        ]),
+      );
+      return {
+        ...latest,
+        entries,
+      };
+    },
+    readRange: async function* (symbol, kind, since, until) {
+      for await (const entry of snapshotStore.readRange(symbol, kind, since, until)) {
+        yield { ts: entry.ts, data: entry.data ?? null };
+      }
+    },
+  };
 
   // --- Market data registry (#91) ---
   // Rebuilt whenever the marketData config changes so route handlers always
@@ -186,6 +225,11 @@ export function createApp(deps: AppDeps): AppHandle {
     lastError: string | null;
     lastErrorAt: string | null;
   };
+  type RecommendationHealth = {
+    lastSuccess: string | null;
+    lastError: string | null;
+    lastErrorAt: string | null;
+  };
   const sentimentHealth: Record<z.infer<typeof SentimentSource>, SentimentHealth> = {
     reddit: { lastSuccess: null, lastError: null, lastErrorAt: null },
     stocktwits: { lastSuccess: null, lastError: null, lastErrorAt: null },
@@ -194,6 +238,7 @@ export function createApp(deps: AppDeps): AppHandle {
     'google-news': { lastSuccess: null, lastError: null, lastErrorAt: null },
     googleNewsOpinion: { lastSuccess: null, lastError: null, lastErrorAt: null },
   };
+  const recommendationHealth = new Map<string, RecommendationHealth>();
 
   function setSentimentSuccess(source: z.infer<typeof SentimentSource>, at: string): void {
     const cur = sentimentHealth[source];
@@ -204,6 +249,32 @@ export function createApp(deps: AppDeps): AppHandle {
 
   function setSentimentError(source: z.infer<typeof SentimentSource>, err: unknown): void {
     const cur = sentimentHealth[source];
+    cur.lastError = err instanceof Error ? err.message : String(err);
+    cur.lastErrorAt = new Date().toISOString();
+  }
+
+  function recommendationHealthFor(symbol: string): RecommendationHealth {
+    const sym = symbol.toUpperCase();
+    const existing = recommendationHealth.get(sym);
+    if (existing) return existing;
+    const created: RecommendationHealth = {
+      lastSuccess: null,
+      lastError: null,
+      lastErrorAt: null,
+    };
+    recommendationHealth.set(sym, created);
+    return created;
+  }
+
+  function setRecommendationSuccess(symbol: string): void {
+    const cur = recommendationHealthFor(symbol);
+    cur.lastSuccess = new Date().toISOString();
+    cur.lastError = null;
+    cur.lastErrorAt = null;
+  }
+
+  function setRecommendationError(symbol: string, err: unknown): void {
+    const cur = recommendationHealthFor(symbol);
     cur.lastError = err instanceof Error ? err.message : String(err);
     cur.lastErrorAt = new Date().toISOString();
   }
@@ -251,6 +322,14 @@ export function createApp(deps: AppDeps): AppHandle {
     id: string;
     at: string;
   };
+  type RecommendationSsePayload = {
+    type: 'recommendation.update';
+    symbol: string;
+    recommendation: Recommendation;
+    persisted: boolean;
+    id: string;
+    at: string;
+  };
   const sseClients = new Set<express.Response>();
 
   function emitSentimentUpdate(symbol: string, snapshot: SentimentSnapshot | null): void {
@@ -262,6 +341,23 @@ export function createApp(deps: AppDeps): AppHandle {
       at: new Date().toISOString(),
     };
     const frame = `event: sentiment.update\ndata: ${JSON.stringify(payload)}\n\n`;
+    for (const client of sseClients) client.write(frame);
+  }
+
+  function emitRecommendationUpdate(
+    symbol: string,
+    recommendation: Recommendation,
+    persisted: boolean,
+  ): void {
+    const payload: RecommendationSsePayload = {
+      type: 'recommendation.update',
+      symbol,
+      recommendation,
+      persisted,
+      id: randomUUID(),
+      at: new Date().toISOString(),
+    };
+    const frame = `event: recommendation.update\ndata: ${JSON.stringify(payload)}\n\n`;
     for (const client of sseClients) client.write(frame);
   }
 
@@ -416,6 +512,11 @@ export function createApp(deps: AppDeps): AppHandle {
   });
 
   app.get('/health', (_req, res) => {
+    const recommendationBySymbol = Object.fromEntries(
+      Array.from(recommendationHealth.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([symbol, health]) => [symbol, health]),
+    );
     res.json({
       ok: true,
       name: 'regardedtrader-server',
@@ -426,6 +527,7 @@ export function createApp(deps: AppDeps): AppHandle {
       aiConfigured: orchestrator !== null,
       activeProvider: cfg.activeProvider,
       sentimentSources: sentimentHealth,
+      recommendationBySymbol,
     });
   });
 
@@ -982,11 +1084,17 @@ export function createApp(deps: AppDeps): AppHandle {
     since: DateParam.optional(),
     until: DateParam.optional(),
   });
+  const RecommendationRangeQuery = z.object({
+    since: DateParam.optional(),
+    until: DateParam.optional(),
+  });
   const MentionsQuery = z.object({
     source: SentimentSource.optional(),
     limit: z.coerce.number().int().min(1).max(500).optional().default(100),
     since: DateParam.optional(),
   });
+  const recommendationRecomputeAtBySymbol = new Map<string, number>();
+  const RECOMMENDATION_RECOMPUTE_COOLDOWN_MS = 60_000;
 
   app.get('/events', requireDashboardToken, (req, res) => {
     res.setHeader('Content-Type', 'text/event-stream');
@@ -1034,6 +1142,100 @@ export function createApp(deps: AppDeps): AppHandle {
       items.sort((a, b) => Date.parse(a.asOf) - Date.parse(b.asOf));
       res.json({ symbol, items });
     } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/recommendations/:symbol/latest', requireDashboardToken, async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
+      const known = await requireKnownSymbol(res, symbol);
+      if (!known) return;
+      const latest = await recommendationStore.readLatest(symbol);
+      if (!latest) {
+        res.status(404).json({ error: `No recommendation found for ${symbol}.` });
+        return;
+      }
+      res.json(latest);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/recommendations/:symbol', requireDashboardToken, async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
+      const known = await requireKnownSymbol(res, symbol);
+      if (!known) return;
+      const q = RecommendationRangeQuery.parse(req.query);
+      const since = q.since ? new Date(q.since) : undefined;
+      const until = q.until ? new Date(q.until) : undefined;
+      const items: Recommendation[] = [];
+      for await (const rec of recommendationStore.readRange(symbol, since, until)) {
+        items.push(rec);
+      }
+      items.sort((a, b) => Date.parse(a.generatedAt) - Date.parse(b.generatedAt));
+      res.json({ symbol, items });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.post('/recommendations/:symbol/recompute', requireDashboardToken, async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
+      const known = await requireKnownSymbol(res, symbol);
+      if (!known) return;
+
+      const nowMs = Date.now();
+      const last = recommendationRecomputeAtBySymbol.get(symbol) ?? 0;
+      const elapsed = nowMs - last;
+      if (elapsed < RECOMMENDATION_RECOMPUTE_COOLDOWN_MS) {
+        const retryAfterSec = Math.ceil((RECOMMENDATION_RECOMPUTE_COOLDOWN_MS - elapsed) / 1000);
+        res.setHeader('Retry-After', String(retryAfterSec));
+        res.status(429).json({
+          error: `Recommendation recompute for ${symbol} is rate-limited to once per minute.`,
+          retryAfterSec,
+        });
+        return;
+      }
+
+      const recommender = makeRecommendationOrchestrator();
+      if (!recommender) {
+        res.status(503).json({
+          error: 'AI provider not configured',
+          hint: 'Run `regard config` (CLI) or open Settings in the dashboard.',
+        });
+        return;
+      }
+
+      recommendationRecomputeAtBySymbol.set(symbol, nowMs);
+      const result = await recommender.runOnce(symbol);
+      if (result.status === 'skipped') {
+        res.status(409).json({
+          error: `Recommendation recompute for ${symbol} is already in flight.`,
+        });
+        return;
+      }
+      setRecommendationSuccess(symbol);
+      res.json({
+        symbol,
+        persisted: result.persisted,
+        recommendation: result.recommendation,
+      });
+    } catch (e) {
+      if (e instanceof StaleInputError) {
+        setRecommendationError(e.symbol, e);
+        res.status(409).json({
+          error: `Cannot recompute recommendation for ${e.symbol}: ${e.reason}.`,
+          code: e.code,
+          reason: e.reason,
+        });
+        return;
+      }
+      if (req?.params?.symbol) {
+        setRecommendationError(String(req.params.symbol).toUpperCase(), e);
+      }
       next(e);
     }
   });
@@ -1194,6 +1396,57 @@ export function createApp(deps: AppDeps): AppHandle {
       return null;
     }
     return orchestrator;
+  }
+
+  function makeRecommendationOrchestrator(): RecommenderOrchestrator | null {
+    const llm = deps.llmFromConfig(cfg);
+    if (!llm) return null;
+    const recommender = new AIRecommender(llm);
+    const activeProvider = cfg.activeProvider ? cfg.providers[cfg.activeProvider] : null;
+    return new RecommenderOrchestrator({
+      recommender,
+      store: recommendationStore,
+      buildContext: async (symbol) =>
+        buildRecommendationContext({
+          symbol,
+          snapshots: recommendationSnapshotReader,
+          mentions: mentionStore,
+          forbidNakedShorts: cfg.risk.forbidNakedShorts,
+          maxLossUsd: cfg.risk.maxLossUsd,
+        }),
+      stampFor: (context) => {
+        const sources: RecommendationSource[] = [];
+        const seen = new Set<string>();
+        const pushSource = (name: string, url: string | undefined) => {
+          if (!url || seen.has(url)) return;
+          seen.add(url);
+          sources.push({ name, url });
+        };
+        for (const item of context.news?.items ?? []) {
+          pushSource(item.source, item.url);
+        }
+        for (const item of context.opinions?.items ?? []) {
+          pushSource(item.source, item.url);
+        }
+        return {
+          asOf: {
+            quote: context.quote.asOf ?? new Date(0).toISOString(),
+            options: context.options?.asOf ?? null,
+            sentiment: context.sentiment?.asOf ?? null,
+            news: context.news?.asOf ?? null,
+          },
+          sources,
+          modelInfo: {
+            provider: cfg.activeProvider ?? 'unknown',
+            model: activeProvider?.model ?? 'unknown',
+          },
+        };
+      },
+      rules: [new HardGates()],
+      onEvent: (evt) => {
+        emitRecommendationUpdate(evt.symbol, evt.recommendation, evt.persisted);
+      },
+    });
   }
 
   async function requireKnownSymbol(
@@ -1740,7 +1993,7 @@ export function createApp(deps: AppDeps): AppHandle {
     },
   );
 
-  return { app, getConfig: () => cfg, emitSentimentUpdate };
+  return { app, getConfig: () => cfg, emitSentimentUpdate, emitRecommendationUpdate };
 }
 
 function makePlanId(symbol: string, index: number): string {
