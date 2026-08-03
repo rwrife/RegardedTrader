@@ -142,6 +142,9 @@ All agents implement a small `Agent` interface and are composed by a top-level
 `Orchestrator` so the CLI and web can both invoke "Give me a full briefing on
 TICKER" with one call.
 
+For implementation details and a worked example, see
+[`docs/agents.md`](./docs/agents.md).
+
 ## Design Language (web dashboard)
 
 The web dashboard should feel like a **modern Bloomberg/Reuters terminal** —
