@@ -29,6 +29,8 @@ const cli = meow(
     quote <SYMBOL>             Quick quote
     tech <SYMBOL>              Technician (TA) commentary for a ticker
     news <SYMBOL>              Ranked traditional headlines via NewsScout
+    sentiment <SYMBOL>         Sentiment snapshot summary (score/confidence/volume/by-source)
+    mentions <SYMBOL>          Recent source mentions for a symbol (no usernames)
     plan <SYMBOL>              Interactive options trade-plan wizard
     options <SYMBOL>           Options-chain explorer (calls/puts/greeks)
     chart <SYMBOL>             ASCII sparkline + RSI/MACD indicator readout
@@ -53,6 +55,10 @@ const cli = meow(
     --no-open                  (dashboard) Skip auto-open and print URL
     --port <n>                 (dashboard) Dashboard web port (default 5173)
     --force                    (dashboard) Replace running dashboard session
+    --window <duration>        (sentiment) Sentiment history window (e.g. 30m, 4h, 1d)
+    --watch                    (sentiment) Watch sentiment updates over SSE
+    --source <name>            (mentions) Filter source (reddit|stocktwits|hn|cnn|google-news|googleNewsOpinion)
+    --limit <n>                (mentions) Max mentions to return (default 100)
 
   Examples
     $ regard
@@ -62,6 +68,8 @@ const cli = meow(
     $ regard config
     $ regard briefing NVDA
     $ regard chart NVDA
+    $ regard sentiment NVDA --window=30m
+    $ regard mentions NVDA --source=reddit --limit=50
 `,
   {
     importMeta: import.meta,
@@ -83,6 +91,10 @@ const cli = meow(
       noOpen: { type: 'boolean', default: false },
       port: { type: 'number', default: 5173 },
       force: { type: 'boolean', default: false },
+      window: { type: 'string' },
+      watch: { type: 'boolean', default: false },
+      source: { type: 'string' },
+      limit: { type: 'number' },
       help: { type: 'boolean', shortFlag: 'h' },
     },
   },
@@ -128,6 +140,10 @@ if (command === 'dashboard') {
         holidays: cli.flags.holidays,
         earnings: cli.flags.earnings,
         quotes: cli.flags.quotes,
+        window: cli.flags.window,
+        watch: cli.flags.watch,
+        source: cli.flags.source,
+        limit: cli.flags.limit,
       }}
     />,
   );
