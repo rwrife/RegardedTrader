@@ -1,5 +1,11 @@
 import type { LLM } from './llm.js';
-import type { Briefing, Indicators, NewsItem, Quote } from '../schemas/index.js';
+import type {
+  Briefing,
+  Indicators,
+  NewsItem,
+  Quote,
+} from '../schemas/index.js';
+import type { SentimentSnapshot } from '../schemas/sentiment.js';
 import { AnalystOutputSchema } from '../schemas/index.js';
 import { DISCLAIMER } from './llm.js';
 import { AgentParseError } from './errors.js';
@@ -10,6 +16,7 @@ export interface AnalystInput {
   quote: Quote;
   indicators: Indicators;
   news: NewsItem[];
+  sentiment?: SentimentSnapshot;
 }
 
 export class Analyst {

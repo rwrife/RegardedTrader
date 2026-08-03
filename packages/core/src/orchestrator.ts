@@ -23,6 +23,7 @@ import {
   type RiskReview,
   type TradePlan,
 } from './schemas/index.js';
+import type { SentimentSnapshot } from './schemas/sentiment.js';
 import type { BriefingStorePort } from './storage/briefings.js';
 
 /**
@@ -34,6 +35,7 @@ export interface BriefingOptions {
   thesis?: string;
   maxLossUsd?: number;
   expiry?: string;
+  sentimentSnapshot?: SentimentSnapshot;
 }
 
 export interface OrchestratorAgents {
@@ -119,6 +121,7 @@ export class Orchestrator {
       quote,
       indicators,
       news: analystNews,
+      sentiment: opts.sentimentSnapshot,
     });
 
     // Aggregate risk verdict for the briefing. Briefing-only calls do not

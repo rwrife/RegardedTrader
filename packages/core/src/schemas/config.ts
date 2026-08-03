@@ -106,6 +106,14 @@ export const PollingConfig = z
         'google-news': { enabled: true, weight: 1.1 },
         googleNewsOpinion: { enabled: true, weight: 0.9 },
       }),
+    sentimentAlerts: z
+      .object({
+        enabled: z.boolean().default(false),
+        stdDevThreshold: z.number().positive().default(2),
+        windowSize: z.number().int().min(2).default(12),
+        minSamples: z.number().int().min(2).optional().default(8),
+      })
+      .optional(),
   })
   .default({
     sentimentSources: {
