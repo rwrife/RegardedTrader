@@ -409,6 +409,94 @@ export function createApp(deps: AppDeps): AppHandle {
     }
   });
 
+  // Fast ticker add: shape-check + yahoo-finance2 (crumb-aware), no LLM or web search.
+  // Returns the same ValidationResult wire shape as /tickers/validate so the
+  // web TickerIntake can use it as a drop-in.
+  app.post('/tickers/quick-add', async (req, res, next) => {
+    try {
+      const body = ValidateBody.parse(req.body);
+      const results: ValidationResult[] = [];
+
+      for (const raw of body.symbols) {
+        const symbol = raw.trim().toUpperCase();
+
+        // 1. Check cache first (same TTL as full validate)
+        const cached = await getFreshCachedProfile(symbol, body.refresh);
+        if (cached) {
+          results.push({ ok: true, profile: cached, cached: true });
+          continue;
+        }
+
+        // 2. Shape check
+        if (!/^[A-Z.\-]{1,10}$/.test(symbol)) {
+          results.push({
+            ok: false,
+            symbol,
+            error: `"${raw}" is not a valid ticker shape (1-10 chars, A-Z . - only).`,
+            suggestions: [],
+          });
+          continue;
+        }
+
+        // 3. yahoo-finance2 quote — crumb-aware, lightweight, no LLM
+        let name = symbol;
+        let exchange = 'Unknown';
+        let sector = 'Unknown';
+        let industry = 'Unknown';
+        let description = '';
+
+        try {
+          const yf = await import('yahoo-finance2');
+          const q = await yf.default.quote(symbol);
+
+          if (!q || q.quoteType !== 'EQUITY') {
+            results.push({
+              ok: false,
+              symbol,
+              error: q
+                ? `"${symbol}" is not a US equity (type: ${q.quoteType ?? 'unknown'}).`
+                : `"${symbol}" was not found on Yahoo Finance. Check the ticker and try again.`,
+              suggestions: [],
+            });
+            continue;
+          }
+
+          name = q.longName ?? q.shortName ?? symbol;
+          exchange = q.fullExchangeName ?? q.exchangeName ?? 'Unknown';
+          // sector/industry not available from quote endpoint; filled in on briefing
+          description = `${name} — see briefing for full profile.`;
+        } catch {
+          results.push({
+            ok: false,
+            symbol,
+            error: `"${symbol}" was not found on Yahoo Finance. Check the ticker and try again.`,
+            suggestions: [],
+          });
+          continue;
+        }
+
+        const now = new Date().toISOString();
+        const fullProfile = {
+          symbol,
+          name: name || symbol,
+          exchange: exchange || 'Unknown',
+          sector: sector || 'Unknown',
+          industry: industry || 'Unknown',
+          description: (description as string) || `${name} (${symbol})`,
+          sources: [`https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}`],
+          validatedAt: now,
+        };
+
+        await deps.watchlist.upsert(fullProfile);
+        results.push({ ok: true, profile: fullProfile, cached: false });
+      }
+
+      res.json({ results });
+    } catch (e) {
+      next(e);
+    }
+  });
+
   // Compatibility endpoint for issue #16 clients that want a one-shot
   // resolve preview without mutating the stored watchlist.
   app.get('/tickers/resolve', async (req, res, next) => {
@@ -696,7 +784,7 @@ export function createApp(deps: AppDeps): AppHandle {
     try {
       const { id, provider } = MarketProviderUpsert.parse(req.body);
       cfg.marketData.providers[id] = provider;
-      if (!cfg.marketData.activeProvider) cfg.marketData.activeProvider = id;
+      cfg.marketData.activeProvider = id; // always activate the newly configured provider
       await saveConfig(cfg);
       rebuildRegistry();
       res.json({

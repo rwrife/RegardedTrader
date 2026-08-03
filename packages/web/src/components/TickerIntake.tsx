@@ -8,7 +8,13 @@ import { ResultRow } from './ResultRow.js';
  * `/api/tickers/validate`, shows the per-symbol results, and refreshes the
  * persisted watchlist from `/api/tickers`. Extracted from App.tsx in #112.
  */
-export function TickerIntake({ demo }: { demo: boolean }): JSX.Element {
+export function TickerIntake({
+  demo,
+  onPick,
+}: {
+  demo: boolean;
+  onPick?: (symbol: string) => void;
+}): JSX.Element {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [entries, setEntries] = useState<WatchlistEntry[]>([]);
@@ -41,7 +47,7 @@ export function TickerIntake({ demo }: { demo: boolean }): JSX.Element {
     setErr(null);
     setResults([]);
     try {
-      const r = await fetch('/api/tickers/validate', {
+      const r = await fetch('/api/tickers/quick-add', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ symbols, refresh }),
@@ -107,7 +113,7 @@ export function TickerIntake({ demo }: { demo: boolean }): JSX.Element {
           </div>
         )}
         {err && <div className="mt-1.5 text-[10px] text-down">{err}</div>}
-        {busy && <div className="mt-1.5 text-[10px] text-fg-muted">Validating…</div>}
+        {busy && <div className="mt-1.5 text-[10px] text-fg-muted">Adding…</div>}
       </div>
 
       {results.length > 0 && (
