@@ -6,12 +6,8 @@
  * instructions can be audited and regressed in one place, per AGENTS.md
  * ("New LLM prompt? Put it in `core/src/prompts/`").
  */
-import type {
-  Briefing,
-  Indicators,
-  NewsItem,
-  Quote,
-} from '../schemas/index.js';
+import type { Briefing, Indicators, NewsItem, Quote } from '../schemas/index.js';
+import type { Recommendation } from '../schemas/recommendation.js';
 import type { SentimentSnapshot } from '../schemas/sentiment.js';
 
 export const SYSTEM_PROMPT = `You are a careful equity research analyst. You produce concise,
@@ -31,6 +27,7 @@ export interface AnalystUserPromptInput {
     title?: string;
     startUtc?: string;
   };
+  latestRecommendation?: Recommendation;
 }
 
 export function buildUserPrompt(input: AnalystUserPromptInput): string {
@@ -62,6 +59,10 @@ If \`nextEarnings\` is present:
   setups as elevated event risk and recommend avoiding new options exposure.
 - when \`nextEarnings.daysUntil <= 1\`, explicitly call out potential IV crush
   risk in the \`risks\` list.
+
+If a latestRecommendation block is present in the data, reconcile your
+narrative against it: either agree, expand with nuance, or explicitly disagree
+with a concrete reason grounded in the supplied inputs.
 
 Data:
 ${JSON.stringify(input, null, 2)}`;

@@ -19,6 +19,7 @@ import {
   RiskConfig,
   BriefingRequest,
   PlansResponse,
+  Recommendation,
   ConfigTestResult,
   CORE_VERSION,
   ServerVersion,
@@ -97,7 +98,7 @@ export interface AppDeps {
   watchlist: WatchlistStore;
   mentions?: MentionStore;
   briefings?: BriefingStorePort;
-  initialConfig: AppConfigT;
+  initialConfig: Partial<AppConfigT>;
   /**
    * Built-in live-quote source used when no provider is configured (or when
    * the configured provider is `yahoo`). Production wires the lazy
@@ -1649,6 +1650,9 @@ export function createApp(deps: AppDeps): AppHandle {
   const BriefingHistoryQuery = z.object({
     limit: z.coerce.number().int().positive().max(200).optional().default(20),
   });
+  const BriefingReqWithRecommendation = BriefingRequest.extend({
+    latestRecommendation: Recommendation.optional(),
+  });
 
   app.get('/briefing/:symbol/history', async (req, res, next) => {
     try {
@@ -1751,7 +1755,7 @@ export function createApp(deps: AppDeps): AppHandle {
       const symbol = Ticker.parse(req.params.symbol.toUpperCase());
       const known = await requireKnownSymbol(res, symbol);
       if (!known) return;
-      const body = BriefingRequest.parse(req.body ?? {});
+      const body = BriefingReqWithRecommendation.parse(req.body ?? {});
       const sentimentSnapshot = await readRecentSentimentSnapshot(symbol);
       const nowMs = deps.now ? deps.now() : Date.now();
       let nextEarnings:
@@ -1798,6 +1802,7 @@ export function createApp(deps: AppDeps): AppHandle {
     thesis: z.string().min(3),
     maxLossUsd: z.number().positive().max(100_000),
     expiry: z.string().optional(),
+    latestRecommendation: Recommendation.optional(),
   });
 
   app.post('/plans', async (req, res, next) => {

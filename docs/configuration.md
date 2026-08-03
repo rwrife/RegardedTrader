@@ -61,11 +61,27 @@ server is running unless you also `kill -HUP` (or restart) the server.
       "stdDevThreshold": 2,     // fire when |z-score| >= threshold
       "windowSize": 12,         // trailing sentiment snapshots in baseline window
       "minSamples": 8           // minimum baseline points required to alert
+    },
+    "recommendations": {
+      "enabled": true,
+      "readOnly": true,
+      "cadenceMs": {
+        "rth": 900000,
+        "pre": 3600000,
+        "post": 3600000,
+        "closed": 14400000,
+        "holiday": 14400000
+      }
     }
   },
   "server": { "host": "127.0.0.1", "port": 4317 }
 }
 ```
+
+`polling.recommendations` controls only the background recommendation
+generation cadence. Briefings and plan generation consume the most recent
+persisted recommendation as read-only context (when present); they do not write
+or mutate recommender state.
 
 ## Risk caps
 
