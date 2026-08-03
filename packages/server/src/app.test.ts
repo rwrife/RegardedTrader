@@ -9,9 +9,10 @@ import {
   BriefingStore,
   CalendarStore,
   MentionStore,
+  SnapshotStore,
+  RecommendationStore,
   WatchlistStore,
   PaperStore,
-  RecommendationStore,
   type BriefingStorePort,
   type LLM,
   type Recommendation,
@@ -684,7 +685,6 @@ describe('Calendar endpoints + SSE (#62)', () => {
     prevToken = process.env.REGARDEDTRADER_AUTH_TOKEN;
     process.env.REGARDEDTRADER_AUTH_TOKEN = 'dash-token-62';
   });
-
   afterEach(() => {
     if (prevToken === undefined) delete process.env.REGARDEDTRADER_AUTH_TOKEN;
     else process.env.REGARDEDTRADER_AUTH_TOKEN = prevToken;
@@ -742,7 +742,6 @@ describe('Calendar endpoints + SSE (#62)', () => {
       holidays: { ok: true, events: 1, staleSources: [], errors: [] },
       earnings: { ok: true, events: 1, staleSources: [], errors: [] },
     });
-
     return createApp({
       market: {
         quote: async () => ({ symbol: 'NVDA', price: 0, change: 0, changePercent: 0, volume: 0, asOf: '' }),
@@ -847,6 +846,185 @@ describe('Calendar endpoints + SSE (#62)', () => {
     };
     expect(typeof healthJson.calendar.stale).toBe('boolean');
     expect(healthJson.calendar.sources.nyse).toBeDefined();
+  });
+});
+
+describe('Recommendation routes + SSE (#50)', () => {
+  const quoteAsOf = '2026-07-01T15:00:00.000Z';
+  let prevToken: string | undefined;
+
+  beforeEach(() => {
+    prevToken = process.env.REGARDEDTRADER_AUTH_TOKEN;
+    process.env.REGARDEDTRADER_AUTH_TOKEN = 'dash-token-50';
+  });
+  afterEach(() => {
+    if (prevToken === undefined) delete process.env.REGARDEDTRADER_AUTH_TOKEN;
+    else process.env.REGARDEDTRADER_AUTH_TOKEN = prevToken;
+  });
+
+  async function makeRecommendationApp() {
+    const watchlist = new WatchlistStore({ path: join(dir, 'watchlist.json') });
+    await watchlist.upsert({
+      symbol: 'NVDA',
+      name: 'NVIDIA Corporation',
+      exchange: 'NASDAQ',
+      sector: 'Technology',
+      industry: 'Semiconductors',
+      description: 'Designs GPUs and AI chips.',
+      sources: ['https://example.com/nvda'],
+      validatedAt: quoteAsOf,
+    });
+    const snapshots = new SnapshotStore({ root: join(dir, 'snapshots') });
+    const recommendations = new RecommendationStore({ root: join(dir, 'snapshots') });
+    await snapshots.appendSnapshot('NVDA', 'quote', {
+      ts: quoteAsOf,
+      data: {
+        symbol: 'NVDA',
+        price: 100,
+        change: 1,
+        changePercent: 1,
+        volume: 1_000_000,
+        asOf: quoteAsOf,
+      },
+    });
+    await snapshots.appendSnapshot('NVDA', 'news', {
+      ts: quoteAsOf,
+      data: {
+        title: 'NVIDIA announces roadmap update',
+        url: 'https://example.com/news/nvda-roadmap',
+        source: 'ExampleWire',
+        publishedAt: quoteAsOf,
+      },
+    });
+    return createApp({
+      market: {
+        quote: async () => ({ symbol: 'NVDA', price: 0, change: 0, changePercent: 0, volume: 0, asOf: '' }),
+        history: async () => [],
+        news: async () => [],
+        optionsChain: async () => [],
+      },
+      webSearch: fakeWebSearch(),
+      watchlist,
+      snapshots,
+      recommendations,
+      initialConfig: {
+        version: 1,
+        providers: { fake: { kind: 'openai-compatible', label: 'fake', baseUrl: 'http://x/v1', model: 'm' } },
+        activeProvider: 'fake',
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
+        server: { host: '127.0.0.1', port: 4317 },
+        marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
+      },
+      llmFromConfig: () =>
+        fakeLLM({
+          equity: {
+            action: 'BUY',
+            conviction: 0.74,
+            rationale: 'Momentum plus supportive headline.',
+            signals: [{ name: 'price', value: 100, contribution: 0.5 }],
+            contraSignals: [{ name: 'volatility', value: 'medium', contribution: -0.1 }],
+          },
+          options: {
+            coveredCall: null,
+            coveredPut: null,
+            nakedCall: null,
+            nakedPut: null,
+          },
+          riskFlags: ['event-risk'],
+        }),
+    });
+  }
+
+  it('requires dashboard auth token on recommendations endpoints', async () => {
+    const { app } = await makeRecommendationApp();
+    baseUrl = await listen(app);
+    const denied = await fetch(`${baseUrl}/recommendations/NVDA/latest`);
+    expect(denied.status).toBe(401);
+
+    const allowed = await fetch(`${baseUrl}/recommendations/NVDA/latest?t=dash-token-50`);
+    expect(allowed.status).toBe(404);
+  });
+
+  it('recomputes once, serves latest/range, and rate-limits follow-up requests', async () => {
+    const { app } = await makeRecommendationApp();
+    baseUrl = await listen(app);
+
+    const recompute = await fetch(`${baseUrl}/recommendations/NVDA/recompute`, {
+      method: 'POST',
+      headers: { Authorization: 'dash-token-50' },
+    });
+    expect(recompute.status).toBe(200);
+    const recomputeJson = (await recompute.json()) as {
+      symbol: string;
+      persisted: boolean;
+      recommendation: { symbol: string; equity: { action: string } };
+    };
+    expect(recomputeJson.symbol).toBe('NVDA');
+    expect(recomputeJson.persisted).toBe(true);
+    expect(recomputeJson.recommendation.symbol).toBe('NVDA');
+    expect(recomputeJson.recommendation.equity.action).toBe('BUY');
+
+    const latest = await fetch(`${baseUrl}/recommendations/NVDA/latest`, {
+      headers: { Authorization: 'dash-token-50' },
+    });
+    expect(latest.status).toBe(200);
+    const latestJson = (await latest.json()) as { symbol: string };
+    expect(latestJson.symbol).toBe('NVDA');
+
+    const ranged = await fetch(
+      `${baseUrl}/recommendations/NVDA?since=2000-01-01T00:00:00.000Z&until=2100-01-01T00:00:00.000Z`,
+      { headers: { Authorization: 'dash-token-50' } },
+    );
+    expect(ranged.status).toBe(200);
+    const rangedJson = (await ranged.json()) as { items: Array<{ symbol: string }> };
+    expect(rangedJson.items).toHaveLength(1);
+    expect(rangedJson.items[0]?.symbol).toBe('NVDA');
+
+    const rateLimited = await fetch(`${baseUrl}/recommendations/NVDA/recompute`, {
+      method: 'POST',
+      headers: { Authorization: 'dash-token-50' },
+    });
+    expect(rateLimited.status).toBe(429);
+    const rl = (await rateLimited.json()) as { retryAfterSec: number };
+    expect(rl.retryAfterSec).toBeGreaterThan(0);
+  });
+
+  it('streams recommendation.update and exposes recommendation health in /health', async () => {
+    const { app } = await makeRecommendationApp();
+    baseUrl = await listen(app);
+    const ac = new AbortController();
+    const sse = await fetch(`${baseUrl}/events?t=dash-token-50`, { signal: ac.signal });
+    expect(sse.status).toBe(200);
+
+    const recompute = await fetch(`${baseUrl}/recommendations/NVDA/recompute`, {
+      method: 'POST',
+      headers: { Authorization: 'dash-token-50' },
+    });
+    expect(recompute.status).toBe(200);
+
+    const reader = sse.body?.getReader();
+    expect(reader).toBeDefined();
+    const decoder = new TextDecoder();
+    let text = '';
+    const started = Date.now();
+    while (Date.now() - started < 1500 && !text.includes('event: recommendation.update')) {
+      const chunk = await reader!.read();
+      if (chunk.done) break;
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    expect(text).toContain('event: recommendation.update');
+    expect(text).toContain('"symbol":"NVDA"');
+    ac.abort();
+
+    const health = await fetch(`${baseUrl}/health`);
+    const healthJson = (await health.json()) as {
+      recommendationBySymbol: {
+        NVDA?: { lastSuccess: string | null; lastError: string | null };
+      };
+    };
+    expect(healthJson.recommendationBySymbol.NVDA?.lastSuccess).toBeTruthy();
+    expect(healthJson.recommendationBySymbol.NVDA?.lastError).toBeNull();
   });
 });
 

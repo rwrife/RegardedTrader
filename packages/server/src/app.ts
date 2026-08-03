@@ -61,6 +61,9 @@ import {
   TradePlan,
   type BriefingStorePort,
   type OHLCV,
+  StaleInputError,
+  type RecommendationSource,
+  type SnapshotReader,
   OptionsChainResponse,
 } from '@regardedtrader/core';
 import { liveQuote, type LiveQuoteSource, type YahooQuoteLike } from './liveQuote.js';
@@ -156,7 +159,11 @@ export interface AppHandle {
   /** Currently-active config (mutated by /config endpoints). Read for tests. */
   getConfig: () => AppConfigT;
   emitSentimentUpdate: (symbol: string, snapshot: SentimentSnapshot | null) => void;
-  emitRecommendationUpdate: (symbol: string, recommendation: RecommendationValue) => void;
+  emitRecommendationUpdate: (
+    symbol: string,
+    recommendation: RecommendationValue,
+    persisted?: boolean,
+  ) => void;
   shutdown: (timeoutMs?: number) => Promise<void>;
   stream: {
     subscribe: (listener: (event: import('./polling.js').PollEvent) => void) => () => void;
@@ -173,15 +180,33 @@ export interface AppHandle {
  * (`index.ts`) wires defaults; tests pass mocks.
  */
 export function createApp(deps: AppDeps): AppHandle {
-  const BRIEFING_SENTIMENT_MAX_AGE_MS = 60 * 60 * 1000;
   let cfg: AppConfigT = AppConfig.parse(deps.initialConfig);
   const mentionStore = deps.mentions ?? new MentionStore();
+  const snapshotStore = deps.snapshots ?? new SnapshotStore({ root: mentionStore.rootDir });
+  const recommendationStore = deps.recommendations ?? new RecommendationStore({ root: mentionStore.rootDir });
   const authToken = process.env.REGARDEDTRADER_AUTH_TOKEN?.trim() || null;
   const runtimeAuthToken = deps.auth?.mode === 'required' ? deps.auth.token.trim() : null;
   const briefings = deps.briefings ?? new BriefingStore();
-  const snapshotStore = deps.snapshots ?? new SnapshotStore({ root: mentionStore.rootDir });
-  const recommendationStore =
-    deps.recommendations ?? new RecommendationStore({ root: mentionStore.rootDir });
+  const recommendationSnapshotReader: SnapshotReader = {
+    readLatest: async (symbol) => {
+      const latest = await snapshotStore.readLatest(symbol);
+      const entries = Object.fromEntries(
+        Object.entries(latest.entries ?? {}).map(([kind, entry]) => [
+          kind,
+          { ts: entry.ts, data: entry.data ?? null },
+        ]),
+      );
+      return {
+        ...latest,
+        entries,
+      };
+    },
+    readRange: async function* (symbol, kind, since, until) {
+      for await (const entry of snapshotStore.readRange(symbol, kind, since, until)) {
+        yield { ts: entry.ts, data: entry.data ?? null };
+      }
+    },
+  };
 
   // --- Market data registry (#91) ---
   // Rebuilt whenever the marketData config changes so route handlers always
@@ -256,35 +281,13 @@ export function createApp(deps: AppDeps): AppHandle {
     const llm = deps.llmFromConfig(cfg);
     if (!llm) return null;
     const ai = new AIRecommender(llm);
-    const snapshots = {
-      async readLatest(symbol: string) {
-        const latest = await snapshotStore.readLatest(symbol);
-        const entries = Object.fromEntries(
-          Object.entries(latest.entries ?? {}).map(([k, v]) => [
-            k,
-            { ts: v.ts, data: v.data ?? null },
-          ]),
-        );
-        return { ...latest, entries };
-      },
-      async *readRange(
-        symbol: string,
-        kind: 'quote' | 'options' | 'news',
-        since?: Date,
-        until?: Date,
-      ) {
-        for await (const entry of snapshotStore.readRange(symbol, kind, since, until)) {
-          yield { ts: entry.ts, data: entry.data ?? null };
-        }
-      },
-    };
     return new RecommenderOrchestrator({
       recommender: ai,
       store: recommendationStore,
       buildContext: async (symbol) =>
         buildRecommendationContext({
           symbol,
-          snapshots,
+          snapshots: recommendationSnapshotReader,
           mentions: mentionStore,
           forbidNakedShorts: cfg.risk.forbidNakedShorts,
           maxLossUsd: cfg.risk.maxLossUsd,
@@ -341,6 +344,11 @@ export function createApp(deps: AppDeps): AppHandle {
     lastError: string | null;
     lastErrorAt: string | null;
   };
+  type RecommendationHealth = {
+    lastSuccess: string | null;
+    lastError: string | null;
+    lastErrorAt: string | null;
+  };
   const sentimentHealth: Record<z.infer<typeof SentimentSource>, SentimentHealth> = {
     reddit: { lastSuccess: null, lastError: null, lastErrorAt: null },
     stocktwits: { lastSuccess: null, lastError: null, lastErrorAt: null },
@@ -349,6 +357,7 @@ export function createApp(deps: AppDeps): AppHandle {
     'google-news': { lastSuccess: null, lastError: null, lastErrorAt: null },
     googleNewsOpinion: { lastSuccess: null, lastError: null, lastErrorAt: null },
   };
+  const recommendationHealth = new Map<string, RecommendationHealth>();
 
   function setSentimentSuccess(source: z.infer<typeof SentimentSource>, at: string): void {
     const cur = sentimentHealth[source];
@@ -359,6 +368,32 @@ export function createApp(deps: AppDeps): AppHandle {
 
   function setSentimentError(source: z.infer<typeof SentimentSource>, err: unknown): void {
     const cur = sentimentHealth[source];
+    cur.lastError = err instanceof Error ? err.message : String(err);
+    cur.lastErrorAt = new Date().toISOString();
+  }
+
+  function recommendationHealthFor(symbol: string): RecommendationHealth {
+    const sym = symbol.toUpperCase();
+    const existing = recommendationHealth.get(sym);
+    if (existing) return existing;
+    const created: RecommendationHealth = {
+      lastSuccess: null,
+      lastError: null,
+      lastErrorAt: null,
+    };
+    recommendationHealth.set(sym, created);
+    return created;
+  }
+
+  function setRecommendationSuccess(symbol: string): void {
+    const cur = recommendationHealthFor(symbol);
+    cur.lastSuccess = new Date().toISOString();
+    cur.lastError = null;
+    cur.lastErrorAt = null;
+  }
+
+  function setRecommendationError(symbol: string, err: unknown): void {
+    const cur = recommendationHealthFor(symbol);
     cur.lastError = err instanceof Error ? err.message : String(err);
     cur.lastErrorAt = new Date().toISOString();
   }
@@ -416,6 +451,7 @@ export function createApp(deps: AppDeps): AppHandle {
     type: 'recommendation.update';
     symbol: string;
     recommendation: RecommendationValue;
+    persisted: boolean;
     id: string;
     at: string;
   };
@@ -432,18 +468,6 @@ export function createApp(deps: AppDeps): AppHandle {
     };
     const frame = `event: sentiment.update\ndata: ${JSON.stringify(payload)}\n\n`;
     for (const client of sseClients) client.write(frame);
-  }
-
-  async function readRecentSentimentSnapshot(
-    symbol: string,
-  ): Promise<SentimentSnapshot | undefined> {
-    const latest = await mentionStore.readLatest(symbol);
-    const snapshot = latest.sentiment;
-    if (!snapshot) return undefined;
-    const asOfMs = Date.parse(snapshot.asOf);
-    if (!Number.isFinite(asOfMs)) return undefined;
-    if (Date.now() - asOfMs > BRIEFING_SENTIMENT_MAX_AGE_MS) return undefined;
-    return snapshot;
   }
 
   function emitCalendarUpdate(update: {
@@ -463,11 +487,16 @@ export function createApp(deps: AppDeps): AppHandle {
     for (const client of sseClients) client.write(frame);
   }
 
-  function emitRecommendationUpdate(symbol: string, recommendation: RecommendationValue): void {
+  function emitRecommendationUpdate(
+    symbol: string,
+    recommendation: RecommendationValue,
+    persisted = true,
+  ): void {
     const payload: RecommendationSsePayload = {
       type: 'recommendation.update',
       symbol,
       recommendation,
+      persisted,
       id: randomUUID(),
       at: new Date().toISOString(),
     };
@@ -626,6 +655,11 @@ export function createApp(deps: AppDeps): AppHandle {
   });
 
   app.get('/health', (_req, res) => {
+    const recommendationBySymbol = Object.fromEntries(
+      Array.from(recommendationHealth.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([symbol, health]) => [symbol, health]),
+    );
     const calendarStatus = calendar.status();
     res.json({
       ok: true,
@@ -637,6 +671,7 @@ export function createApp(deps: AppDeps): AppHandle {
       aiConfigured: orchestrator !== null,
       activeProvider: cfg.activeProvider,
       sentimentSources: sentimentHealth,
+      recommendationBySymbol,
       calendar: {
         stale: calendarStatus.stale,
         holidaysStale: calendarStatus.holidaysStale,
@@ -1228,11 +1263,17 @@ export function createApp(deps: AppDeps): AppHandle {
     since: DateParam.optional(),
     until: DateParam.optional(),
   });
+  const RecommendationRangeQuery = z.object({
+    since: DateParam.optional(),
+    until: DateParam.optional(),
+  });
   const MentionsQuery = z.object({
     source: SentimentSource.optional(),
     limit: z.coerce.number().int().min(1).max(500).optional().default(100),
     since: DateParam.optional(),
   });
+  const recommendationRecomputeAtBySymbol = new Map<string, number>();
+  const RECOMMENDATION_RECOMPUTE_COOLDOWN_MS = 60_000;
 
   app.get('/events', requireDashboardToken, (req, res) => {
     res.setHeader('Content-Type', 'text/event-stream');
@@ -1280,6 +1321,107 @@ export function createApp(deps: AppDeps): AppHandle {
       items.sort((a, b) => Date.parse(a.asOf) - Date.parse(b.asOf));
       res.json({ symbol, items });
     } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/recommendations/:symbol/latest', requireDashboardToken, async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
+      const known = await requireKnownSymbol(res, symbol);
+      if (!known) return;
+      const latest = await recommendationStore.readLatest(symbol);
+      if (!latest) {
+        res.status(404).json({ error: `No recommendation found for ${symbol}.` });
+        return;
+      }
+      res.json(Recommendation.parse(latest));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/recommendations/:symbol', requireDashboardToken, async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
+      const known = await requireKnownSymbol(res, symbol);
+      if (!known) return;
+      const q = RecommendationRangeQuery.parse(req.query);
+      const since = q.since ? new Date(q.since) : undefined;
+      const until = q.until ? new Date(q.until) : undefined;
+      const items: RecommendationValue[] = [];
+      for await (const rec of recommendationStore.readRange(symbol, since, until)) {
+        items.push(Recommendation.parse(rec));
+      }
+      items.sort((a, b) => Date.parse(a.generatedAt) - Date.parse(b.generatedAt));
+      res.json({ symbol, items });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.post('/recommendations/:symbol/recompute', requireDashboardToken, async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
+      const known = await requireKnownSymbol(res, symbol);
+      if (!known) return;
+
+      const nowMs = Date.now();
+      const last = recommendationRecomputeAtBySymbol.get(symbol) ?? 0;
+      const elapsed = nowMs - last;
+      if (elapsed < RECOMMENDATION_RECOMPUTE_COOLDOWN_MS) {
+        const retryAfterSec = Math.ceil((RECOMMENDATION_RECOMPUTE_COOLDOWN_MS - elapsed) / 1000);
+        res.setHeader('Retry-After', String(retryAfterSec));
+        res.status(429).json({
+          error: `Recommendation recompute for ${symbol} is rate-limited to once per minute.`,
+          retryAfterSec,
+        });
+        return;
+      }
+
+      const custom = deps.recomputeRecommendation;
+      if (custom) {
+        const recommendation = Recommendation.parse(await custom(symbol));
+        emitRecommendationUpdate(symbol, recommendation, true);
+        setRecommendationSuccess(symbol);
+        res.json({ symbol, persisted: true, recommendation });
+        return;
+      }
+
+      const runner = recommendationOrchestrator;
+      if (!runner) {
+        res.status(503).json({
+          error: 'AI provider not configured',
+          hint: 'Run `regard config` (CLI) or open Settings in the dashboard.',
+        });
+        return;
+      }
+
+      recommendationRecomputeAtBySymbol.set(symbol, nowMs);
+      const result = await runner.runOnce(symbol);
+      if (result.status === 'skipped') {
+        res.status(409).json({
+          error: `Recommendation recompute for ${symbol} is already in flight.`,
+        });
+        return;
+      }
+      setRecommendationSuccess(symbol);
+      res.json({
+        symbol,
+        persisted: result.persisted,
+        recommendation: result.recommendation,
+      });
+    } catch (e) {
+      if (e instanceof StaleInputError) {
+        setRecommendationError(e.symbol, e);
+        res.status(409).json({
+          error: `Cannot recompute recommendation for ${e.symbol}: ${e.reason}.`,
+          code: e.code,
+          reason: e.reason,
+        });
+        return;
+      }
+      setRecommendationError(String(req.params.symbol).toUpperCase(), e);
       next(e);
     }
   });
@@ -1610,96 +1752,6 @@ export function createApp(deps: AppDeps): AppHandle {
     return entry;
   }
 
-  function requireRecommendationOrchestrator(
-    res: express.Response,
-  ): RecommenderOrchestrator | null {
-    if (!recommendationOrchestrator && !deps.recomputeRecommendation) {
-      res.status(503).json({
-        error: 'AI provider not configured',
-        hint: 'Run `regard config` (CLI) or open Settings in the dashboard.',
-      });
-      return null;
-    }
-    return recommendationOrchestrator;
-  }
-
-  const RecommendationHistoryQuery = z.object({
-    days: z.coerce.number().int().min(1).max(365).optional().default(30),
-  });
-
-  app.get('/recommendations/:symbol/latest', requireDashboardToken, async (req, res, next) => {
-    try {
-      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
-      const latest = await recommendationStore.readLatest(symbol);
-      if (!latest) {
-        res.status(404).json({ error: `No recommendation found for ${symbol}.` });
-        return;
-      }
-      res.json(Recommendation.parse(latest));
-    } catch (e) {
-      next(e);
-    }
-  });
-
-  app.get('/recommendations/:symbol', requireDashboardToken, async (req, res, next) => {
-    try {
-      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
-      const q = RecommendationHistoryQuery.parse(req.query);
-      const now = new Date();
-      const since = new Date(now.getTime() - q.days * 24 * 60 * 60 * 1000);
-      const items: RecommendationValue[] = [];
-      for await (const rec of recommendationStore.readRange(symbol, since, now)) {
-        items.push(Recommendation.parse(rec));
-      }
-      items.sort((a, b) => Date.parse(a.generatedAt) - Date.parse(b.generatedAt));
-      res.json({ symbol, items });
-    } catch (e) {
-      next(e);
-    }
-  });
-
-  app.post('/recommendations/:symbol/recompute', requireDashboardToken, async (req, res, next) => {
-    try {
-      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
-      const known = await requireKnownSymbol(res, symbol);
-      if (!known) return;
-      const custom = deps.recomputeRecommendation;
-      if (custom) {
-        const rec = Recommendation.parse(await custom(symbol));
-        emitRecommendationUpdate(symbol, rec);
-        res.json({ ok: true, symbol, recommendation: rec, persisted: true });
-        return;
-      }
-      const runner = requireRecommendationOrchestrator(res);
-      if (!runner) return;
-      const out = await runner.runOnce(symbol);
-      if (out.status === 'skipped') {
-        const latest = await recommendationStore.readLatest(symbol);
-        if (!latest) {
-          res.status(409).json({
-            error: `Recommendation recompute for ${symbol} is already running.`,
-          });
-          return;
-        }
-        res.json({
-          ok: true,
-          symbol,
-          recommendation: Recommendation.parse(latest),
-          persisted: false,
-          skipped: true,
-        });
-        return;
-      }
-      res.json({
-        ok: true,
-        symbol,
-        recommendation: Recommendation.parse(out.recommendation),
-        persisted: out.persisted,
-      });
-    } catch (e) {
-      next(e);
-    }
-  });
 
   // Technician agent surface (issue #74). Standalone endpoint so the CLI
   // `regard tech <SYM>` and the web `Chart` tab can render TA commentary
@@ -1777,41 +1829,7 @@ export function createApp(deps: AppDeps): AppHandle {
       const symbol = Ticker.parse(candidate.toUpperCase());
       const known = await requireKnownSymbol(res, symbol);
       if (!known) return;
-      const sentimentSnapshot = await readRecentSentimentSnapshot(symbol);
-      let nextEarnings:
-        | { date: string; daysUntil: number; title: string; startUtc: string }
-        | undefined;
-      try {
-        const upcoming = await calendar.getSymbolEarnings({
-          symbol,
-          includePast: false,
-          includeUpcoming: true,
-        });
-        const next = upcoming[0];
-        if (next) {
-          const startMs = Date.parse(next.startUtc);
-          if (Number.isFinite(startMs)) {
-            const nowMs = deps.now ? deps.now() : Date.now();
-            const daysUntil = Math.floor((startMs - nowMs) / (24 * 60 * 60 * 1000));
-            if (daysUntil >= 0 && daysUntil <= 14) {
-              nextEarnings = {
-                date: next.startUtc.slice(0, 10),
-                startUtc: next.startUtc,
-                title: next.title,
-                daysUntil,
-              };
-            }
-          }
-        }
-      } catch {
-        // Best-effort enrichment: briefing should still render if calendar refresh fails.
-      }
-      res.json(
-        await o.briefing(symbol, {
-          sentimentSnapshot,
-          ...(nextEarnings ? { nextEarnings } : {}),
-        }),
-      );
+      res.json(await o.briefing(symbol));
     } catch (e) {
       next(e);
     }
@@ -1829,42 +1847,7 @@ export function createApp(deps: AppDeps): AppHandle {
       const known = await requireKnownSymbol(res, symbol);
       if (!known) return;
       const body = BriefingReqWithRecommendation.parse(req.body ?? {});
-      const sentimentSnapshot = await readRecentSentimentSnapshot(symbol);
-      const nowMs = deps.now ? deps.now() : Date.now();
-      let nextEarnings:
-        | { date: string; daysUntil: number; title: string; startUtc: string }
-        | undefined;
-      try {
-        const upcoming = await calendar.getSymbolEarnings({
-          symbol,
-          includePast: false,
-          includeUpcoming: true,
-        });
-        const next = upcoming[0];
-        if (next) {
-          const startMs = Date.parse(next.startUtc);
-          if (Number.isFinite(startMs)) {
-            const daysUntil = Math.floor((startMs - nowMs) / (24 * 60 * 60 * 1000));
-            if (daysUntil >= 0 && daysUntil <= 14) {
-              nextEarnings = {
-                date: next.startUtc.slice(0, 10),
-                startUtc: next.startUtc,
-                title: next.title,
-                daysUntil,
-              };
-            }
-          }
-        }
-      } catch {
-        // Best-effort enrichment: briefing should still render if calendar refresh fails.
-      }
-      res.json(
-        await o.briefing(symbol, {
-          ...body,
-          sentimentSnapshot,
-          ...(nextEarnings ? { nextEarnings } : {}),
-        }),
-      );
+      res.json(await o.briefing(symbol, body));
     } catch (e) {
       next(e);
     }
