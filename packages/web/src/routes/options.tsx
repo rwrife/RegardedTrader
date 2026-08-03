@@ -7,8 +7,12 @@
  * are identical across surfaces.
  */
 import React, { useEffect, useMemo, useState } from 'react';
-import type { OptionContract, Quote } from '@regardedtrader/core';
-import { fillGreeks, groupChainByStrike, type ChainRow } from '@regardedtrader/core/options';
+import type { ImpliedMoveRow, OptionContract, OptionsChainResponse, Quote } from '@regardedtrader/core';
+import {
+  fillGreeks,
+  groupChainByStrike,
+  type ChainRow,
+} from '@regardedtrader/core/options';
 
 import { AiDisclaimer } from '../components/AiDisclaimer.js';
 
@@ -20,6 +24,8 @@ export interface OptionsRouteProps {
   fetchImpl?: typeof fetch;
   /** Test seam: when present, skip HTTP and render this chain. */
   initialChain?: OptionContract[];
+  /** Optional test seam for the implied-move strip. */
+  initialImpliedMoves?: ImpliedMoveRow[];
   /** Test seam: when present, skip the quote fetch. */
   initialQuote?: Quote | null;
   /** Navigate back to the dashboard. */
@@ -55,7 +61,12 @@ type Status =
   | { kind: 'idle' }
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
-  | { kind: 'ok'; chain: OptionContract[]; quote: Quote | null };
+  | {
+      kind: 'ok';
+      chain: OptionContract[];
+      quote: Quote | null;
+      impliedMoves: ImpliedMoveRow[];
+    };
 
 export function Options(props: OptionsRouteProps): JSX.Element {
   const fetchImpl = props.fetchImpl ?? (typeof fetch !== 'undefined' ? fetch : undefined);
@@ -63,7 +74,14 @@ export function Options(props: OptionsRouteProps): JSX.Element {
   const seed = props.initialChain;
   const seedQuote = props.initialQuote ?? null;
   const [status, setStatus] = useState<Status>(
-    seed ? { kind: 'ok', chain: seed, quote: seedQuote } : { kind: 'idle' },
+    seed
+      ? {
+          kind: 'ok',
+          chain: seed,
+          quote: seedQuote,
+          impliedMoves: props.initialImpliedMoves ?? [],
+        }
+      : { kind: 'idle' },
   );
 
   useEffect(() => {
@@ -98,13 +116,15 @@ export function Options(props: OptionsRouteProps): JSX.Element {
           return;
         }
         const chainText = await chainRes.value.text();
-        let chain: OptionContract[];
+        let parsed: OptionsChainResponse | OptionContract[];
         try {
-          chain = JSON.parse(chainText) as OptionContract[];
+          parsed = JSON.parse(chainText) as OptionsChainResponse | OptionContract[];
         } catch {
           setStatus({ kind: 'error', message: 'Invalid JSON from server' });
           return;
         }
+        const chain = Array.isArray(parsed) ? parsed : parsed.contracts;
+        const impliedMoves = Array.isArray(parsed) ? [] : parsed.impliedMoves;
         let quote: Quote | null = null;
         if (quoteRes.status === 'fulfilled' && quoteRes.value.ok) {
           try {
@@ -114,7 +134,12 @@ export function Options(props: OptionsRouteProps): JSX.Element {
           }
         }
         if (cancelled) return;
-        setStatus({ kind: 'ok', chain, quote });
+        setStatus({
+          kind: 'ok',
+          chain,
+          quote,
+          impliedMoves,
+        });
       })
       .catch((e: unknown) => {
         if (cancelled) return;
@@ -160,6 +185,10 @@ export function Options(props: OptionsRouteProps): JSX.Element {
         <div style={{ marginTop: 4, fontSize: 12, opacity: 0.7 }}>
           spot ${status.quote.price.toFixed(2)} · as of {status.quote.asOf}
         </div>
+      )}
+
+      {status.kind === 'ok' && status.impliedMoves.length > 0 && (
+        <ImpliedMoveStrip rows={status.impliedMoves} />
       )}
 
       {expiries.length > 0 && (
@@ -290,4 +319,29 @@ function fmt(n: number | null | undefined, digits: number): string {
 }
 function ivPct(iv: number | null | undefined): string {
   return iv == null || !Number.isFinite(iv) ? '—' : `${(iv * 100).toFixed(1)}%`;
+}
+
+function ImpliedMoveStrip({ rows }: { rows: ReadonlyArray<ImpliedMoveRow> }): JSX.Element {
+  return (
+    <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+      {rows.map((row) => {
+        const warn = row.impliedMovePct >= 0.05;
+        return (
+          <div
+            key={row.expiry}
+            style={{
+              fontFamily: 'monospace',
+              fontSize: 12,
+              border: '1px solid #2b3442',
+              borderRadius: 6,
+              padding: '4px 8px',
+              color: warn ? '#fbbf24' : '#e5e7eb',
+            }}
+          >
+            {row.expiry}: ±${row.impliedMoveAbs.toFixed(2)} ({(row.impliedMovePct * 100).toFixed(1)}%)
+          </div>
+        );
+      })}
+    </div>
+  );
 }
