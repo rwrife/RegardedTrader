@@ -60,11 +60,22 @@ export interface MarketDataClient {
   optionsChain(symbol: string, expiry?: string): Promise<OptionContract[]>;
 }
 
+export interface MarketDataCache {
+  get<T>(namespace: string, key: string): Promise<T | undefined>;
+  set<T>(namespace: string, key: string, value: T, opts?: { ttlMs?: number }): Promise<void>;
+}
+
 export class YahooClient implements MarketDataClient {
+  constructor(private readonly cache?: MarketDataCache) {}
+
   async quote(symbol: string): Promise<Quote> {
+    const sym = symbol.toUpperCase();
+    const cacheKey = sym;
+    const hit = await this.cache?.get<Quote>('quotes', cacheKey);
+    if (hit) return hit;
     const q = await yahooFinance.quote(symbol);
-    return {
-      symbol,
+    const out: Quote = {
+      symbol: sym,
       price: q.regularMarketPrice ?? 0,
       change: q.regularMarketChange ?? 0,
       changePercent: q.regularMarketChangePercent ?? 0,
@@ -72,12 +83,18 @@ export class YahooClient implements MarketDataClient {
       marketCap: q.marketCap,
       asOf: new Date().toISOString(),
     };
+    await this.cache?.set('quotes', cacheKey, out);
+    return out;
   }
 
   async history(symbol: string, days: number): Promise<OHLCV[]> {
+    const sym = symbol.toUpperCase();
+    const cacheKey = `${sym}:${days}`;
+    const hit = await this.cache?.get<OHLCV[]>('history', cacheKey);
+    if (hit) return hit;
     const period1 = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
     const rows = await yahooFinance.historical(symbol, { period1, interval: '1d' });
-    return rows.map((r) => ({
+    const out = rows.map((r) => ({
       t: r.date.toISOString().slice(0, 10),
       o: r.open,
       h: r.high,
@@ -85,23 +102,35 @@ export class YahooClient implements MarketDataClient {
       c: r.close,
       v: r.volume,
     }));
+    await this.cache?.set('history', cacheKey, out);
+    return out;
   }
 
   async news(symbol: string): Promise<NewsItem[]> {
+    const sym = symbol.toUpperCase();
+    const cacheKey = sym;
+    const hit = await this.cache?.get<NewsItem[]>('news', cacheKey);
+    if (hit) return hit;
     try {
       const search = await yahooFinance.search(symbol, { newsCount: 10 });
-      return (search.news ?? []).map((n) => ({
+      const out = (search.news ?? []).map((n) => ({
         title: n.title,
         url: n.link,
         source: n.publisher ?? 'unknown',
         publishedAt: new Date(Number(n.providerPublishTime ?? 0) * 1000).toISOString(),
       }));
+      await this.cache?.set('news', cacheKey, out);
+      return out;
     } catch {
       return [];
     }
   }
 
   async optionsChain(symbol: string, expiry?: string): Promise<OptionContract[]> {
+    const sym = symbol.toUpperCase();
+    const cacheKey = `${sym}:${expiry ?? 'next'}`;
+    const hit = await this.cache?.get<OptionContract[]>('chain', cacheKey);
+    if (hit) return hit;
     try {
       const opts = await yahooFinance.options(symbol, expiry ? { date: new Date(expiry) } : {});
       const chain = opts.options?.[0];
@@ -120,7 +149,9 @@ export class YahooClient implements MarketDataClient {
       const puts = validate(chain.puts ?? []).map((leg) =>
         mapYahooOptionContract(leg, symbol, 'put'),
       );
-      return [...calls, ...puts];
+      const out = [...calls, ...puts];
+      await this.cache?.set('chain', cacheKey, out);
+      return out;
     } catch {
       return [];
     }

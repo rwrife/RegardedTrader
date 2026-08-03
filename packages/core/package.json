@@ -8,6 +8,7 @@
   "exports": {
     ".": "./dist/index.js",
     "./schemas": "./dist/schemas/index.js",
+    "./schemas/recommendation": "./dist/schemas/recommendation.js",
     "./agents": "./dist/agents/index.js",
     "./marketHours": "./dist/marketHours.js",
     "./rating": "./dist/rating.js",
@@ -26,11 +27,13 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "better-sqlite3": "^11.8.1",
     "openai": "^4.67.3",
     "yahoo-finance2": "2.11.3",
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.7.5",
     "typescript": "^5.6.3",
     "vitest": "^2.1.2"

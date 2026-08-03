@@ -258,6 +258,13 @@ export const PollingConfig = z
   });
 export type PollingConfig = z.infer<typeof PollingConfig>;
 
+export const CacheConfig = z
+  .object({
+    enabled: z.boolean().default(true),
+  })
+  .default({ enabled: true });
+export type CacheConfig = z.infer<typeof CacheConfig>;
+
 export const AppConfig = z.object({
   /** Schema version for safe migrations */
   version: z.literal(1).default(1),
@@ -283,6 +290,8 @@ export const AppConfig = z.object({
     .default({ host: '127.0.0.1', port: 4317 }),
   /** Pluggable market-data provider config (#91). */
   marketData: MarketDataConfig,
+  /** Shared local SQLite cache for market data. */
+  cache: CacheConfig,
   polling: PollingConfig,
 });
 export type AppConfig = z.infer<typeof AppConfig>;

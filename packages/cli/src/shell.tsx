@@ -15,6 +15,7 @@ import { PaperScreen } from './screens/paper.js';
 import { ChartScreen } from './screens/chart.js';
 import { TailScreen, PollingStatusScreen, PollingToggleScreen } from './screens/polling.js';
 import { MentionsScreen, SentimentScreen } from './screens/sentiment.js';
+import { CacheClearScreen } from './screens/cache.js';
 
 /**
  * Fancy modal-style shell inspired by Copilot CLI / Claude Code. Everything is
@@ -42,6 +43,7 @@ type SlashId =
   | 'tail'
   | 'polling'
   | 'config'
+  | 'cache'
   | 'dashboard'
   | 'paper'
   | 'help'
@@ -72,6 +74,7 @@ const COMMANDS: SlashCommand[] = [
   { id: 'tail',     name: '/tail',     usage: '/tail <SYM> [--quotes]', blurb: 'Tail per-symbol news stream', needsArgs: true },
   { id: 'polling',  name: '/polling',  usage: '/polling <status|pause|resume>', blurb: 'Polling subsystem controls', needsArgs: true },
   { id: 'config',   name: '/config',   usage: '/config [show|test [id]]', blurb: 'AI providers, risk, server' },
+  { id: 'cache',    name: '/cache',    usage: '/cache clear', blurb: 'Clear shared market-data cache', needsArgs: true },
   { id: 'dashboard',name: '/dashboard',usage: '/dashboard',      blurb: 'Open local web dashboard' },
   { id: 'paper',    name: '/paper',    usage: '/paper <submit|orders|positions> ...', blurb: 'Paper-only simulated execution', needsArgs: true },
   { id: 'help',     name: '/help',     usage: '/help',           blurb: 'List slash commands' },
@@ -361,6 +364,11 @@ function RunningBody({
     }
     case 'config':
       return <ConfigScreen sub={args[0]} testProviderId={args[1]} serverUrl={serverUrl} onDone={onDone} />;
+    case 'cache': {
+      const sub = (args[0] ?? '').toLowerCase();
+      if (sub === 'clear') return <CacheClearScreen serverUrl={serverUrl} />;
+      return <Text color="red">Usage: /cache clear</Text>;
+    }
     case 'dashboard':
       return <DashboardScreen serverUrl={serverUrl} onDone={onDone} />;
     case 'paper':

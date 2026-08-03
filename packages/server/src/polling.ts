@@ -51,6 +51,8 @@ type PollEvent =
 interface PollingOptions {
   quoteEveryMs?: number;
   newsEveryMs?: number;
+  maintenanceEveryMs?: number;
+  onMaintenance?: () => Promise<void> | void;
   now?: () => Date;
 }
 
@@ -63,12 +65,14 @@ interface JobRuntime {
   nextRun: string | null;
   lastError: string | null;
   intervalMs: number;
+  runOnStart: boolean;
   timer: ReturnType<typeof setInterval> | null;
   run: () => Promise<void>;
 }
 
 const DEFAULT_QUOTE_MS = 15_000;
 const DEFAULT_NEWS_MS = 30_000;
+const DEFAULT_MAINTENANCE_MS = 5 * 60_000;
 
 export class PollingCoordinator {
   private readonly events = new EventEmitter();
@@ -93,9 +97,17 @@ export class PollingCoordinator {
     this.quoteEveryMs = opts.quoteEveryMs ?? DEFAULT_QUOTE_MS;
     this.newsEveryMs = opts.newsEveryMs ?? DEFAULT_NEWS_MS;
     this.jobs = [
-      this.makeJob('quotes', this.quoteEveryMs, () => this.runQuotes()),
-      this.makeJob('news', this.newsEveryMs, () => this.runNews()),
+      this.makeJob('quotes', this.quoteEveryMs, () => this.runQuotes(), true),
+      this.makeJob('news', this.newsEveryMs, () => this.runNews(), true),
     ];
+    if (opts.onMaintenance) {
+      const maintenanceEveryMs = opts.maintenanceEveryMs ?? DEFAULT_MAINTENANCE_MS;
+      this.jobs.push(
+        this.makeJob('maintenance', maintenanceEveryMs, async () => {
+          await opts.onMaintenance?.();
+        }, false),
+      );
+    }
   }
 
   start(): void {
@@ -205,7 +217,12 @@ export class PollingCoordinator {
     return () => this.events.off('event', listener);
   }
 
-  private makeJob(id: string, intervalMs: number, run: () => Promise<void>): JobRuntime {
+  private makeJob(
+    id: string,
+    intervalMs: number,
+    run: () => Promise<void>,
+    runOnStart: boolean,
+  ): JobRuntime {
     return {
       id,
       state: 'idle',
@@ -213,6 +230,7 @@ export class PollingCoordinator {
       nextRun: null,
       lastError: null,
       intervalMs,
+      runOnStart,
       timer: null,
       run,
     };
@@ -240,7 +258,9 @@ export class PollingCoordinator {
       this.trackRun(tick());
     }, job.intervalMs);
     job.timer.unref?.();
-    this.trackRun(tick());
+    if (job.runOnStart) {
+      this.trackRun(tick());
+    }
   }
 
   private async watchedSymbols(): Promise<string[]> {

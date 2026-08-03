@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Recommendation as RecommendationSchema, type Recommendation } from '@regardedtrader/core';
+import { Recommendation as RecommendationSchema, type Recommendation } from '@regardedtrader/core/schemas/recommendation';
 import type { SampleTicker } from '../../sample-data.js';
 import { AiCard } from '../../components/primitives/AiCard.js';
 import { VerdictBlock } from '../../components/primitives/VerdictBlock.js';

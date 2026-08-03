@@ -37,6 +37,7 @@ import {
   MentionStore,
   SnapshotStore,
   RecommendationStore,
+  SQLiteCache,
   AIRecommender,
   RecommenderOrchestrator,
   buildRecommendationContext,
@@ -129,11 +130,14 @@ export interface AppDeps {
   polling?: {
     quoteEveryMs?: number;
     newsEveryMs?: number;
+    maintenanceEveryMs?: number;
   };
   /** Optional injectable snapshot store (tests). */
   snapshots?: SnapshotStore;
   /** Optional injectable recommendation store (tests). */
   recommendations?: RecommendationStore;
+  /** Optional injectable shared market-data cache (tests). */
+  cache?: SQLiteCache;
   /**
    * Optional recompute hook override (tests). When omitted, createApp wires
    * the in-process recommender pipeline from core.
@@ -181,6 +185,17 @@ export interface AppHandle {
  */
 export function createApp(deps: AppDeps): AppHandle {
   let cfg: AppConfigT = AppConfig.parse(deps.initialConfig);
+  const marketCache =
+    deps.cache ??
+    new SQLiteCache({
+      enabled: cfg.cache.enabled,
+      namespaceTtls: {
+        quotes: 30_000,
+        history: 5 * 60_000,
+        chain: 60_000,
+        news: 5 * 60_000,
+      },
+    });
   const mentionStore = deps.mentions ?? new MentionStore();
   const snapshotStore = deps.snapshots ?? new SnapshotStore({ root: mentionStore.rootDir });
   const recommendationStore = deps.recommendations ?? new RecommendationStore({ root: mentionStore.rootDir });
@@ -211,9 +226,15 @@ export function createApp(deps: AppDeps): AppHandle {
   // --- Market data registry (#91) ---
   // Rebuilt whenever the marketData config changes so route handlers always
   // see the active provider without restarting the server.
-  let registry = createMarketDataRegistry(cfg.marketData, { fallback: deps.market });
+  let registry = createMarketDataRegistry(cfg.marketData, {
+    fallback: deps.market,
+    cache: marketCache,
+  });
   function rebuildRegistry(): void {
-    registry = createMarketDataRegistry(cfg.marketData, { fallback: deps.market });
+    registry = createMarketDataRegistry(cfg.marketData, {
+      fallback: deps.market,
+      cache: marketCache,
+    });
   }
   /** Resolve the live-quote source for the active provider, or fall back. */
   function resolveLiveQuoteSource(): LiveQuoteSource | null {
@@ -312,10 +333,18 @@ export function createApp(deps: AppDeps): AppHandle {
   }
 
   let orchestrator = makeOrchestrator();
-  const polling = new PollingCoordinator(deps.watchlist, () => registry.client, {
-    quoteEveryMs: deps.polling?.quoteEveryMs ?? cfg.polling.cadence.rth.quote,
-    newsEveryMs: deps.polling?.newsEveryMs ?? cfg.polling.cadence.rth.news,
-  });
+  const polling = new PollingCoordinator(
+    deps.watchlist,
+    () => registry.client,
+    {
+      quoteEveryMs: deps.polling?.quoteEveryMs ?? cfg.polling.cadence.rth.quote,
+      newsEveryMs: deps.polling?.newsEveryMs ?? cfg.polling.cadence.rth.news,
+      maintenanceEveryMs: deps.polling?.maintenanceEveryMs,
+      onMaintenance: async () => {
+        await marketCache.sweep();
+      },
+    },
+  );
   function applyPollingRuntimeConfig(): void {
     polling.updateCadence({
       quoteEveryMs: deps.polling?.quoteEveryMs ?? cfg.polling.cadence.rth.quote,
@@ -1957,6 +1986,7 @@ export function createApp(deps: AppDeps): AppHandle {
       const next = AppConfig.parse(req.body);
       await saveConfig(next);
       cfg = next;
+      marketCache.setEnabled(cfg.cache.enabled);
       refreshOrchestrators();
       rebuildRegistry();
       applyPollingRuntimeConfig();
@@ -1977,6 +2007,28 @@ export function createApp(deps: AppDeps): AppHandle {
       await saveConfig(cfg);
       refreshOrchestrators();
       res.json({ ok: true, aiConfigured: orchestrator !== null, config: redactConfig(cfg) });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.post('/config/cache', async (req, res, next) => {
+    try {
+      const body = z.object({ enabled: z.boolean() }).parse(req.body);
+      cfg.cache.enabled = body.enabled;
+      marketCache.setEnabled(body.enabled);
+      await saveConfig(cfg);
+      res.json({ ok: true, aiConfigured: orchestrator !== null, config: redactConfig(cfg) });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.post('/cache/clear', async (req, res, next) => {
+    try {
+      const body = z.object({ namespace: z.string().min(1).optional() }).parse(req.body ?? {});
+      const cleared = await marketCache.clear(body.namespace);
+      res.json({ ok: true, namespace: body.namespace ?? null, deleted: cleared.deleted });
     } catch (e) {
       next(e);
     }
@@ -2313,8 +2365,18 @@ function makePlanId(symbol: string, index: number): string {
 
 /** Default factory used by the entrypoint. */
 export function createDefaultApp(cfg: AppConfigT, auth?: AppDeps['auth']): AppHandle {
+  const cache = new SQLiteCache({
+    enabled: cfg.cache.enabled,
+    namespaceTtls: {
+      quotes: 30_000,
+      history: 5 * 60_000,
+      chain: 60_000,
+      news: 5 * 60_000,
+    },
+  });
   return createApp({
-    market: new YahooClient(),
+    market: new YahooClient(cache),
+    cache,
     webSearch: new DuckDuckGoSearch(),
     watchlist: new WatchlistStore(),
     briefings: new BriefingStore(),

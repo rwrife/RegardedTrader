@@ -177,6 +177,8 @@ export function Settings(props: SettingsProps): JSX.Element {
 
         {config && <MarketDataSection api={api} config={config} onConfigChange={refresh} />}
 
+        {config && <CacheSection api={api} config={config} onConfigChange={refresh} />}
+
         {config && <RiskCapsSection api={api} config={config} onConfigChange={refresh} />}
 
         <div className="pt-4">
@@ -631,6 +633,92 @@ function FormFooter({
           {saving ? 'Saving…' : 'Save'}
         </button>
       </div>
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Shared cache controls (#78)
+// -----------------------------------------------------------------------------
+
+interface CacheSectionProps {
+  api: ApiClient;
+  config: AppConfig;
+  onConfigChange: (next: AppConfig) => void;
+}
+
+function CacheSection({ api, config, onConfigChange }: CacheSectionProps): JSX.Element {
+  const [status, setStatus] = useState<Status>({ kind: 'idle' });
+  const [clearing, setClearing] = useState(false);
+
+  const onToggle = async (enabled: boolean): Promise<void> => {
+    setStatus({ kind: 'loading' });
+    try {
+      const r = await api.updateCacheEnabled(enabled);
+      onConfigChange(r.config);
+      setStatus({
+        kind: 'info',
+        message: enabled ? 'Market-data cache enabled' : 'Market-data cache disabled',
+      });
+    } catch (e) {
+      setStatus({ kind: 'error', message: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
+  const onClear = async (): Promise<void> => {
+    setClearing(true);
+    try {
+      const r = await api.clearCache();
+      setStatus({ kind: 'info', message: `Cleared ${r.deleted} cached entr${r.deleted === 1 ? 'y' : 'ies'}` });
+    } catch (e) {
+      setStatus({ kind: 'error', message: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setClearing(false);
+    }
+  };
+
+  return (
+    <div className="pt-6 mt-6 border-t border-border-subtle space-y-3">
+      <div>
+        <h2 className="text-lg font-semibold tracking-tight">Market-data cache</h2>
+        <p className="text-xs text-fg-muted mt-1">
+          Shared SQLite cache for quotes, history, options chains, and news.
+        </p>
+      </div>
+
+      <label className="inline-flex items-center gap-2 text-sm">
+        <input
+          aria-label="Enable market-data cache"
+          type="checkbox"
+          checked={config.cache.enabled}
+          onChange={(e) => {
+            void onToggle(e.target.checked);
+          }}
+        />
+        Enable cache
+      </label>
+
+      <div>
+        <button
+          aria-label="Clear market-data cache"
+          onClick={() => void onClear()}
+          disabled={clearing}
+          className="text-xs px-2.5 py-1.5 rounded border border-border-subtle hover:border-ai disabled:opacity-50"
+        >
+          {clearing ? 'Clearing…' : 'Clear cache'}
+        </button>
+      </div>
+
+      {status.kind === 'error' && (
+        <div role="alert" className="border border-down rounded p-2 text-xs bg-down/10 text-down">
+          {status.message}
+        </div>
+      )}
+      {status.kind === 'info' && (
+        <div className="border border-border-subtle rounded p-2 text-xs text-fg-secondary bg-surface">
+          {status.message}
+        </div>
+      )}
     </div>
   );
 }
