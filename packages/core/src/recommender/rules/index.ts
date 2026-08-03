@@ -47,6 +47,8 @@ export interface RecommendationContext {
   readonly risk: {
     /** Mirrors `AppConfig.risk.forbidNakedShorts` / `RiskOfficer` cap. */
     readonly forbidNakedShorts: boolean;
+    /** Optional absolute risk cap, used for safety-copy clamping in LLM output. */
+    readonly maxLossUsd?: number;
   };
   readonly quote: ContextQuoteSection;
   /**
