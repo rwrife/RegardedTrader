@@ -11,6 +11,7 @@ import { AddScreen } from './screens/add.js';
 import { ListScreen, RemoveScreen } from './screens/watchlist.js';
 import { WatchScreen } from './screens/watch.js';
 import { OptionsScreen } from './screens/options.js';
+import { PaperScreen } from './screens/paper.js';
 
 export interface AppProps {
   command: string;
@@ -21,6 +22,7 @@ export interface AppProps {
     thesis?: string;
     maxLoss?: number;
     expiry?: string;
+    paper?: boolean;
   };
 }
 
@@ -70,6 +72,8 @@ export function App({ command, args, serverUrl, flags }: AppProps) {
       return <RemoveScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
     case 'watch':
       return <WatchScreen args={args} serverUrl={serverUrl} />;
+    case 'paper':
+      return <PaperScreen args={args} serverUrl={serverUrl} paperFlag={flags?.paper} />;
     default:
       return (
         <Box flexDirection="column">

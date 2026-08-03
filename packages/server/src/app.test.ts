@@ -5,7 +5,13 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
-import { WatchlistStore, type LLM, type WebSearch } from '@regardedtrader/core';
+import {
+  WatchlistStore,
+  PaperStore,
+  type LLM,
+  type WebSearch,
+  type TradePlan,
+} from '@regardedtrader/core';
 import { createApp } from './app.js';
 import { SERVER_VERSION } from './version.js';
 
@@ -94,6 +100,97 @@ describe('POST /tickers/validate', () => {
         marketData: { providers: {}, activeProvider: null },
       },
       llmFromConfig: () => fakeLLM(goodReply),
+    });
+
+    describe('paper orders API', () => {
+      const plan: TradePlan = {
+        name: 'Long call',
+        thesis: 'Upside continuation',
+        legs: [
+          {
+            action: 'buy',
+            qty: 1,
+            contract: {
+              symbol: 'NVDA260918C00125000',
+              underlying: 'NVDA',
+              expiry: '2026-09-18',
+              strike: 125,
+              type: 'call',
+              bid: 5,
+              ask: 5.4,
+              last: 5.2,
+              volume: 100,
+              openInterest: 500,
+              iv: 0.42,
+            },
+          },
+        ],
+        maxLoss: 540,
+        maxGain: null,
+        breakEvens: [130.4],
+      };
+
+      async function boot(): Promise<void> {
+        const watchlist = new WatchlistStore({ path: join(dir, 'watchlist.json') });
+        const { app } = createApp({
+          market: {
+            quote: async () => ({ symbol: 'NVDA', price: 131, change: 0, changePercent: 0, volume: 0, asOf: '' }),
+            history: async () => [],
+            news: async () => [],
+            optionsChain: async () => [],
+          },
+          webSearch: fakeWebSearch(),
+          watchlist,
+          initialConfig: {
+            version: 1,
+            providers: {},
+            activeProvider: null,
+            risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
+            server: { host: '127.0.0.1', port: 4317 },
+            marketData: { providers: {}, activeProvider: null },
+          },
+          llmFromConfig: () => null,
+          paperStore: new PaperStore({ homeDir: dir }),
+        });
+        baseUrl = await listen(app);
+      }
+
+      it('rejects submits when paper !== true', async () => {
+        await boot();
+        const r = await fetch(`${baseUrl}/paper/orders`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ paper: false, planId: 'plan-1', plan }),
+        });
+        expect(r.status).toBe(400);
+        expect((await r.json()) as { error: string }).toMatchObject({
+          error: 'Paper mode must be explicitly enabled (paper=true).',
+        });
+      });
+
+      it('submits a paper order and lists orders + positions', async () => {
+        await boot();
+        const submit = await fetch(`${baseUrl}/paper/orders`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ paper: true, planId: 'plan-2', plan }),
+        });
+        expect(submit.status).toBe(200);
+        const fill = (await submit.json()) as { planId: string; symbol: string; netPremiumUsd: number };
+        expect(fill.planId).toBe('plan-2');
+        expect(fill.symbol).toBe('NVDA');
+        expect(fill.netPremiumUsd).toBe(520);
+
+        const orders = await fetch(`${baseUrl}/paper/orders`);
+        expect(orders.status).toBe(200);
+        const o = (await orders.json()) as { orders: Array<{ planId: string }> };
+        expect(o.orders.map((x) => x.planId)).toEqual(['plan-2']);
+
+        const positions = await fetch(`${baseUrl}/paper/positions`);
+        expect(positions.status).toBe(200);
+        const p = (await positions.json()) as { positions: Array<{ planId: string }> };
+        expect(p.positions.map((x) => x.planId)).toEqual(['plan-2']);
+      });
     });
     baseUrl = await listen(app);
 

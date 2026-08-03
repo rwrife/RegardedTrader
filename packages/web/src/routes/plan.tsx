@@ -269,6 +269,11 @@ function PlanCard({ candidate }: { candidate: ReviewedTradePlan }): JSX.Element 
       <p style={{ margin: '4px 0', opacity: 0.85 }}>
         <em>{plan.thesis}</em>
       </p>
+      {candidate.id && (
+        <p style={{ margin: '2px 0', fontFamily: 'monospace', fontSize: 11, color: '#fbbf24' }}>
+          Plan ID: {candidate.id}
+        </p>
+      )}
 
       <dl
         style={{

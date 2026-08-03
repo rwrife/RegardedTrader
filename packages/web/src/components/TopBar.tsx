@@ -72,11 +72,14 @@ export function TopBar({
   demo,
   onOpenSettings,
   onOpenWatchlist,
+  onOpenPaper,
 }: {
   demo: boolean;
   onOpenSettings: () => void;
   /** Optional: navigate to the dedicated `/watchlist` surface (#167). */
   onOpenWatchlist?: () => void;
+  /** Optional: navigate to the dedicated paper-trading surface (#103). */
+  onOpenPaper?: () => void;
 }): JSX.Element {
   const version = useServerVersion();
   return (
@@ -113,6 +116,17 @@ export function TopBar({
               className="px-1.5 py-0.5 rounded border border-border-subtle text-[11px] hover:text-ai hover:border-ai"
             >
               Watchlist
+            </button>
+          )}
+          {onOpenPaper && (
+            <button
+              type="button"
+              onClick={onOpenPaper}
+              aria-label="Open paper trading"
+              title="Paper"
+              className="px-1.5 py-0.5 rounded border border-warn text-warn text-[11px] hover:opacity-80"
+            >
+              PAPER
             </button>
           )}
           <button

@@ -5,6 +5,7 @@ import { Brief } from './routes/brief.js';
 import { Plan } from './routes/plan.js';
 import { Options } from './routes/options.js';
 import { Watchlist as WatchlistRoute } from './routes/watchlist.js';
+import { Paper as PaperRoute } from './routes/paper.js';
 import { TopBar } from './components/TopBar.js';
 import { Watchlist } from './components/Watchlist.js';
 import { CalendarStrip } from './components/CalendarStrip.js';
@@ -31,12 +32,14 @@ type Route =
   | { kind: 'brief'; symbol: string }
   | { kind: 'plan'; symbol: string }
   | { kind: 'options'; symbol: string }
-  | { kind: 'watchlist' };
+  | { kind: 'watchlist' }
+  | { kind: 'paper' };
 
 export function parseRoute(hash: string): Route {
   const raw = hash.replace(/^#/, '').replace(/^\/+/, '');
   if (raw.startsWith('settings')) return { kind: 'settings' };
   if (raw.startsWith('watchlist')) return { kind: 'watchlist' };
+  if (raw.startsWith('paper')) return { kind: 'paper' };
   const briefMatch = raw.match(/^brief\/([^/?#]+)/);
   if (briefMatch) return { kind: 'brief', symbol: decodeURIComponent(briefMatch[1]!).toUpperCase() };
   const planMatch = raw.match(/^plan\/([^/?#]+)/);
@@ -51,6 +54,7 @@ type NavTarget =
   | 'home'
   | 'settings'
   | 'watchlist'
+  | 'paper'
   | { kind: 'brief'; symbol: string }
   | { kind: 'plan'; symbol: string }
   | { kind: 'options'; symbol: string };
@@ -71,6 +75,8 @@ export function useHashRoute(): [Route, (r: NavTarget) => void] {
       window.location.hash = '#/settings';
     } else if (r === 'watchlist') {
       window.location.hash = '#/watchlist';
+    } else if (r === 'paper') {
+      window.location.hash = '#/paper';
     } else if (r === 'home') {
       window.location.hash = '#/';
     } else if (r.kind === 'plan') {
@@ -115,6 +121,9 @@ export function App(): JSX.Element {
   if (route.kind === 'watchlist') {
     return <WatchlistRoute onClose={() => navigate('home')} />;
   }
+  if (route.kind === 'paper') {
+    return <PaperRoute onClose={() => navigate('home')} />;
+  }
   if (route.kind === 'brief') {
     return <Brief symbol={route.symbol} onClose={() => navigate('home')} />;
   }
@@ -127,7 +136,12 @@ export function App(): JSX.Element {
 
   return (
     <div className="min-h-screen bg-app text-fg">
-      <TopBar demo={demo} onOpenSettings={() => navigate('settings')} onOpenWatchlist={() => navigate('watchlist')} />
+      <TopBar
+        demo={demo}
+        onOpenSettings={() => navigate('settings')}
+        onOpenWatchlist={() => navigate('watchlist')}
+        onOpenPaper={() => navigate('paper')}
+      />
 
       <div className="max-w-7xl mx-auto px-6 py-4 grid grid-cols-12 gap-6">
         {/* Sidebar: validated watchlist + filter + calendar strip */}

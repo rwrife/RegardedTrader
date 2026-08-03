@@ -16,6 +16,7 @@ const cli = meow(
     ls                         List validated tickers
     rm <SYM>                   Remove a ticker from the watchlist
     watch <ls|add|rm> [SYM...] Managed watchlist surface (parity twin of /watchlist)
+    paper <submit|orders|positions> Simulated paper-trading surface (no live orders)
     briefing <SYMBOL>          Generate an AI briefing for a ticker
     brief <SYMBOL>             Full briefing pipeline (analyst + TA + news + strategist)
     quote <SYMBOL>             Quick quote
@@ -31,6 +32,7 @@ const cli = meow(
     --thesis <text>            (brief) Trade thesis to run strategist arm
     --max-loss <usd>           (brief) Max-loss budget in USD for strategist
     --expiry <YYYY-MM-DD>      (brief/options) Target option expiry
+    --paper                    (paper submit) Required safety flag for simulated execution
 
   Examples
     $ regard
@@ -48,6 +50,7 @@ const cli = meow(
       thesis: { type: 'string' },
       maxLoss: { type: 'number' },
       expiry: { type: 'string' },
+      paper: { type: 'boolean', default: false },
       help: { type: 'boolean', shortFlag: 'h' },
     },
   },
@@ -72,6 +75,7 @@ if (!command) {
         thesis: cli.flags.thesis,
         maxLoss: cli.flags.maxLoss,
         expiry: cli.flags.expiry,
+        paper: cli.flags.paper,
       }}
     />,
   );

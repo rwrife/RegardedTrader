@@ -10,6 +10,7 @@ import { AddScreen } from './screens/add.js';
 import { ListScreen, RemoveScreen } from './screens/watchlist.js';
 import { WatchScreen } from './screens/watch.js';
 import { DashboardScreen } from './screens/dashboard.js';
+import { PaperScreen } from './screens/paper.js';
 
 /**
  * Fancy modal-style shell inspired by Copilot CLI / Claude Code. Everything is
@@ -32,6 +33,7 @@ type SlashId =
   | 'watch'
   | 'config'
   | 'dashboard'
+  | 'paper'
   | 'help'
   | 'clear'
   | 'quit';
@@ -55,6 +57,7 @@ const COMMANDS: SlashCommand[] = [
   { id: 'watch',    name: '/watch',    usage: '/watch <ls|add|rm> [SYM...]', blurb: 'Managed watchlist (parity twin of /watchlist)', needsArgs: true },
   { id: 'config',   name: '/config',   usage: '/config [show|test [id]]', blurb: 'AI providers, risk, server' },
   { id: 'dashboard',name: '/dashboard',usage: '/dashboard',      blurb: 'Open local web dashboard' },
+  { id: 'paper',    name: '/paper',    usage: '/paper <submit|orders|positions> ...', blurb: 'Paper-only simulated execution', needsArgs: true },
   { id: 'help',     name: '/help',     usage: '/help',           blurb: 'List slash commands' },
   { id: 'clear',    name: '/clear',    usage: '/clear',          blurb: 'Clear the screen' },
   { id: 'quit',     name: '/quit',     usage: '/quit',           blurb: 'Exit the shell' },
@@ -299,6 +302,15 @@ function RunningBody({
       return <ConfigScreen sub={args[0]} testProviderId={args[1]} serverUrl={serverUrl} onDone={onDone} />;
     case 'dashboard':
       return <DashboardScreen serverUrl={serverUrl} onDone={onDone} />;
+    case 'paper':
+      return (
+        <PaperScreen
+          args={args.filter((a) => a !== '--paper')}
+          serverUrl={serverUrl}
+          paperFlag={args.includes('--paper')}
+          onDone={onDone}
+        />
+      );
     default:
       return null;
   }

@@ -8,7 +8,7 @@ This file is the source of truth for that mapping. **Update it in the same PR
 that adds or changes a feature on either surface.** A PR that breaks parity
 without filing a tracking issue should be rejected in review.
 
-_Last reviewed: 2026-07-20_
+_Last reviewed: 2026-08-03_
 
 ## Pairing table
 
@@ -23,6 +23,7 @@ _Last reviewed: 2026-07-20_
 | Full briefing pipeline (analyst + TA + news + strategist + POST overrides) | `regard brief <SYM> [--thesis ... --max-loss N --expiry YYYY-MM-DD]` | `#/brief/:symbol` | ✅ |
 | Technician (TA) commentary | `regard tech <SYM>` | `Tech` tab on `/` | ✅ |
 | Options trade-plan wizard | `regard plan <SYM>` | `#/plan/:sym` | ✅ |
+| Paper trading (simulated only) | `regard paper submit <planId> --paper` / `regard paper positions` / `regard paper orders` | `#/paper` | ✅ |
 | Trade-plan risk graph + risk violations panel | `regard plan <SYM>` (textual break-even + violations) | `#/plan/:sym` (SVG risk graph + violations chip panel) | ✅ |
 | Options chain explorer | `regard options <SYM>` | `#/options/:sym` | ✅ |
 | Watchlist | `regard watch [add\|ls\|rm]` | `/watchlist` | ✅ |
