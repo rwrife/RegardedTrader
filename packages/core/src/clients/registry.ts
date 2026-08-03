@@ -20,7 +20,7 @@
  * Tests can supply `buildClient` to inject mocks without monkey-patching.
  */
 import type { MarketDataConfig, MarketDataProviderConfig } from '../schemas/marketData.js';
-import type { MarketDataClient } from './index.js';
+import type { MarketDataCache, MarketDataClient } from './index.js';
 import { YahooClient } from './index.js';
 import { FinnhubClient } from './finnhub.js';
 
@@ -35,6 +35,8 @@ export interface MarketDataRegistryOptions {
    * when no active provider is configured. Defaults to a fresh `YahooClient`.
    */
   fallback?: MarketDataClient;
+  /** Optional shared cache for Yahoo-backed market data calls. */
+  cache?: MarketDataCache;
 }
 
 export interface MarketDataRegistry {
@@ -51,10 +53,10 @@ export interface MarketDataRegistry {
   readonly activeId: string | null;
 }
 
-function defaultBuildClient(cfg: MarketDataProviderConfig): MarketDataClient {
+function defaultBuildClient(cfg: MarketDataProviderConfig, cache?: MarketDataCache): MarketDataClient {
   switch (cfg.kind) {
     case 'yahoo':
-      return new YahooClient();
+      return new YahooClient(cache);
     case 'finnhub':
       return new FinnhubClient({ apiKey: cfg.apiKey, baseUrl: cfg.baseUrl });
   }
@@ -81,8 +83,8 @@ export function createMarketDataRegistry(
   cfg: MarketDataConfig,
   opts: MarketDataRegistryOptions = {},
 ): MarketDataRegistry {
-  const build = opts.buildClient ?? defaultBuildClient;
-  const fallback = opts.fallback ?? new YahooClient();
+  const build = opts.buildClient ?? ((prov) => defaultBuildClient(prov, opts.cache));
+  const fallback = opts.fallback ?? new YahooClient(opts.cache);
 
   const activeId = cfg.activeProvider;
   const activeCfg = activeId ? cfg.providers[activeId] : undefined;

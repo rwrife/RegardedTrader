@@ -19,6 +19,7 @@ const cli = meow(
     watch [SYMBOL...]          Open live tape stream (SSE): last/Δ/Δ%/RSI/headline
     tail <SYMBOL>              Follow per-symbol news line-by-line (tail -F style)
     polling <status|pause|resume> Polling subsystem controls
+    cache clear                Clear shared market-data cache
     paper <submit|orders|positions> Simulated paper-trading surface (no live orders)
     cal [--from=today] [--days=14]  Tiny calendar with holidays + watchlist earnings
     cal earnings <SYM> [--past] [--upcoming]  Per-symbol earnings table

@@ -56,6 +56,8 @@ export interface ApiClient {
   testMarketProvider(symbol?: string, providerId?: string): Promise<MarketDataTestResponse>;
   /** Update risk caps (#152). Hot-applies to the in-process Orchestrator. */
   updateRiskCaps(risk: RiskConfig): Promise<ConfigResponse>;
+  updateCacheEnabled(enabled: boolean): Promise<ConfigResponse>;
+  clearCache(namespace?: string): Promise<{ ok: boolean; namespace: string | null; deleted: number }>;
 }
 
 export interface ApiOptions {
@@ -172,6 +174,15 @@ export function createApi(opts: ApiOptions = {}): ApiClient {
     async updateRiskCaps(risk) {
       const res = await f(url('/config/risk'), json(risk));
       return readJson<ConfigResponse>(res);
+    },
+    async updateCacheEnabled(enabled) {
+      const res = await f(url('/config/cache'), json({ enabled }));
+      return readJson<ConfigResponse>(res);
+    },
+    async clearCache(namespace) {
+      const body = namespace ? { namespace } : {};
+      const res = await f(url('/cache/clear'), json(body));
+      return readJson<{ ok: boolean; namespace: string | null; deleted: number }>(res);
     },
   };
 }

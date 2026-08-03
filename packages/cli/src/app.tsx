@@ -17,6 +17,7 @@ import { ChartScreen } from './screens/chart.js';
 import { CalendarScreen } from './screens/calendar.js';
 import { TailScreen, PollingStatusScreen, PollingToggleScreen } from './screens/polling.js';
 import { MentionsScreen, SentimentScreen } from './screens/sentiment.js';
+import { CacheClearScreen } from './screens/cache.js';
 
 export interface AppProps {
   command: string;
@@ -136,6 +137,15 @@ export function App({ command, args, serverUrl, flags }: AppProps) {
       return (
         <Box flexDirection="column">
           <Text color="red">Usage: regard polling &lt;status|pause|resume&gt;</Text>
+        </Box>
+      );
+    }
+    case 'cache': {
+      const sub = (args[0] ?? '').toLowerCase();
+      if (sub === 'clear') return <CacheClearScreen serverUrl={serverUrl} />;
+      return (
+        <Box flexDirection="column">
+          <Text color="red">Usage: regard cache clear</Text>
         </Box>
       );
     }

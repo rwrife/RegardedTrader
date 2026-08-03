@@ -16,6 +16,8 @@ _Last audited: 2026-08-03 (feature merges through 2026-08-03)_
 | --- | --- | --- | --- |
 | **Configuration / AI providers** | `regard config` / `regard config show` | `/settings` | ✅ |
 | Risk caps editor | `regard config show` (read-only risk caps display) | `/settings` → Risk caps panel + save flow | 🚧 *(tracked in #234)* |
+| Market-data cache controls | `regard cache clear` | `/settings` → Cache panel (`enabled` toggle + clear button) | ✅ |
+| Risk caps editor | `regard config show` (read-only risk caps display) | `/settings` → Risk caps panel + save flow | 🚧 *(tracked in #234)* |
 | Provider smoke test | `regard config test [id]` | `/settings` “Test” button | ✅ |
 | **Ticker intake & validation** (M1) | `regard add <SYM>...` / `regard ls` / `regard rm <SYM>` | ticker input bar + validated list on `/` | ✅ |
 | Quick quote | `regard quote <SYM>` | `/quote/:sym` | ✅ |
