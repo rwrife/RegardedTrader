@@ -13,6 +13,10 @@ export default defineConfig({
         changeOrigin: false,
         rewrite: (p) => p.replace(/^\/api/, ''),
       },
+      '/calendar': {
+        target: 'http://127.0.0.1:4317',
+        changeOrigin: false,
+      },
     },
   },
 });
