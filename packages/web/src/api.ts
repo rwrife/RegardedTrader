@@ -66,6 +66,7 @@ export interface ApiOptions {
 }
 
 const DEFAULT_BASE = '/api';
+const AUTH_STORAGE_KEY = 'rt.auth';
 
 async function readJson<T>(res: Response): Promise<T> {
   const text = await res.text();
@@ -173,6 +174,21 @@ export function createApi(opts: ApiOptions = {}): ApiClient {
       return readJson<ConfigResponse>(res);
     },
   };
+}
+
+export function streamUrl(base = DEFAULT_BASE): string {
+  const origin =
+    typeof window !== 'undefined'
+      ? window.location.origin
+      : 'http://127.0.0.1';
+  const baseUrl = new URL(base, origin);
+  const wsProtocol = baseUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = new URL('/stream', `${wsProtocol}//${baseUrl.host}`);
+  if (typeof window !== 'undefined') {
+    const token = window.sessionStorage.getItem(AUTH_STORAGE_KEY);
+    if (token) url.searchParams.set('t', token);
+  }
+  return url.toString();
 }
 
 /** Mask key for display. Mirrors the server-side redactor for in-browser inputs. */

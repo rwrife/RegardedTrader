@@ -165,6 +165,14 @@ export interface AppHandle {
     persisted?: boolean,
   ) => void;
   shutdown: (timeoutMs?: number) => Promise<void>;
+  stream: {
+    subscribe: (listener: (event: import('./polling.js').PollEvent) => void) => () => void;
+    loadChain: (symbol: string) => Promise<import('@regardedtrader/core').OptionContract[]>;
+    auth: {
+      required: boolean;
+      validate: (candidate: string | null) => boolean;
+    };
+  };
 }
 
 /**
@@ -177,6 +185,7 @@ export function createApp(deps: AppDeps): AppHandle {
   const snapshotStore = deps.snapshots ?? new SnapshotStore({ root: mentionStore.rootDir });
   const recommendationStore = deps.recommendations ?? new RecommendationStore({ root: mentionStore.rootDir });
   const authToken = process.env.REGARDEDTRADER_AUTH_TOKEN?.trim() || null;
+  const runtimeAuthToken = deps.auth?.mode === 'required' ? deps.auth.token.trim() : null;
   const briefings = deps.briefings ?? new BriefingStore();
   const recommendationSnapshotReader: SnapshotReader = {
     readLatest: async (symbol) => {
@@ -389,13 +398,19 @@ export function createApp(deps: AppDeps): AppHandle {
     cur.lastErrorAt = new Date().toISOString();
   }
 
-  function tokenMatches(candidate: string | null | undefined): boolean {
-    if (!authToken) return true;
-    if (!candidate) return false;
+  function secureTokenEquals(expected: string, candidate: string): boolean {
     const a = Buffer.from(candidate);
-    const b = Buffer.from(authToken);
+    const b = Buffer.from(expected);
     if (a.length !== b.length) return false;
     return timingSafeEqual(a, b);
+  }
+
+  function tokenMatches(candidate: string | null | undefined): boolean {
+    if (!authToken && !runtimeAuthToken) return true;
+    if (!candidate) return false;
+    if (runtimeAuthToken && secureTokenEquals(runtimeAuthToken, candidate)) return true;
+    if (authToken && secureTokenEquals(authToken, candidate)) return true;
+    return false;
   }
 
   function authTokenFrom(req: express.Request): string | null {
@@ -414,7 +429,7 @@ export function createApp(deps: AppDeps): AppHandle {
     res: express.Response,
     next: express.NextFunction,
   ): void {
-    if (!authToken) {
+    if (!authToken && !runtimeAuthToken) {
       next();
       return;
     }
@@ -2281,6 +2296,14 @@ export function createApp(deps: AppDeps): AppHandle {
     emitSentimentUpdate,
     emitRecommendationUpdate,
     shutdown: (timeoutMs = 5_000) => polling.stopGracefully(timeoutMs),
+    stream: {
+      subscribe: (listener) => polling.subscribe(listener),
+      loadChain: (symbol) => registry.client.optionsChain(symbol),
+      auth: {
+        required: Boolean(runtimeAuthToken),
+        validate: (candidate) => tokenMatches(candidate),
+      },
+    },
   };
 }
 
