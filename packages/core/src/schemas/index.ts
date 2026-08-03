@@ -204,10 +204,57 @@ export type TradePlan = z.infer<typeof TradePlan>;
  * a wall of red.
  */
 export const ReviewedTradePlan = z.object({
+  id: z.string().min(1).optional(),
   plan: TradePlan,
   review: RiskReview,
 });
 export type ReviewedTradePlan = z.infer<typeof ReviewedTradePlan>;
+
+export const PaperOrder = z.object({
+  id: z.string().min(1),
+  planId: z.string().min(1),
+  symbol: Ticker,
+  mode: z.literal('paper'),
+  submittedAt: z.string(),
+  plan: TradePlan,
+  notes: z.string().optional(),
+});
+export type PaperOrder = z.infer<typeof PaperOrder>;
+
+export const PaperFill = z.object({
+  id: z.string().min(1),
+  orderId: z.string().min(1),
+  planId: z.string().min(1),
+  symbol: Ticker,
+  filledAt: z.string(),
+  underlyingPrice: z.number(),
+  legFills: z.array(
+    z.object({
+      contractSymbol: z.string().min(1),
+      action: z.enum(['buy', 'sell']),
+      qty: z.number().int().positive(),
+      mark: z.number(),
+    }),
+  ),
+  netPremiumUsd: z.number(),
+  estimatedMaxLossUsd: z.number(),
+  estimatedMaxGainUsd: z.number().nullable(),
+  notes: z.string().optional(),
+});
+export type PaperFill = z.infer<typeof PaperFill>;
+
+export const PaperPosition = z.object({
+  id: z.string().min(1),
+  planId: z.string().min(1),
+  symbol: Ticker,
+  openedAt: z.string(),
+  netPremiumUsd: z.number(),
+  maxLossUsd: z.number(),
+  maxGainUsd: z.number().nullable(),
+  status: z.literal('open'),
+  notes: z.string().optional(),
+});
+export type PaperPosition = z.infer<typeof PaperPosition>;
 
 /**
  * Request body for `POST /briefing/:symbol` (issue #138). When `thesis` and

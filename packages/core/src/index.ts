@@ -10,6 +10,7 @@ export * from './indicators/index.js';
 export * from './clients/index.js';
 export * from './config/index.js';
 export * from './storage/watchlist.js';
+export * from './paper/index.js';
 export * from './storage/briefings.js';
 export { Orchestrator } from './orchestrator.js';
 export * from './polling/index.js';

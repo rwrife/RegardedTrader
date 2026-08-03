@@ -11,6 +11,7 @@ import { AddScreen } from './screens/add.js';
 import { ListScreen, RemoveScreen } from './screens/watchlist.js';
 import { WatchScreen } from './screens/watch.js';
 import { OptionsScreen } from './screens/options.js';
+import { PaperScreen } from './screens/paper.js';
 import { ChartScreen } from './screens/chart.js';
 import { CalendarScreen } from './screens/calendar.js';
 
@@ -23,6 +24,7 @@ export interface AppProps {
     thesis?: string;
     maxLoss?: number;
     expiry?: string;
+    paper?: boolean;
     from?: string;
     days?: number;
     past?: boolean;
@@ -80,6 +82,8 @@ export function App({ command, args, serverUrl, flags }: AppProps) {
       return <RemoveScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
     case 'watch':
       return <WatchScreen args={args} serverUrl={serverUrl} />;
+    case 'paper':
+      return <PaperScreen args={args} serverUrl={serverUrl} paperFlag={flags?.paper} />;
     case 'cal':
     case 'calendar':
       return (

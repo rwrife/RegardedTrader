@@ -45,6 +45,9 @@ import {
   type ValidationResult,
   type MarketDataClient,
   type LiveQuote,
+  PaperBroker,
+  PaperStore,
+  TradePlan,
   type BriefingStorePort,
 } from '@regardedtrader/core';
 import { liveQuote, type LiveQuoteSource, type YahooQuoteLike } from './liveQuote.js';
@@ -79,6 +82,8 @@ export interface AppDeps {
   liveQuoteSource?: LiveQuoteSource;
   /** Optional clock override for testing the live-quote cache. */
   now?: () => number;
+  /** Optional paper-trading store override for tests. */
+  paperStore?: PaperStore;
   /** Optional injectable calendar service (tests). */
   calendar?: CalendarService;
 }
@@ -141,6 +146,10 @@ export function createApp(deps: AppDeps): AppHandle {
   }
 
   let orchestrator = makeOrchestrator();
+  const paperStore = deps.paperStore ?? new PaperStore();
+  function makePaperBroker(): PaperBroker {
+    return new PaperBroker({ market: registry.client, store: paperStore });
+  }
 
   type SentimentHealth = {
     lastSuccess: string | null;
@@ -1022,10 +1031,78 @@ export function createApp(deps: AppDeps): AppHandle {
       const known = await requireKnownSymbol(res, body.symbol);
       if (!known) return;
       const out = await o.proposePlans(body);
+      const stamped = out.plans.map((candidate, i) => ({
+        ...candidate,
+        id: makePlanId(body.symbol, i),
+      }));
+      await paperStore.cachePlans(
+        body.symbol,
+        stamped.map((c) => ({ id: c.id!, plan: c.plan })),
+      );
       // Validate the wire payload before emitting (issue #77). Each plan's
       // `notes` carries the canonical disclaimer via `attachRiskGraph`; this
       // .parse() defends against future refactors that might drop it.
-      res.json(PlansResponse.parse(out));
+      res.json(PlansResponse.parse({ ...out, plans: stamped }));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // --- Paper trading (simulated only) ---
+  const PaperSubmitBody = z.object({
+    paper: z.boolean(),
+    planId: z.string().min(1),
+    plan: TradePlan.optional(),
+  });
+
+  app.post('/paper/orders', async (req, res, next) => {
+    try {
+      const body = PaperSubmitBody.parse(req.body ?? {});
+      if (body.paper !== true) {
+        res.status(400).json({ error: 'Paper mode must be explicitly enabled (paper=true).' });
+        return;
+      }
+      const plan = body.plan ?? (await paperStore.findPlan(body.planId));
+      if (!plan) {
+        res.status(404).json({
+          error: `Unknown planId "${body.planId}".`,
+          hint: 'Generate plans first via `regard plan <SYM>` or POST /plans.',
+        });
+        return;
+      }
+      const fill = await makePaperBroker().submit({
+        mode: 'paper',
+        planId: body.planId,
+        plan,
+      });
+      res.json(fill);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/paper/orders', async (_req, res, next) => {
+    try {
+      const orders = await paperStore.listOrders();
+      res.json({ orders });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/paper/positions', async (_req, res, next) => {
+    try {
+      const positions = await paperStore.listPositions();
+      res.json({ positions });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/paper/plans', async (_req, res, next) => {
+    try {
+      const plans = await paperStore.listPlans();
+      res.json({ plans });
     } catch (e) {
       next(e);
     }
@@ -1337,7 +1414,10 @@ export function createApp(deps: AppDeps): AppHandle {
   return { app, getConfig: () => cfg, emitSentimentUpdate };
 }
 
-/** Maps well-known NYSE holiday dates (YYYY-MM-DD) to human-readable names. */
+function makePlanId(symbol: string, index: number): string {
+  return `${symbol.toUpperCase()}-${Date.now().toString(36)}-${index + 1}`;
+}
+
 /** Default factory used by the entrypoint. */
 export function createDefaultApp(cfg: AppConfigT): AppHandle {
   return createApp({

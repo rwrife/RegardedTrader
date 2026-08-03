@@ -110,6 +110,7 @@ export function PlanScreen({
       {results.map((r, i) => (
         <Box key={i} flexDirection="column" borderStyle="round" paddingX={1}>
           <Text bold>{r.plan.name}</Text>
+          {r.id && <Text color="yellow">Plan ID: {r.id}</Text>}
           <Text>{r.plan.thesis}</Text>
           <Text>
             Max loss <Text color="red">${r.plan.maxLoss}</Text> • Max gain{' '}
