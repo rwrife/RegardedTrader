@@ -24,6 +24,7 @@ _Last reviewed: 2026-08-03_
 | Technician (TA) commentary | `regard tech <SYM>` | `Tech` tab on `/` | ✅ |
 | NewsScout ranked headlines | `regard news <SYM>` | `News` tab on `/` (live: `GET /news/:symbol`) | ✅ |
 | Sentiment aggregate + mentions feed | `regard sentiment <SYM> [--window=30m] [--watch]` / `regard mentions <SYM> [--source=reddit] [--limit=50]` | `Sentiment` tab on `/` (live: `GET /sentiment/:symbol/latest`, `GET /mentions/:symbol`) | ✅ |
+| Recommender verdict card + 30d history + recompute | `regard recommend <SYM>` *(tracked)* | `Recommendation` tab on `/` (live: `GET /recommendations/:symbol/latest`, SSE `recommendation.update`, `POST /recommendations/:symbol/recompute`) | 🚧 |
 | Options trade-plan wizard | `regard plan <SYM>` | `#/plan/:sym` | ✅ |
 | Paper trading (simulated only) | `regard paper submit <planId> --paper` / `regard paper positions` / `regard paper orders` | `#/paper` | ✅ |
 | Trade-plan risk graph + risk violations panel | `regard plan <SYM>` (textual break-even + violations) | `#/plan/:sym` (SVG risk graph + violations chip panel) | ✅ |

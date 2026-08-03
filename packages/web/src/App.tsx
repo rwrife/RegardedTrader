@@ -218,7 +218,7 @@ export function App(): JSX.Element {
               {tab === 'briefing' && <BriefingTab t={ticker} />}
               {tab === 'sentiment' && <SentimentTab t={ticker} demo={demo} />}
               {tab === 'news' && <NewsTab t={ticker} demo={demo} />}
-              {tab === 'recommendation' && <RecommendationTab t={ticker} />}
+              {tab === 'recommendation' && <RecommendationTab t={ticker} demo={demo} />}
               {tab === 'calendar' && <CalendarTab t={ticker} />}
               {tab === 'chart' && <ChartTab t={ticker} demo={demo} />}
               {tab === 'tech' && <TechTab t={ticker} demo={demo} />}

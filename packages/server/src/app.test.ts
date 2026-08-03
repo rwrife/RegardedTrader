@@ -11,8 +11,10 @@ import {
   MentionStore,
   WatchlistStore,
   PaperStore,
+  RecommendationStore,
   type BriefingStorePort,
   type LLM,
+  type Recommendation,
   type TradePlan,
   type WebSearch,
 } from '@regardedtrader/core';
@@ -58,6 +60,45 @@ const noMatchReply = {
   reason: 'Could not confidently map this symbol to a tradable US equity.',
   suggestions: [{ symbol: 'NVDA', name: 'NVIDIA Corporation' }],
 };
+
+function makeRecommendation(
+  overrides: Partial<Recommendation> = {},
+): Recommendation {
+  const symbol = overrides.symbol ?? 'NVDA';
+  const generatedAt = overrides.generatedAt ?? '2026-07-01T15:00:00.000Z';
+  return {
+    symbol,
+    generatedAt,
+    asOf: {
+      quote: generatedAt,
+      options: generatedAt,
+      sentiment: generatedAt,
+      news: generatedAt,
+      ...(overrides.asOf ?? {}),
+    },
+    equity: {
+      action: 'BUY',
+      conviction: 0.72,
+      rationale: 'Momentum and sentiment remain constructive.',
+      signals: [{ name: 'rsi14', value: 62, contribution: 0.33 }],
+      contraSignals: [{ name: 'iv.skew', value: 'elevated', contribution: -0.16 }],
+      ...(overrides.equity ?? {}),
+    },
+    options: {
+      coveredCall: null,
+      coveredPut: null,
+      nakedCall: null,
+      nakedPut: null,
+      ...(overrides.options ?? {}),
+    },
+    riskFlags: ['earnings-within-7d'],
+    sources: [{ name: 'Reuters', url: 'https://example.com/reuters/nvda' }],
+    modelInfo: { provider: 'fake', model: 'gpt', ruleVersion: '1.0.0', ...(overrides.modelInfo ?? {}) },
+    disclaimer:
+      'Research only. Not financial advice. You are responsible for your own trades.',
+    ...overrides,
+  };
+}
 
 let dir: string;
 let server: Server | null = null;
@@ -1688,5 +1729,105 @@ describe('Config routes coverage (#105)', () => {
       }),
     });
     expect(badHost.status).toBe(400);
+  });
+});
+
+describe('Recommendation routes + SSE (#51)', () => {
+  let prevToken: string | undefined;
+
+  beforeEach(() => {
+    prevToken = process.env.REGARDEDTRADER_AUTH_TOKEN;
+    process.env.REGARDEDTRADER_AUTH_TOKEN = 'dash-token-51';
+  });
+  afterEach(() => {
+    if (prevToken === undefined) delete process.env.REGARDEDTRADER_AUTH_TOKEN;
+    else process.env.REGARDEDTRADER_AUTH_TOKEN = prevToken;
+  });
+
+  it('serves latest + history and emits recommendation.update on recompute', async () => {
+    const watchlist = new WatchlistStore({ path: join(dir, 'watchlist.json') });
+    await watchlist.upsert({
+      symbol: 'NVDA',
+      name: 'NVIDIA Corporation',
+      exchange: 'NASDAQ',
+      sector: 'Technology',
+      industry: 'Semiconductors',
+      description: 'Designs GPUs and AI chips.',
+      sources: ['https://example.com/nvda'],
+      validatedAt: '2026-08-03T00:00:00.000Z',
+    });
+    const recommendations = new RecommendationStore({ root: join(dir, 'snapshots') });
+    const now = Date.now();
+    const rec1 = makeRecommendation({ generatedAt: new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString() });
+    const rec2 = makeRecommendation({
+      generatedAt: new Date(now - 1 * 24 * 60 * 60 * 1000).toISOString(),
+      equity: { ...rec1.equity, action: 'HOLD' },
+    });
+    await recommendations.append('NVDA', rec1);
+    await recommendations.append('NVDA', rec2);
+
+    const { app } = createApp({
+      market: {
+        quote: async () => ({ symbol: 'NVDA', price: 0, change: 0, changePercent: 0, volume: 0, asOf: '' }),
+        history: async () => [],
+        news: async () => [],
+        optionsChain: async () => [],
+      },
+      webSearch: fakeWebSearch(),
+      watchlist,
+      recommendations,
+      initialConfig: {
+        version: 1,
+        providers: {},
+        activeProvider: null,
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
+        server: { host: '127.0.0.1', port: 4317 },
+        marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
+      },
+      llmFromConfig: () => null,
+      recomputeRecommendation: async () =>
+        makeRecommendation({
+          generatedAt: new Date().toISOString(),
+          equity: { ...rec1.equity, action: 'BUY', conviction: 0.81 },
+        }),
+    });
+    baseUrl = await listen(app);
+
+    const latest = await fetch(`${baseUrl}/recommendations/NVDA/latest?t=dash-token-51`);
+    expect(latest.status).toBe(200);
+    const latestJson = (await latest.json()) as Recommendation;
+    expect(latestJson.equity.action).toBe('HOLD');
+
+    const history = await fetch(`${baseUrl}/recommendations/NVDA?days=30&t=dash-token-51`);
+    expect(history.status).toBe(200);
+    const histJson = (await history.json()) as { items: Recommendation[] };
+    expect(histJson.items).toHaveLength(2);
+    expect(histJson.items.map((r) => r.equity.action)).toEqual(['BUY', 'HOLD']);
+
+    const sse = await fetch(`${baseUrl}/events?t=dash-token-51`);
+    expect(sse.status).toBe(200);
+    const reader = sse.body?.getReader();
+    expect(reader).toBeTruthy();
+
+    const rec = await fetch(`${baseUrl}/recommendations/NVDA/recompute?t=dash-token-51`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(rec.status).toBe(200);
+    const recJson = (await rec.json()) as { recommendation: Recommendation };
+    expect(recJson.recommendation.equity.action).toBe('BUY');
+
+    const started = Date.now();
+    let text = '';
+    while (Date.now() - started < 1500 && !text.includes('event: recommendation.update')) {
+      const next = await reader!.read();
+      if (next.value) text += new TextDecoder().decode(next.value);
+      if (next.done) break;
+    }
+    expect(text).toContain('event: recommendation.update');
+    expect(text).toContain('"symbol":"NVDA"');
+
+    await reader?.cancel();
   });
 });
