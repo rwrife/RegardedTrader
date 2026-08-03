@@ -1,5 +1,10 @@
 import { EventEmitter } from 'node:events';
-import { computeIndicators, type MarketDataClient, type OHLCV, type WatchlistStore } from '@regardedtrader/core';
+import {
+  computeIndicators,
+  type MarketDataClient,
+  type OHLCV,
+  type WatchlistStore,
+} from '@regardedtrader/core';
 
 export type PollingJobState = 'idle' | 'running' | 'paused' | 'error';
 
@@ -49,6 +54,8 @@ interface PollingOptions {
   now?: () => Date;
 }
 
+type WatchlistReader = Pick<WatchlistStore, 'list'>;
+
 interface JobRuntime {
   id: string;
   state: PollingJobState;
@@ -66,16 +73,19 @@ const DEFAULT_NEWS_MS = 30_000;
 export class PollingCoordinator {
   private readonly events = new EventEmitter();
   private readonly now: () => Date;
-  private readonly quoteEveryMs: number;
-  private readonly newsEveryMs: number;
+  private quoteEveryMs: number;
+  private newsEveryMs: number;
   private readonly jobs: JobRuntime[];
   private paused = false;
   private readonly tape = new Map<string, TapePoint>();
   private readonly headlines = new Map<string, string>();
   private readonly seenNews = new Set<string>();
+  private readonly symbols = new Set<string>();
+  private readonly inFlightRuns = new Set<Promise<void>>();
+  private started = false;
 
   constructor(
-    private readonly watchlist: WatchlistStore,
+    private readonly watchlist: WatchlistReader,
     private readonly getClient: () => MarketDataClient,
     opts: PollingOptions = {},
   ) {
@@ -89,13 +99,66 @@ export class PollingCoordinator {
   }
 
   start(): void {
-    for (const job of this.jobs) this.startJob(job);
+    this.started = true;
+    this.ensureJobTimers();
   }
 
   stop(): void {
+    this.started = false;
     for (const job of this.jobs) {
       if (job.timer) clearInterval(job.timer);
       job.timer = null;
+      job.nextRun = null;
+      job.state = 'idle';
+    }
+  }
+
+  async stopGracefully(timeoutMs = 5_000): Promise<void> {
+    this.stop();
+    if (this.inFlightRuns.size === 0) return;
+    await Promise.race([
+      Promise.allSettled([...this.inFlightRuns]).then(() => undefined),
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(() => resolve(), timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  }
+
+  async refreshSymbolsFromWatchlist(): Promise<void> {
+    const entries = await this.watchlist.list();
+    this.setSymbols(entries.map((e) => e.profile.symbol.toUpperCase()));
+  }
+
+  registerSymbol(symbol: string): void {
+    const sym = symbol.toUpperCase();
+    this.symbols.add(sym);
+    this.ensureJobTimers();
+  }
+
+  unregisterSymbol(symbol: string): void {
+    const sym = symbol.toUpperCase();
+    this.symbols.delete(sym);
+    this.tape.delete(sym);
+    this.headlines.delete(sym);
+    for (const key of [...this.seenNews]) {
+      if (key.startsWith(`${sym}:`)) this.seenNews.delete(key);
+    }
+    this.ensureJobTimers();
+  }
+
+  updateCadence(opts: { quoteEveryMs?: number; newsEveryMs?: number }): void {
+    if (opts.quoteEveryMs && opts.quoteEveryMs > 0) this.quoteEveryMs = opts.quoteEveryMs;
+    if (opts.newsEveryMs && opts.newsEveryMs > 0) this.newsEveryMs = opts.newsEveryMs;
+    for (const job of this.jobs) {
+      if (job.id === 'quotes') job.intervalMs = this.quoteEveryMs;
+      if (job.id === 'news') job.intervalMs = this.newsEveryMs;
+    }
+    if (!this.started || this.paused || this.symbols.size === 0) return;
+    for (const job of this.jobs) {
+      if (job.timer) clearInterval(job.timer);
+      job.timer = null;
+      this.startJob(job);
     }
   }
 
@@ -112,8 +175,10 @@ export class PollingCoordinator {
     const now = this.now().toISOString();
     for (const job of this.jobs) {
       job.state = 'idle';
-      job.nextRun = new Date(Date.parse(now) + job.intervalMs).toISOString();
+      job.nextRun =
+        this.symbols.size > 0 ? new Date(Date.parse(now) + job.intervalMs).toISOString() : null;
     }
+    this.ensureJobTimers();
   }
 
   get isPaused(): boolean {
@@ -154,6 +219,7 @@ export class PollingCoordinator {
   }
 
   private startJob(job: JobRuntime): void {
+    if (job.timer) return;
     const tick = async () => {
       if (this.paused) return;
       job.state = 'running';
@@ -171,15 +237,41 @@ export class PollingCoordinator {
     };
     job.nextRun = new Date(Date.now() + job.intervalMs).toISOString();
     job.timer = setInterval(() => {
-      void tick();
+      this.trackRun(tick());
     }, job.intervalMs);
     job.timer.unref?.();
-    void tick();
+    this.trackRun(tick());
   }
 
   private async watchedSymbols(): Promise<string[]> {
-    const entries = await this.watchlist.list();
-    return entries.map((e) => e.profile.symbol.toUpperCase());
+    return [...this.symbols];
+  }
+
+  private setSymbols(symbols: readonly string[]): void {
+    this.symbols.clear();
+    for (const symbol of symbols) this.symbols.add(symbol.toUpperCase());
+    this.ensureJobTimers();
+  }
+
+  private ensureJobTimers(): void {
+    if (!this.started || this.paused) return;
+    if (this.symbols.size === 0) {
+      for (const job of this.jobs) {
+        if (job.timer) clearInterval(job.timer);
+        job.timer = null;
+        job.nextRun = null;
+        job.state = 'idle';
+      }
+      return;
+    }
+    for (const job of this.jobs) this.startJob(job);
+  }
+
+  private trackRun(run: Promise<void>): void {
+    this.inFlightRuns.add(run);
+    run.finally(() => {
+      this.inFlightRuns.delete(run);
+    });
   }
 
   private async runQuotes(): Promise<void> {
