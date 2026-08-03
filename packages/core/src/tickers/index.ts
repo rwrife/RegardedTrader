@@ -74,3 +74,16 @@ export type {
   SecTickerDirectoryRow,
   SecEdgarSourceLogger,
 } from './sources/sec.js';
+export {
+  createCnbcTickerSource,
+  parseCnbcQuoteResponse,
+  parseCnbcQuotePageHtml,
+  CNBC_QUOTE_LOOKUP_URL,
+  CNBC_QUOTE_PAGE_BASE,
+} from './sources/cnbc.js';
+export type {
+  CnbcTickerSourceOptions,
+  CnbcSourceLogger,
+  ParseCnbcQuoteResponseOptions,
+  ParseCnbcQuotePageHtmlOptions,
+} from './sources/cnbc.js';
