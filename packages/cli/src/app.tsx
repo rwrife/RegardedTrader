@@ -12,6 +12,7 @@ import { ListScreen, RemoveScreen } from './screens/watchlist.js';
 import { WatchScreen } from './screens/watch.js';
 import { OptionsScreen } from './screens/options.js';
 import { ChartScreen } from './screens/chart.js';
+import { CalendarScreen } from './screens/calendar.js';
 
 export interface AppProps {
   command: string;
@@ -22,6 +23,12 @@ export interface AppProps {
     thesis?: string;
     maxLoss?: number;
     expiry?: string;
+    from?: string;
+    days?: number;
+    past?: boolean;
+    upcoming?: boolean;
+    holidays?: boolean;
+    earnings?: boolean;
   };
 }
 
@@ -73,6 +80,20 @@ export function App({ command, args, serverUrl, flags }: AppProps) {
       return <RemoveScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
     case 'watch':
       return <WatchScreen args={args} serverUrl={serverUrl} />;
+    case 'cal':
+    case 'calendar':
+      return (
+        <CalendarScreen
+          args={args}
+          serverUrl={serverUrl}
+          from={flags?.from}
+          days={flags?.days}
+          past={!!flags?.past}
+          upcoming={!!flags?.upcoming}
+          holidays={!!flags?.holidays}
+          earnings={!!flags?.earnings}
+        />
+      );
     default:
       return (
         <Box flexDirection="column">

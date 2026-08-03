@@ -27,7 +27,7 @@ _Last reviewed: 2026-07-20_
 | Options chain explorer | `regard options <SYM>` | `#/options/:sym` | ✅ |
 | Full ticker chart (candles + overlays + RSI/MACD) | `regard chart <SYM>` (ASCII sparkline + indicator readout) | `#/ticker/:sym` | ✅ |
 | Watchlist | `regard watch [add\|ls\|rm]` | `/watchlist` | ✅ |
-| Market calendar (holidays + earnings) | `regard cal` / `regard cal earnings` / `regard cal refresh` (planned in #64) | calendar strip + calendar tab (partial; top-bar pill/per-ticker badge tracked in #63) | 🚧 |
+| Market calendar (holidays + earnings) | `regard cal` / `regard cal earnings` / `regard cal refresh` / `regard cal status` | calendar strip + calendar tab (partial; top-bar pill/per-ticker badge tracked in #63) | 🚧 |
 | Open the other surface | `regard dashboard` | "Open CLI help" link | ✅ / 🚧 |
 | Server version chip | `regard dashboard` connect line (`connected to server X (core Y, api Z)`) | TopBar `srv X · core Y` chip (fetches `GET /version`) | ✅ |
 
