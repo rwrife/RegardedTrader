@@ -50,7 +50,8 @@ export function parseRoute(hash: string): Route {
   if (raw.startsWith('watchlist')) return { kind: 'watchlist' };
   if (raw.startsWith('paper')) return { kind: 'paper' };
   const briefMatch = raw.match(/^brief\/([^/?#]+)/);
-  if (briefMatch) return { kind: 'brief', symbol: decodeURIComponent(briefMatch[1]!).toUpperCase() };
+  if (briefMatch)
+    return { kind: 'brief', symbol: decodeURIComponent(briefMatch[1]!).toUpperCase() };
   const planMatch = raw.match(/^plan\/([^/?#]+)/);
   if (planMatch) return { kind: 'plan', symbol: decodeURIComponent(planMatch[1]!).toUpperCase() };
   const optionsMatch = raw.match(/^options\/([^/?#]+)/);
@@ -133,7 +134,9 @@ export function App(): JSX.Element {
             if (first) setActive(first);
           });
       })
-      .catch(() => { /* stay in demo */ });
+      .catch(() => {
+        /* stay in demo */
+      });
   }, [demoForced]);
 
   useEffect(() => {
@@ -213,7 +216,7 @@ export function App(): JSX.Element {
               <QuoteHeader t={ticker} demo={demo} />
               <TabBar tab={tab} setTab={setTab} />
               {tab === 'briefing' && <BriefingTab t={ticker} />}
-              {tab === 'sentiment' && <SentimentTab t={ticker} />}
+              {tab === 'sentiment' && <SentimentTab t={ticker} demo={demo} />}
               {tab === 'news' && <NewsTab t={ticker} demo={demo} />}
               {tab === 'recommendation' && <RecommendationTab t={ticker} />}
               {tab === 'calendar' && <CalendarTab t={ticker} />}
