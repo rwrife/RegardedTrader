@@ -1,0 +1,40 @@
+{
+  "quote": {
+    "regularMarketPrice": 1187.5
+  },
+  "options": [
+    {
+      "calls": [
+        {
+          "contractSymbol": "NVDA261218C00120000",
+          "expiration": 1797552000,
+          "strike": 1200,
+          "bid": 41.2,
+          "ask": 42.5,
+          "lastPrice": 41.8,
+          "volume": 2123,
+          "openInterest": 9321,
+          "impliedVolatility": 0.44
+        },
+        {
+          "contractSymbol": "BROKEN-CALL",
+          "expiration": 1797552000,
+          "strike": null
+        }
+      ],
+      "puts": [
+        {
+          "contractSymbol": "NVDA261218P00110000",
+          "expiration": "2026-12-18T00:00:00.000Z",
+          "strike": 1100,
+          "bid": 22.1,
+          "ask": 23.2,
+          "lastPrice": 22.9,
+          "volume": 1765,
+          "openInterest": 8012,
+          "impliedVolatility": 0.41
+        }
+      ]
+    }
+  ]
+}

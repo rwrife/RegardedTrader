@@ -411,6 +411,49 @@ describe('Scheduler', () => {
     sched.stop();
   });
 
+  it('a disk-full failure (ENOSPC) fails loud, backs off, and does not crash sibling jobs', async () => {
+    // Simulates: store.appendSnapshot throws ENOSPC. Scheduler should surface
+    // the error via onError, mark the job backing-off, and keep other jobs running.
+    const errors: Array<{ id: string; message: string }> = [];
+    const sched = makeScheduler({
+      onError: (id, err) => errors.push({ id, message: String((err as Error).message) }),
+    });
+
+    let badAttempts = 0;
+    let goodRuns = 0;
+    sched.register({
+      id: 'quote-store-write',
+      cadence: () => 100,
+      backoff: new BackoffPolicy({ baseMs: 50, maxMs: 500, jitterRatio: 0 }),
+      run: () => {
+        badAttempts += 1;
+        const err = Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+        throw err;
+      },
+    });
+    sched.register({
+      id: 'news-poller',
+      cadence: () => 100,
+      run: () => {
+        goodRuns += 1;
+      },
+    });
+
+    sched.start();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(badAttempts).toBeGreaterThanOrEqual(2);
+    expect(errors.length).toBe(badAttempts);
+    expect(errors.every((e) => e.id === 'quote-store-write')).toBe(true);
+    expect(errors[0]?.message).toContain('ENOSPC');
+    expect(sched.statusOf('quote-store-write')).toBe('backing-off');
+
+    expect(goodRuns).toBeGreaterThanOrEqual(9);
+    expect(sched.statusOf('news-poller')).toBe('idle');
+
+    sched.stop();
+  });
+
   it('reapplyCadences reschedules idle jobs to the current cadence', async () => {
     let state: 'rth' | 'closed' = 'rth';
     let listener: (() => void) | null = null;

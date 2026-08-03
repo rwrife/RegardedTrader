@@ -17,9 +17,9 @@ function parseFilter(argv) {
 const args = process.argv.slice(2);
 const filter = parseFilter(args);
 
-if (filter !== null && filter !== 'tickers') {
+if (filter !== null && filter !== 'tickers' && filter !== 'polling') {
   console.error(`Unsupported --filter value: ${filter}`);
-  console.error('Supported values: tickers');
+  console.error('Supported values: tickers, polling');
   process.exit(1);
 }
 
@@ -34,17 +34,17 @@ const forwarded = args.filter((arg, idx) => {
   return !arg.startsWith('--filter=');
 });
 
-const run = spawnSync(
-  'npm',
-  ['--workspace', '@regardedtrader/core', 'run', 'test:live:tickers', '--', ...forwarded],
-  {
-    stdio: 'inherit',
-    env: {
-      ...process.env,
-      RUN_LIVE_TICKER_TESTS: '1',
-    },
+const script = filter === 'polling' ? 'test:live:polling' : 'test:live:tickers';
+const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const run = spawnSync(npmCommand, ['--workspace', '@regardedtrader/core', 'run', script, '--', ...forwarded], {
+  shell: process.platform === 'win32',
+  stdio: 'inherit',
+  env: {
+    ...process.env,
+    RUN_LIVE_TICKER_TESTS: filter === 'tickers' ? '1' : '0',
+    RUN_LIVE_POLLING_TESTS: filter === 'polling' ? '1' : '0',
   },
-);
+});
 
 if (run.error) {
   throw run.error;

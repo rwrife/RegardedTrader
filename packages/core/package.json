@@ -21,6 +21,7 @@
     "test": "vitest run",
     "eval:recommender": "node ./eval/recommender/run.mjs",
     "test:live:tickers": "vitest run src/tickers/live.test.ts",
+    "test:live:polling": "vitest run src/polling/live.test.ts",
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
