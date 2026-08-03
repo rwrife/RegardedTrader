@@ -30,9 +30,9 @@ try {
   process.exit(1);
 }
 
-const { app, getConfig } = createDefaultApp(cfg, runtimeAuth);
+const { app, getConfig, shutdown } = createDefaultApp(cfg, runtimeAuth);
 
-app.listen(cfg.server.port, cfg.server.host, () => {
+const server = app.listen(cfg.server.port, cfg.server.host, () => {
   const c = getConfig();
   logger.info(`RegardedTrader server listening on http://${cfg.server.host}:${cfg.server.port}`);
   if (!c.activeProvider) {
@@ -40,4 +40,38 @@ app.listen(cfg.server.port, cfg.server.host, () => {
   } else {
     logger.info(`Active AI provider: ${c.activeProvider}`);
   }
+});
+
+let shuttingDown = false;
+
+async function gracefulShutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info(`Received ${signal}. Shutting down...`);
+
+  const hardExit = setTimeout(() => {
+    logger.warn('Graceful shutdown timed out.');
+    process.exit(1);
+  }, 6_000);
+  hardExit.unref?.();
+
+  try {
+    await shutdown(5_000);
+    await new Promise<void>((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
+    clearTimeout(hardExit);
+    process.exit(0);
+  } catch (e) {
+    clearTimeout(hardExit);
+    logger.error((e as Error).message);
+    process.exit(1);
+  }
+}
+
+process.once('SIGINT', () => {
+  void gracefulShutdown('SIGINT');
+});
+process.once('SIGTERM', () => {
+  void gracefulShutdown('SIGTERM');
 });

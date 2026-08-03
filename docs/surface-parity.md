@@ -28,7 +28,7 @@ _Last audited: 2026-08-03 (feature merges through 2026-08-03)_
 | Options trade-plan wizard | `regard plan <SYM>` | `#/plan/:sym` | ✅ |
 | Paper trading (simulated only) | `regard paper submit <planId> --paper` / `regard paper positions` / `regard paper orders` | `#/paper` | ✅ |
 | Trade-plan risk graph + risk violations panel | `regard plan <SYM>` (textual break-even + violations) | `#/plan/:sym` (SVG risk graph + violations chip panel) | ✅ |
-| Options chain explorer | `regard options <SYM>` | `#/options/:sym` | ✅ |
+| Options chain explorer + ATM implied-move strip | `regard options <SYM>` | `#/options/:sym` | ✅ |
 | Full ticker chart (candles + overlays + RSI/MACD) | `regard chart <SYM>` (ASCII sparkline + indicator readout) | `#/ticker/:sym` | ✅ |
 | Watchlist | `regard add <SYM>...` / `regard ls` / `regard rm <SYM>` | `/watchlist` | ✅ |
 | Polling tape + tail + controls | `regard watch [SYM...]` / `regard tail <SYM> [--quotes]` / `regard polling <status\|pause\|resume>` | watchlist live polling rows + polling controls | ✅ |

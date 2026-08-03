@@ -16,51 +16,62 @@ server is running unless you also `kill -HUP` (or restart) the server.
 ```jsonc
 {
   "version": 1,
-  "activeProvider": "openai",          // or null
+  "activeProvider": "openai", // or null
   "providers": {
     "openai": {
       "kind": "openai-compatible",
       "label": "OpenAI",
       "baseUrl": "https://api.openai.com/v1",
-      "apiKey": "sk-...",              // never logged or returned over /config GET
-      "model": "gpt-4o-mini"
+      "apiKey": "sk-...", // never logged or returned over /config GET
+      "model": "gpt-4o-mini",
     },
     "ollama": {
       "kind": "openai-compatible",
       "label": "Local Ollama",
       "baseUrl": "http://127.0.0.1:11434/v1",
-      "model": "llama3.1:latest"
+      "model": "llama3.1:latest",
     },
     "codex": {
       "kind": "cli",
       "label": "codex-cli",
-      "backend": "codex-cli",          // "codex-cli" | "claude-cli" | "copilot-cli"
-      "command": "codex",              // optional; defaults per backend
-      "model": "gpt-5"                 // optional
-    }
+      "backend": "codex-cli", // "codex-cli" | "claude-cli" | "copilot-cli"
+      "command": "codex", // optional; defaults per backend
+      "model": "gpt-5", // optional
+    },
   },
   "risk": {
     "maxLossUsd": 500,
     "maxLegs": 4,
     "forbidNakedShorts": true,
-    "maxDte": 45,               // #181 — longest-dated leg cap, 0 disables
-    "accountSizeUsd": 0,        // #181 — 0 = unknown; enables the % cap when > 0
-    "maxPctOfAccount": 0.02     // #181 — fraction of accountSizeUsd (2%)
+    "maxDte": 45, // #181 — longest-dated leg cap, 0 disables
+    "accountSizeUsd": 0, // #181 — 0 = unknown; enables the % cap when > 0
+    "maxPctOfAccount": 0.02, // #181 — fraction of accountSizeUsd (2%)
   },
   "polling": {
+    "enabled": true,
+    "cadence": {
+      "rth": { "quote": 30000, "options": 300000, "news": 600000 },
+      "pre": { "quote": 60000, "options": 600000, "news": 900000 },
+      "post": { "quote": 60000, "options": 600000, "news": 900000 },
+      "closed": { "quote": 300000, "options": 1800000, "news": 1800000 },
+    },
+    "sources": {
+      "news": { "yahoo": true, "nasdaq": true, "googleNews": true },
+    },
+    "retentionDays": { "quote": 30, "options": 7, "news": 90 },
     "sentimentSources": {
       "reddit": { "enabled": true, "weight": 1 },
       "stocktwits": { "enabled": true, "weight": 0.7 },
       "hn": { "enabled": true, "weight": 0.4 },
       "cnn": { "enabled": true, "weight": 1.2 },
       "google-news": { "enabled": true, "weight": 1.1 },
-      "googleNewsOpinion": { "enabled": true, "weight": 0.9 }
+      "googleNewsOpinion": { "enabled": true, "weight": 0.9 },
     },
     "sentimentAlerts": {
-      "enabled": false,         // #42 — gate alert events
-      "stdDevThreshold": 2,     // fire when |z-score| >= threshold
-      "windowSize": 12,         // trailing sentiment snapshots in baseline window
-      "minSamples": 8           // minimum baseline points required to alert
+      "enabled": false, // #42 — gate alert events
+      "stdDevThreshold": 2, // fire when |z-score| >= threshold
+      "windowSize": 12, // trailing sentiment snapshots in baseline window
+      "minSamples": 8, // minimum baseline points required to alert
     },
     "recommendations": {
       "enabled": true,
@@ -70,11 +81,11 @@ server is running unless you also `kill -HUP` (or restart) the server.
         "pre": 3600000,
         "post": 3600000,
         "closed": 14400000,
-        "holiday": 14400000
-      }
-    }
+        "holiday": 14400000,
+      },
+    },
   },
-  "server": { "host": "127.0.0.1", "port": 4317 }
+  "server": { "host": "127.0.0.1", "port": 4317 },
 }
 ```
 
@@ -83,19 +94,24 @@ generation cadence. Briefings and plan generation consume the most recent
 persisted recommendation as read-only context (when present); they do not write
 or mutate recommender state.
 
+`polling.enabled` controls the quote/news scheduler lifecycle. When false, the
+server keeps polling jobs stopped. When true, jobs auto-start only when the
+watchlist is non-empty and register/unregister symbols immediately as the
+watchlist changes.
+
 ## Risk caps
 
 `config.risk` is enforced by `RiskOfficer` on every trade plan (strategist
 candidates, `/plan/:sym`, briefings). The fields are:
 
-| Field | Default | Meaning |
-| --- | --- | --- |
-| `maxLossUsd` | `500` | Absolute cap on plan-level max loss (USD). |
-| `maxLegs` | `4` | Reject plans with more than this many legs. |
-| `forbidNakedShorts` | `true` | Flag any short leg not covered by a same-type same-expiry long leg. |
-| `maxDte` | `45` | Reject plans whose longest-dated leg exceeds this DTE. Set `0` to disable. |
-| `accountSizeUsd` | `0` | User's total tradable account size. `0` means "not configured" — the % cap is skipped. |
-| `maxPctOfAccount` | `0.02` | Fraction of `accountSizeUsd` allowed as max loss per trade. Only enforced when both fields are `> 0`. |
+| Field               | Default | Meaning                                                                                               |
+| ------------------- | ------- | ----------------------------------------------------------------------------------------------------- |
+| `maxLossUsd`        | `500`   | Absolute cap on plan-level max loss (USD).                                                            |
+| `maxLegs`           | `4`     | Reject plans with more than this many legs.                                                           |
+| `forbidNakedShorts` | `true`  | Flag any short leg not covered by a same-type same-expiry long leg.                                   |
+| `maxDte`            | `45`    | Reject plans whose longest-dated leg exceeds this DTE. Set `0` to disable.                            |
+| `accountSizeUsd`    | `0`     | User's total tradable account size. `0` means "not configured" — the % cap is skipped.                |
+| `maxPctOfAccount`   | `0.02`  | Fraction of `accountSizeUsd` allowed as max loss per trade. Only enforced when both fields are `> 0`. |
 
 Both `maxDte` and `maxPctOfAccount` were added in **#181**. Existing v1
 configs load with these defaults applied automatically (the Zod schema
@@ -120,12 +136,12 @@ user-configurable):
 `config.polling.sentimentAlerts` controls whether sentiment-shift alerts are
 emitted from the sentiment aggregation job:
 
-| Field | Default | Meaning |
-| --- | --- | --- |
-| `enabled` | `false` | Master gate. When false, no sentiment alert events are emitted. |
-| `stdDevThreshold` | `2` | Alert threshold in standard deviations (`|z-score| >= threshold`). |
-| `windowSize` | `12` | Number of trailing sentiment snapshots used to compute baseline mean/std-dev. |
-| `minSamples` | `8` | Minimum baseline sample count required before alerting. |
+| Field             | Default | Meaning                                                                       |
+| ----------------- | ------- | ----------------------------------------------------------------------------- | ------- | --------------- |
+| `enabled`         | `false` | Master gate. When false, no sentiment alert events are emitted.               |
+| `stdDevThreshold` | `2`     | Alert threshold in standard deviations (`                                     | z-score | >= threshold`). |
+| `windowSize`      | `12`    | Number of trailing sentiment snapshots used to compute baseline mean/std-dev. |
+| `minSamples`      | `8`     | Minimum baseline sample count required before alerting.                       |
 
 This hook emits a structured `sentiment.alert` event intended for existing
 alerts surfaces. It is intentionally disabled by default to avoid noisy
@@ -135,16 +151,16 @@ notifications on fresh installs.
 
 Anything that speaks `/v1/chat/completions`:
 
-| Service         | Base URL                                  | Notes                          |
-| --------------- | ----------------------------------------- | ------------------------------ |
-| OpenAI          | `https://api.openai.com/v1`               | needs API key                  |
-| Azure OpenAI    | `https://<resource>.openai.azure.com/...` | extra headers may be required  |
-| Groq            | `https://api.groq.com/openai/v1`          | needs API key                  |
-| OpenRouter      | `https://openrouter.ai/api/v1`            | needs API key                  |
-| Together AI     | `https://api.together.xyz/v1`             | needs API key                  |
-| Local Ollama    | `http://127.0.0.1:11434/v1`               | keyless                        |
-| Local vLLM      | `http://127.0.0.1:8000/v1`                | keyless                        |
-| LM Studio       | `http://127.0.0.1:1234/v1`                | keyless                        |
+| Service      | Base URL                                  | Notes                         |
+| ------------ | ----------------------------------------- | ----------------------------- |
+| OpenAI       | `https://api.openai.com/v1`               | needs API key                 |
+| Azure OpenAI | `https://<resource>.openai.azure.com/...` | extra headers may be required |
+| Groq         | `https://api.groq.com/openai/v1`          | needs API key                 |
+| OpenRouter   | `https://openrouter.ai/api/v1`            | needs API key                 |
+| Together AI  | `https://api.together.xyz/v1`             | needs API key                 |
+| Local Ollama | `http://127.0.0.1:11434/v1`               | keyless                       |
+| Local vLLM   | `http://127.0.0.1:8000/v1`                | keyless                       |
+| LM Studio    | `http://127.0.0.1:1234/v1`                | keyless                       |
 
 API keys are stored in the file and **never** returned by `GET /config` —
 that endpoint returns a redacted view (`sk-1234••••9abc`).
@@ -155,11 +171,11 @@ RegardedTrader spawns an installed coding CLI per turn (similar to OpenClaw's
 CLI backends). The user installs and authenticates each CLI separately;
 RegardedTrader never handles auth itself.
 
-| backend       | default command | how it's invoked                                        |
-| ------------- | --------------- | ------------------------------------------------------- |
+| backend       | default command | how it's invoked                                                                                                                        |
+| ------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `codex-cli`   | `codex`         | `codex exec --json --color never --sandbox workspace-write --skip-git-repo-check` (follow-up turns use `codex exec resume <sessionId>`) |
-| `claude-cli`  | `claude`        | `claude -p --output-format stream-json --verbose` (follow-up turns pass `--resume <sessionId>` when available) |
-| `copilot-cli` | `copilot`       | `copilot -p "<prompt>"` (standalone `@github/copilot` CLI chat mode; preferred over `gh copilot explain/suggest`) |
+| `claude-cli`  | `claude`        | `claude -p --output-format stream-json --verbose` (follow-up turns pass `--resume <sessionId>` when available)                          |
+| `copilot-cli` | `copilot`       | `copilot -p "<prompt>"` (standalone `@github/copilot` CLI chat mode; preferred over `gh copilot explain/suggest`)                       |
 
 You can override the binary path (`command`), append flags (`args`), set the
 model (`model`), and inject env vars (`env`) per-provider.
@@ -202,14 +218,14 @@ endpoints and shows the same redacted view. Web cannot reveal stored keys.
 
 ## Server endpoints
 
-| Method | Path                          | Purpose                                          |
-| ------ | ----------------------------- | ------------------------------------------------ |
-| GET    | `/config`                     | Redacted current config                          |
-| PUT    | `/config`                     | Replace whole config                             |
-| POST   | `/config/providers`           | Upsert one provider `{ id, provider }`           |
-| DELETE | `/config/providers/:id`       | Remove one provider                              |
-| POST   | `/config/activate`            | `{ id }` — set active                            |
-| POST   | `/config/test`                | Smoke-test the active provider                   |
+| Method | Path                    | Purpose                                |
+| ------ | ----------------------- | -------------------------------------- |
+| GET    | `/config`               | Redacted current config                |
+| PUT    | `/config`               | Replace whole config                   |
+| POST   | `/config/providers`     | Upsert one provider `{ id, provider }` |
+| DELETE | `/config/providers/:id` | Remove one provider                    |
+| POST   | `/config/activate`      | `{ id }` — set active                  |
+| POST   | `/config/test`          | Smoke-test the active provider         |
 
 All endpoints reject changes that would bind the server to a non-localhost
 host. The server hot-swaps the orchestrator after every successful write.

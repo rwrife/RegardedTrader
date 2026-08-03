@@ -104,6 +104,7 @@ export interface ParseOptions {
 export function parseNyseHolidaysHtml(html: string, opts: ParseOptions): CalendarEvent[] {
   const logger = opts.logger ?? { warn: () => {} };
   const out: CalendarEvent[] = [];
+  let sawHolidayTable = false;
 
   for (const tableInner of extractTables(html)) {
     const rows = tableRows(tableInner);
@@ -119,6 +120,7 @@ export function parseNyseHolidaysHtml(html: string, opts: ParseOptions): Calenda
       if (m) yearCols.push({ idx: i, year: Number(m[1]) });
     }
     if (yearCols.length === 0) continue; // not a holiday table
+    sawHolidayTable = true;
 
     for (let r = 1; r < rows.length; r++) {
       const row = rows[r] ?? [];
@@ -140,6 +142,10 @@ export function parseNyseHolidaysHtml(html: string, opts: ParseOptions): Calenda
         if (event) out.push(event);
       }
     }
+  }
+
+  if (!sawHolidayTable) {
+    logger.warn('nyse: no holiday table detected; page layout may have changed');
   }
 
   // Stable sort: by date ascending, then kind, then title.

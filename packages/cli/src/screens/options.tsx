@@ -9,7 +9,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Text, useApp } from 'ink';
 import Spinner from 'ink-spinner';
-import type { OptionContract, Quote } from '@regardedtrader/core';
+import type {
+  ImpliedMoveRow,
+  OptionContract,
+  OptionsChainResponse,
+  Quote,
+} from '@regardedtrader/core';
 import { fillGreeks, groupChainByStrike, type ChainRow } from '@regardedtrader/core';
 import { api } from '../api.js';
 import { ReturnPrompt } from './menu.js';
@@ -24,6 +29,7 @@ export interface OptionsScreenProps {
   /** Test seam: when present, skip HTTP and render the supplied data. */
   initialChain?: OptionContract[];
   initialQuote?: Quote | null;
+  initialImpliedMoves?: ImpliedMoveRow[];
   onDone?: () => void;
 }
 
@@ -62,11 +68,15 @@ export function OptionsScreen({
   expiry,
   initialChain,
   initialQuote,
+  initialImpliedMoves,
   onDone,
 }: OptionsScreenProps): JSX.Element {
   const { exit } = useApp();
   const [chain, setChain] = useState<OptionContract[] | null>(initialChain ?? null);
   const [quote, setQuote] = useState<Quote | null>(initialQuote ?? null);
+  const [impliedMoves, setImpliedMoves] = useState<ImpliedMoveRow[]>(
+    initialImpliedMoves ?? [],
+  );
   const [err, setErr] = useState<string | null>(symbol ? null : 'Missing symbol. Usage: regard options NVDA');
   const [finished, setFinished] = useState(false);
 
@@ -83,11 +93,20 @@ export function OptionsScreen({
     const sym = encodeURIComponent(symbol.toUpperCase());
     const qs = expiry ? `?expiry=${encodeURIComponent(expiry)}` : '';
     Promise.allSettled([
-      api<OptionContract[]>(serverUrl, `/options/${sym}${qs}`),
+      api<OptionsChainResponse | OptionContract[]>(serverUrl, `/options/${sym}${qs}`),
       api<Quote>(serverUrl, `/quote/${sym}`),
     ])
       .then(([chainRes, quoteRes]) => {
-        if (chainRes.status === 'fulfilled') setChain(chainRes.value);
+        if (chainRes.status === 'fulfilled') {
+          const payload = chainRes.value;
+          if (Array.isArray(payload)) {
+            setChain(payload);
+            setImpliedMoves([]);
+          } else {
+            setChain(payload.contracts);
+            setImpliedMoves(payload.impliedMoves);
+          }
+        }
         else setErr(String(chainRes.reason));
         if (quoteRes.status === 'fulfilled') setQuote(quoteRes.value);
       })
@@ -105,6 +124,9 @@ export function OptionsScreen({
       expiry,
     });
   }, [chain, quote, expiry]);
+  const displayImpliedMoves = useMemo(() => {
+    return impliedMoves;
+  }, [impliedMoves]);
 
   if (err) {
     return (
@@ -144,6 +166,20 @@ export function OptionsScreen({
         {expiry ? <Text dimColor> · expiry {expiry}</Text> : null}
         <Text dimColor> · {rows.length} strikes</Text>
       </Text>
+      {displayImpliedMoves.length > 0 && (
+        <Text>
+          {displayImpliedMoves.map((row, idx) => {
+            const chip = `${row.expiry} ±$${num(row.impliedMoveAbs)} (${num(row.impliedMovePct * 100, 1)}%)`;
+            const highlighted = row.impliedMovePct >= 0.05;
+            return (
+              <Text key={row.expiry} color={highlighted ? 'yellow' : undefined}>
+                {idx > 0 ? '  ·  ' : ''}
+                {chip}
+              </Text>
+            );
+          })}
+        </Text>
+      )}
       <Box>
         <Text dimColor>
           {'   call Δ    bid    ask     iv  |  strike  |     iv    bid    ask    put Δ'}
