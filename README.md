@@ -68,6 +68,7 @@ packages/
 See [`AGENTS.md`](./AGENTS.md) for the full project rules, domain notes, and
 guidance for AI coding agents working on this repo. For terminology, use the
 canonical [`docs/domain-glossary.md`](./docs/domain-glossary.md).
+Per-package guides: [`packages/core/README.md`](./packages/core/README.md), [`packages/server/README.md`](./packages/server/README.md), [`packages/cli/README.md`](./packages/cli/README.md), [`packages/web/README.md`](./packages/web/README.md).
 
 ## Scripts
 
