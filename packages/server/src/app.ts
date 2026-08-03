@@ -6,6 +6,7 @@ import { logger } from './logging.js';
 import {
   Orchestrator,
   Technician,
+  NewsScout,
   YahooClient,
   Ticker,
   QuoteSchema,
@@ -93,6 +94,19 @@ export interface AppDeps {
     quoteEveryMs?: number;
     newsEveryMs?: number;
   };
+  /**
+   * Optional runtime auth gate for dashboard sessions (#18). Tests and
+   * internal dev mode can omit this to keep the app unauthenticated.
+   */
+  auth?:
+    | {
+        mode: 'required';
+        token: string;
+        dashboardOrigin: string;
+      }
+    | {
+        mode: 'allow-no-auth';
+      };
 }
 
 export interface AppHandle {
@@ -145,9 +159,9 @@ export function createApp(deps: AppDeps): AppHandle {
         accountSizeUsd: cfg.risk.accountSizeUsd,
         maxPctOfAccount: cfg.risk.maxPctOfAccount,
       },
-      // Wire the Technician agent (issue #74) by default so /briefing
-      // includes a TA section whenever an LLM is configured.
-      { technician: new Technician(llm) },
+      // Wire optional agents by default so /briefing includes TA + ranked
+      // headline context whenever an LLM is configured.
+      { technician: new Technician(llm), newsScout: new NewsScout(llm) },
       { briefings },
     );
   }
@@ -287,6 +301,73 @@ export function createApp(deps: AppDeps): AppHandle {
 
   const app = express();
   app.use(express.json({ limit: '1mb' }));
+
+  // Runtime auth gate for dashboard-launched sessions (#18). All endpoints
+  // except GET /health require the launch token.
+  if (deps.auth?.mode === 'required') {
+    const token = Buffer.from(deps.auth.token, 'utf8');
+    const failWindowMs = 60_000;
+    const maxFailsPerWindow = 20;
+    const authFails = new Map<string, { count: number; resetAt: number }>();
+    const now = deps.now ?? Date.now;
+
+    function safeTokenEquals(candidate: string): boolean {
+      const c = Buffer.from(candidate, 'utf8');
+      return c.length === token.length && timingSafeEqual(c, token);
+    }
+
+    function isRateLimited(ip: string): boolean {
+      const t = now();
+      const cur = authFails.get(ip);
+      if (!cur || t > cur.resetAt) {
+        authFails.set(ip, { count: 0, resetAt: t + failWindowMs });
+        return false;
+      }
+      return cur.count >= maxFailsPerWindow;
+    }
+
+    function markFailed(ip: string): void {
+      const t = now();
+      const cur = authFails.get(ip);
+      if (!cur || t > cur.resetAt) {
+        authFails.set(ip, { count: 1, resetAt: t + failWindowMs });
+        return;
+      }
+      cur.count += 1;
+      authFails.set(ip, cur);
+    }
+
+    app.use((req, res, next) => {
+      if (req.method === 'GET' && req.path === '/health') {
+        next();
+        return;
+      }
+
+      const ip = req.socket.remoteAddress ?? req.ip ?? 'unknown';
+      if (isRateLimited(ip)) {
+        logger.warn(`[auth] rate-limited failed auth attempts from ${ip}`);
+        res.status(429).json({ error: 'Too many failed auth attempts. Try again shortly.' });
+        return;
+      }
+
+      const authHeader = req.headers.authorization;
+      const bearer =
+        typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
+          ? authHeader.slice('Bearer '.length).trim()
+          : '';
+      const queryToken = typeof req.query.t === 'string' ? req.query.t : '';
+      const candidate = bearer || queryToken;
+      if (candidate && safeTokenEquals(candidate)) {
+        next();
+        return;
+      }
+
+      markFailed(ip);
+      logger.warn(`[auth] unauthorized request from ${ip} to ${req.method} ${req.path}`);
+      res.status(401).json({ error: 'Unauthorized dashboard session token.' });
+    });
+  }
+
   // Defence-in-depth Origin guard (AGENTS.md rule #1, issue #128):
   // hard-reject any cross-origin request whose `Origin` header is not a
   // loopback URL. Runs BEFORE the `cors` middleware so a non-loopback caller
@@ -304,7 +385,17 @@ export function createApp(deps: AppDeps): AppHandle {
     next();
   });
   app.use(
-    cors({ origin: [/^http:\/\/127\.0\.0\.1:\d+$/, /^http:\/\/localhost:\d+$/, /^http:\/\/\[::1\]:\d+$/] }),
+    cors(
+      deps.auth?.mode === 'required'
+        ? { origin: [deps.auth.dashboardOrigin] }
+        : {
+            origin: [
+              /^http:\/\/127\.0\.0\.1:\d+$/,
+              /^http:\/\/localhost:\d+$/,
+              /^http:\/\/\[::1\]:\d+$/,
+            ],
+          },
+    ),
   );
 
   // Dedicated version endpoint (issue #179). Deliberately separate from
@@ -1156,6 +1247,26 @@ export function createApp(deps: AppDeps): AppHandle {
     }
   });
 
+  // NewsScout endpoint (issue #75). Returns ranked traditional headlines with
+  // model-assigned relevance/materiality scores, shared by CLI + web.
+  app.get('/news/:symbol', async (req, res, next) => {
+    try {
+      const llm = deps.llmFromConfig(cfg);
+      if (!llm) {
+        res.status(503).json({ error: 'AI provider not configured' });
+        return;
+      }
+      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+      const known = await requireKnownSymbol(res, symbol);
+      if (!known) return;
+      const news = await registry.client.news(symbol).catch(() => []);
+      const scout = new NewsScout(llm);
+      res.json(await scout.bundle({ symbol, news }));
+    } catch (e) {
+      next(e);
+    }
+  });
+
   app.get('/briefing/:symbol', async (req, res, next) => {
     try {
       const candidate = req.params.symbol;
@@ -1395,22 +1506,59 @@ export function createApp(deps: AppDeps): AppHandle {
    * feedback that their key works.
    */
   app.post('/config/market-data/test', async (req, res) => {
-    const probeSymbol = typeof req.body?.symbol === 'string' ? req.body.symbol.toUpperCase() : 'AAPL';
-    const source = resolveLiveQuoteSource();
+    const bodyParsed = z.object({
+      symbol: z.string().optional(),
+      providerId: z.string().optional(),
+    }).safeParse(req.body);
+    const probeSymbol = (bodyParsed.success && bodyParsed.data.symbol)
+      ? bodyParsed.data.symbol.toUpperCase()
+      : 'AAPL';
+    const testProviderId = bodyParsed.success ? bodyParsed.data.providerId : undefined;
+
+    let source: LiveQuoteSource | null;
+    let resolvedId: string | null;
+
+    if (testProviderId) {
+      const testProvCfg = cfg.marketData.providers[testProviderId];
+      if (!testProvCfg) {
+        res.json({ ok: false, error: `Market-data provider "${testProviderId}" not found` });
+        return;
+      }
+      const testReg = createMarketDataRegistry(
+        { providers: { [testProviderId]: testProvCfg }, activeProvider: testProviderId },
+        { fallback: deps.market },
+      );
+      source = testReg.liveQuoteSource != null
+        ? (testReg.liveQuoteSource as unknown as LiveQuoteSource)
+        : (deps.liveQuoteSource ?? null);
+      resolvedId = testProviderId;
+    } else {
+      source = resolveLiveQuoteSource();
+      resolvedId = registry.activeId;
+    }
+
     if (!source) {
-      res.status(503).json({ ok: false, error: 'No market-data provider configured' });
+      res.json({ ok: false, error: 'No market-data provider configured. Add one in Settings → Market Data.' });
       return;
     }
     try {
       const raw = (await source(probeSymbol)) as YahooQuoteLike;
       res.json({
         ok: true,
-        provider: registry.activeId,
+        provider: resolvedId,
         symbol: probeSymbol,
         price: raw.regularMarketPrice ?? null,
       });
     } catch (e) {
-      res.status(502).json({ ok: false, error: (e as Error).message });
+      const rawMsg = (e as Error).message;
+      let friendly = rawMsg;
+      if (/too many requests|429|rate[\s-]?limit/i.test(rawMsg)) {
+        friendly =
+          'Yahoo Finance is rate-limited (HTTP 429). This unofficial API throttles heavy usage. ' +
+          'Switch to Finnhub for reliable real-time data.';
+      }
+      // Always return 200 — success/failure is in the `ok` field, not the HTTP status.
+      res.json({ ok: false, error: friendly });
     }
   });
 
@@ -1420,7 +1568,7 @@ export function createApp(deps: AppDeps): AppHandle {
     try {
       const { id, provider } = ProviderUpsert.parse(req.body);
       cfg.providers[id] = provider;
-      if (!cfg.activeProvider) cfg.activeProvider = id;
+      cfg.activeProvider = id;
       await saveConfig(cfg);
       orchestrator = makeOrchestrator();
       res.json({ ok: true, aiConfigured: orchestrator !== null, config: redactConfig(cfg) });
@@ -1525,7 +1673,7 @@ export function createApp(deps: AppDeps): AppHandle {
     }
 
     const model = provider.kind === 'openai-compatible' ? provider.model : provider.model;
-    const TIMEOUT_MS = 10_000;
+    const TIMEOUT_MS = provider.kind === 'cli' ? 90_000 : 10_000;
     const started = Date.now();
     try {
       const llm = (deps.buildLLMForProvider ?? buildLLM)(provider);
@@ -1600,7 +1748,10 @@ function makePlanId(symbol: string, index: number): string {
 }
 
 /** Default factory used by the entrypoint. */
-export function createDefaultApp(cfg: AppConfigT): AppHandle {
+export function createDefaultApp(
+  cfg: AppConfigT,
+  auth?: AppDeps['auth'],
+): AppHandle {
   return createApp({
     market: new YahooClient(),
     webSearch: new DuckDuckGoSearch(),
@@ -1632,5 +1783,6 @@ export function createDefaultApp(cfg: AppConfigT): AppHandle {
         return null;
       }
     },
+    auth,
   });
 }

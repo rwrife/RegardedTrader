@@ -4,6 +4,7 @@ import { BriefingScreen } from './screens/briefing.js';
 import { BriefScreen } from './screens/brief.js';
 import { QuoteScreen } from './screens/quote.js';
 import { TechScreen } from './screens/tech.js';
+import { NewsScreen } from './screens/news.js';
 import { PlanScreen } from './screens/plan.js';
 import { DashboardScreen } from './screens/dashboard.js';
 import { ConfigScreen } from './screens/config.js';
@@ -64,6 +65,8 @@ export function App({ command, args, serverUrl, flags }: AppProps) {
       return <QuoteScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
     case 'tech':
       return <TechScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
+    case 'news':
+      return <NewsScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
     case 'plan':
       return <PlanScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
     case 'dashboard':

@@ -12,3 +12,4 @@ export * as AnalystPrompts from './analyst.js';
 export * as TechnicianPrompts from './technician.js';
 export * as OptionsStrategistPrompts from './optionsStrategist.js';
 export * as TickerValidatorPrompts from './tickerValidator.js';
+export * as NewsScoutPrompts from './newsScout.js';

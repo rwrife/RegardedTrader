@@ -3,8 +3,13 @@ import { loadConfig } from '@regardedtrader/core';
 import { createDefaultApp } from './app.js';
 import { assertLoopbackHost } from './bind-guard.js';
 import { logger } from './logging.js';
+import { parseRuntimeAuth } from './runtimeAuth.js';
 
 const cfg = await loadConfig();
+const envPort = Number(process.env.REGARDEDTRADER_SERVER_PORT ?? '');
+if (Number.isFinite(envPort) && envPort > 0) {
+  cfg.server.port = envPort;
+}
 
 // Defence-in-depth: validate the bind host at runtime (AGENTS.md rule #1).
 // The config layer also enforces this, but env-var overrides or programmatic
@@ -17,7 +22,15 @@ try {
   process.exit(1);
 }
 
-const { app, getConfig } = createDefaultApp(cfg);
+let runtimeAuth;
+try {
+  runtimeAuth = parseRuntimeAuth();
+} catch (e) {
+  logger.error((e as Error).message);
+  process.exit(1);
+}
+
+const { app, getConfig } = createDefaultApp(cfg, runtimeAuth);
 
 app.listen(cfg.server.port, cfg.server.host, () => {
   const c = getConfig();

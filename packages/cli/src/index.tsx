@@ -4,6 +4,7 @@ import { render } from 'ink';
 import meow from 'meow';
 import { App } from './app.js';
 import { Shell } from './shell.js';
+import { runDashboardCommand } from './dashboard-command.js';
 
 const cli = meow(
   `
@@ -27,6 +28,7 @@ const cli = meow(
     brief <SYMBOL>             Full briefing pipeline (analyst + TA + news + strategist)
     quote <SYMBOL>             Quick quote
     tech <SYMBOL>              Technician (TA) commentary for a ticker
+    news <SYMBOL>              Ranked traditional headlines via NewsScout
     plan <SYMBOL>              Interactive options trade-plan wizard
     options <SYMBOL>           Options-chain explorer (calls/puts/greeks)
     chart <SYMBOL>             ASCII sparkline + RSI/MACD indicator readout
@@ -47,6 +49,10 @@ const cli = meow(
     --holidays                 (cal refresh) Refresh holidays source set
     --earnings                 (cal refresh) Refresh earnings source set
     --quotes                   (tail) Include quote ticks in the tail stream
+    --print-url                (dashboard) Print URL and do not open browser
+    --no-open                  (dashboard) Skip auto-open and print URL
+    --port <n>                 (dashboard) Dashboard web port (default 5173)
+    --force                    (dashboard) Replace running dashboard session
 
   Examples
     $ regard
@@ -73,6 +79,10 @@ const cli = meow(
       holidays: { type: 'boolean', default: false },
       earnings: { type: 'boolean', default: false },
       quotes: { type: 'boolean', default: false },
+      printUrl: { type: 'boolean', default: false },
+      noOpen: { type: 'boolean', default: false },
+      port: { type: 'number', default: 5173 },
+      force: { type: 'boolean', default: false },
       help: { type: 'boolean', shortFlag: 'h' },
     },
   },
@@ -84,7 +94,20 @@ if (cli.flags.help) {
   cli.showHelp(0);
 }
 
-if (!command) {
+if (command === 'dashboard') {
+  runDashboardCommand({
+    serverUrl: cli.flags.server,
+    port: cli.flags.port,
+    noOpen: cli.flags.noOpen,
+    printUrl: cli.flags.printUrl,
+    force: cli.flags.force,
+  })
+    .then((code) => process.exit(code))
+    .catch((err: unknown) => {
+      console.error((err as Error).message);
+      process.exit(1);
+    });
+} else if (!command) {
   render(<Shell serverUrl={cli.flags.server} />);
 } else {
   render(

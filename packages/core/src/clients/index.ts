@@ -5,6 +5,7 @@ import { YahooOptionContractRaw } from '../schemas/marketData.js';
 export * from './web-search.js';
 export * from './finnhub.js';
 export * from './registry.js';
+export * from './news.js';
 
 /**
  * Coerce Yahoo's `expiration` field (Date | epoch seconds | ISO-ish string)
