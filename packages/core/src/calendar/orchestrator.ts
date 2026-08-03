@@ -428,14 +428,34 @@ export class CalendarOrchestrator {
     weighted: ReadonlyArray<{ ev: CalendarEvent; weight: number }>,
   ): CalendarEvent[] {
     const winners = new Map<string, { ev: CalendarEvent; weight: number }>();
+    const earningsWinners: Array<{ ev: CalendarEvent; weight: number; etDay: number }> = [];
+
     for (const candidate of weighted) {
-      const key = reconciliationKey(candidate.ev);
-      const current = winners.get(key);
-      if (current === undefined || candidate.weight > current.weight) {
-        winners.set(key, candidate);
+      if (candidate.ev.kind !== 'earnings' || candidate.ev.symbol === null) {
+        const key = reconciliationKey(candidate.ev);
+        const current = winners.get(key);
+        if (current === undefined || candidate.weight > current.weight) {
+          winners.set(key, candidate);
+        }
+        continue;
+      }
+
+      const etDay = etDayNumber(candidate.ev.startUtc);
+      const existingIdx = earningsWinners.findIndex((w) => {
+        if (w.ev.symbol !== candidate.ev.symbol) return false;
+        return Math.abs(w.etDay - etDay) <= 1;
+      });
+      if (existingIdx < 0) {
+        earningsWinners.push({ ...candidate, etDay });
+      } else if (candidate.weight > earningsWinners[existingIdx]!.weight) {
+        earningsWinners[existingIdx] = { ...candidate, etDay };
       }
     }
-    return Array.from(winners.values()).map((w) => w.ev);
+
+    return [
+      ...Array.from(winners.values()).map((w) => w.ev),
+      ...earningsWinners.map((w) => w.ev),
+    ];
   }
 
   private weightFor(id: HolidaySourceId | EarningsSourceId): number {
@@ -457,6 +477,24 @@ function reconciliationKey(ev: CalendarEvent): string {
   const sym = ev.symbol ?? '';
   const dateUtc = ev.startUtc.slice(0, 10);
   return `${ev.kind}|${sym}|${dateUtc}`;
+}
+
+const ET_DAY_FORMAT = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+function etDayNumber(isoUtc: string): number {
+  const parts = ET_DAY_FORMAT.formatToParts(new Date(isoUtc));
+  const year = Number(parts.find((p) => p.type === 'year')?.value);
+  const month = Number(parts.find((p) => p.type === 'month')?.value);
+  const day = Number(parts.find((p) => p.type === 'day')?.value);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    return Number.NaN;
+  }
+  return Date.UTC(year, month - 1, day) / (24 * 60 * 60 * 1000);
 }
 
 function errorMessage(e: unknown): string {

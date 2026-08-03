@@ -559,5 +559,120 @@ describe('CalendarOrchestrator', () => {
       expect(persisted).toHaveLength(1);
       expect(persisted[0]?.title).toBe('Nasdaq wins via override');
     });
+
+    it('uses SEC as the historical anchor and Yahoo for future SEC-vs-Nasdaq disagreements', async () => {
+      const secPast = earningsEvent({
+        symbol: 'NVDA',
+        startUtc: '2026-01-30T21:00:00.000Z',
+        sourceName: 'SEC',
+        title: 'SEC past anchor',
+      });
+      const yahooFuture = earningsEvent({
+        symbol: 'NVDA',
+        startUtc: '2026-10-29T00:30:00.000Z', // 2026-10-28 ET
+        sourceName: 'Yahoo',
+        title: 'Yahoo future winner',
+      });
+      const nasdaqFuture = earningsEvent({
+        symbol: 'NVDA',
+        startUtc: '2026-10-29T13:00:00.000Z', // 2026-10-29 ET (one-day disagreement)
+        sourceName: 'Nasdaq',
+        title: 'Nasdaq future loser',
+      });
+      const orch = new CalendarOrchestrator({
+        store,
+        holidaySources: [],
+        earningsSources: [
+          new FakeEarningsSource('sec', async () => [secPast]),
+          new FakeEarningsSource('yahoo', async () => [yahooFuture]),
+          new FakeEarningsSource('nasdaq', async () => [nasdaqFuture]),
+        ],
+        now: () => NOW,
+      });
+      const result = await orch.refreshEarnings(['NVDA']);
+      expect(result.ok).toBe(true);
+      expect(result.events).toBe(2);
+
+      const persisted = await store.eventsBetween(
+        '2026-01-01T00:00:00.000Z',
+        '2026-12-31T23:59:59.999Z',
+        { symbol: 'NVDA' },
+      );
+      expect(persisted.map((e) => e.title).sort()).toEqual([
+        'SEC past anchor',
+        'Yahoo future winner',
+      ]);
+    });
+
+    it('collapses ET-day overlaps across UTC and DST boundaries', async () => {
+      const yahoo = earningsEvent({
+        symbol: 'AAPL',
+        startUtc: '2026-03-09T00:30:00.000Z', // 2026-03-08 ET (DST edge)
+        sourceName: 'Yahoo',
+        title: 'Yahoo DST boundary',
+      });
+      const nasdaq = earningsEvent({
+        symbol: 'AAPL',
+        startUtc: '2026-03-09T12:00:00.000Z', // 2026-03-09 ET
+        sourceName: 'Nasdaq',
+        title: 'Nasdaq DST boundary',
+      });
+      const orch = new CalendarOrchestrator({
+        store,
+        holidaySources: [],
+        earningsSources: [
+          new FakeEarningsSource('yahoo', async () => [yahoo]),
+          new FakeEarningsSource('nasdaq', async () => [nasdaq]),
+        ],
+        now: () => NOW,
+      });
+      const result = await orch.refreshEarnings(['AAPL']);
+      expect(result.ok).toBe(true);
+      expect(result.events).toBe(1);
+      const persisted = await store.eventsBetween(
+        '2026-03-01T00:00:00.000Z',
+        '2026-03-31T23:59:59.999Z',
+        { symbol: 'AAPL' },
+      );
+      expect(persisted).toHaveLength(1);
+      expect(persisted[0]?.title).toBe('Yahoo DST boundary');
+    });
+
+    it('does not mark stale when all earnings sources fail for one symbol but another symbol succeeds', async () => {
+      const aaplYahoo = earningsEvent({
+        symbol: 'AAPL',
+        startUtc: '2026-05-01T20:00:00.000Z',
+        sourceName: 'Yahoo',
+      });
+      const orch = new CalendarOrchestrator({
+        store,
+        holidaySources: [],
+        earningsSources: [
+          new FakeEarningsSource('sec', async (sym) => {
+            if (sym === 'NVDA') throw new Error('sec nvda down');
+            return [];
+          }),
+          new FakeEarningsSource('yahoo', async (sym) => {
+            if (sym === 'NVDA') throw new Error('yahoo nvda down');
+            if (sym === 'AAPL') return [aaplYahoo];
+            return [];
+          }),
+          new FakeEarningsSource('nasdaq', async (sym) => {
+            if (sym === 'NVDA') throw new Error('nasdaq nvda down');
+            return [];
+          }),
+        ],
+        now: () => NOW,
+      });
+      const result = await orch.refreshEarnings(['NVDA', 'AAPL']);
+      expect(result.ok).toBe(true);
+      expect(result.events).toBe(1);
+      expect(orch.earningsAreStale).toBe(false);
+      expect(result.errors.map((e) => e.source).sort()).toEqual([
+        'nasdaq:NVDA',
+        'sec:NVDA',
+        'yahoo:NVDA',
+      ]);
+    });
   });
 });

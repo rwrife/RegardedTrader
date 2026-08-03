@@ -295,6 +295,42 @@ describe('fetchSecEarnings', () => {
     ).rejects.toThrow(/HTTP 503/);
   });
 
+  it('backs off and retries when SEC rate-limits submissions', async () => {
+    const submissionsFixture = await loadFixture('sec-submissions-AAPL.json');
+    const sleeps: number[] = [];
+    let submissionsCalls = 0;
+    const fetchImpl: FetchLike = async (input) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url !== `${SEC_SUBMISSIONS_BASE}/CIK0000320193.json`) {
+        throw new Error(`unexpected URL: ${url}`);
+      }
+      submissionsCalls += 1;
+      if (submissionsCalls === 1) {
+        return new Response('rate limited', { status: 429 });
+      }
+      return new Response(submissionsFixture, {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    };
+    const client = new PoliteFetchClient({
+      fetchImpl,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+      },
+      random: () => 0,
+    });
+    const events = await fetchSecEarnings({
+      client,
+      symbol: 'AAPL',
+      tickerToCik: new Map([['AAPL', 320193]]),
+      now: () => Date.parse(FETCHED_AT),
+    });
+    expect(events.length).toBeGreaterThan(0);
+    expect(submissionsCalls).toBe(2);
+    expect(sleeps).toContain(250);
+  });
+
   it('throws on invalid JSON from ticker-map endpoint', async () => {
     const fetchImpl: FetchLike = async (input) => {
       const url = typeof input === 'string' ? input : input.toString();
