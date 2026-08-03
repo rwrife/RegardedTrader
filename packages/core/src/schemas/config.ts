@@ -87,8 +87,62 @@ export const PollingSentimentSourceConfig = z
   });
 export type PollingSentimentSourceConfig = z.infer<typeof PollingSentimentSourceConfig>;
 
+export const PollingCadenceWindow = z.object({
+  quote: z.number().int().positive(),
+  options: z.number().int().positive(),
+  news: z.number().int().positive(),
+});
+export type PollingCadenceWindow = z.infer<typeof PollingCadenceWindow>;
+
+export const PollingCadenceConfig = z
+  .object({
+    rth: PollingCadenceWindow.default({ quote: 30_000, options: 300_000, news: 600_000 }),
+    pre: PollingCadenceWindow.default({ quote: 60_000, options: 600_000, news: 900_000 }),
+    post: PollingCadenceWindow.default({ quote: 60_000, options: 600_000, news: 900_000 }),
+    closed: PollingCadenceWindow.default({ quote: 300_000, options: 1_800_000, news: 1_800_000 }),
+  })
+  .default({
+    rth: { quote: 30_000, options: 300_000, news: 600_000 },
+    pre: { quote: 60_000, options: 600_000, news: 900_000 },
+    post: { quote: 60_000, options: 600_000, news: 900_000 },
+    closed: { quote: 300_000, options: 1_800_000, news: 1_800_000 },
+  });
+export type PollingCadenceConfig = z.infer<typeof PollingCadenceConfig>;
+
+export const PollingSourcesConfig = z
+  .object({
+    news: z
+      .object({
+        yahoo: z.boolean().default(true),
+        nasdaq: z.boolean().default(true),
+        googleNews: z.boolean().default(true),
+      })
+      .default({ yahoo: true, nasdaq: true, googleNews: true }),
+  })
+  .default({
+    news: { yahoo: true, nasdaq: true, googleNews: true },
+  });
+export type PollingSourcesConfig = z.infer<typeof PollingSourcesConfig>;
+
+export const PollingRetentionDaysConfig = z
+  .object({
+    quote: z.number().int().positive().default(30),
+    options: z.number().int().positive().default(7),
+    news: z.number().int().positive().default(90),
+  })
+  .default({
+    quote: 30,
+    options: 7,
+    news: 90,
+  });
+export type PollingRetentionDaysConfig = z.infer<typeof PollingRetentionDaysConfig>;
+
 export const PollingConfig = z
   .object({
+    enabled: z.boolean().default(true),
+    cadence: PollingCadenceConfig,
+    sources: PollingSourcesConfig,
+    retentionDays: PollingRetentionDaysConfig,
     sentimentSources: z
       .object({
         reddit: PollingSentimentSourceConfig,
@@ -128,11 +182,31 @@ export const PollingConfig = z
         readOnly: z.boolean().default(true),
         cadenceMs: z
           .object({
-            rth: z.number().int().positive().default(15 * 60 * 1000),
-            pre: z.number().int().positive().default(60 * 60 * 1000),
-            post: z.number().int().positive().default(60 * 60 * 1000),
-            closed: z.number().int().positive().default(4 * 60 * 60 * 1000),
-            holiday: z.number().int().positive().default(4 * 60 * 60 * 1000),
+            rth: z
+              .number()
+              .int()
+              .positive()
+              .default(15 * 60 * 1000),
+            pre: z
+              .number()
+              .int()
+              .positive()
+              .default(60 * 60 * 1000),
+            post: z
+              .number()
+              .int()
+              .positive()
+              .default(60 * 60 * 1000),
+            closed: z
+              .number()
+              .int()
+              .positive()
+              .default(4 * 60 * 60 * 1000),
+            holiday: z
+              .number()
+              .int()
+              .positive()
+              .default(4 * 60 * 60 * 1000),
           })
           .default({
             rth: 15 * 60 * 1000,
@@ -145,6 +219,17 @@ export const PollingConfig = z
       .optional(),
   })
   .default({
+    enabled: true,
+    cadence: {
+      rth: { quote: 30_000, options: 300_000, news: 600_000 },
+      pre: { quote: 60_000, options: 600_000, news: 900_000 },
+      post: { quote: 60_000, options: 600_000, news: 900_000 },
+      closed: { quote: 300_000, options: 1_800_000, news: 1_800_000 },
+    },
+    sources: {
+      news: { yahoo: true, nasdaq: true, googleNews: true },
+    },
+    retentionDays: { quote: 30, options: 7, news: 90 },
     sentimentSources: {
       reddit: { enabled: true, weight: 1 },
       stocktwits: { enabled: true, weight: 0.7 },

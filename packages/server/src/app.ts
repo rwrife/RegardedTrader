@@ -36,7 +36,6 @@ import {
   computeIndicators,
   MentionStore,
   SnapshotStore,
-  Recommendation,
   RecommendationStore,
   AIRecommender,
   RecommenderOrchestrator,
@@ -74,6 +73,16 @@ import {
 } from './calendarService.js';
 import { PollingCoordinator } from './polling.js';
 
+type DeepPartial<T> = {
+  [K in keyof T]?: T[K] extends readonly (infer U)[]
+    ? readonly DeepPartial<U>[]
+    : T[K] extends (infer U)[]
+      ? DeepPartial<U>[]
+      : T[K] extends object
+        ? DeepPartial<T[K]>
+        : T[K];
+};
+
 function addDaysEt(dateEt: string, days: number): string {
   const d = new Date(`${dateEt}T00:00:00.000Z`);
   d.setUTCDate(d.getUTCDate() + days);
@@ -98,7 +107,7 @@ export interface AppDeps {
   watchlist: WatchlistStore;
   mentions?: MentionStore;
   briefings?: BriefingStorePort;
-  initialConfig: Partial<AppConfigT>;
+  initialConfig: DeepPartial<AppConfigT>;
   /**
    * Built-in live-quote source used when no provider is configured (or when
    * the configured provider is `yahoo`). Production wires the lazy
@@ -146,6 +155,7 @@ export interface AppHandle {
   getConfig: () => AppConfigT;
   emitSentimentUpdate: (symbol: string, snapshot: SentimentSnapshot | null) => void;
   emitRecommendationUpdate: (symbol: string, recommendation: RecommendationValue) => void;
+  shutdown: (timeoutMs?: number) => Promise<void>;
 }
 
 /**
@@ -158,8 +168,7 @@ export function createApp(deps: AppDeps): AppHandle {
   const mentionStore = deps.mentions ?? new MentionStore();
   const authToken = process.env.REGARDEDTRADER_AUTH_TOKEN?.trim() || null;
   const briefings = deps.briefings ?? new BriefingStore();
-  const snapshotStore =
-    deps.snapshots ?? new SnapshotStore({ root: mentionStore.rootDir });
+  const snapshotStore = deps.snapshots ?? new SnapshotStore({ root: mentionStore.rootDir });
   const recommendationStore =
     deps.recommendations ?? new RecommendationStore({ root: mentionStore.rootDir });
 
@@ -212,9 +221,7 @@ export function createApp(deps: AppDeps): AppHandle {
     const provider = config.providers[activeId];
     if (!provider) return { provider: activeId, model: 'unknown' };
     const model =
-      provider.kind === 'openai-compatible'
-        ? provider.model
-        : provider.model ?? provider.backend;
+      provider.kind === 'openai-compatible' ? provider.model : (provider.model ?? provider.backend);
     return { provider: activeId, model };
   }
 
@@ -291,15 +298,23 @@ export function createApp(deps: AppDeps): AppHandle {
   }
 
   let orchestrator = makeOrchestrator();
-  const polling = new PollingCoordinator(
-    deps.watchlist,
-    () => registry.client,
-    {
-      quoteEveryMs: deps.polling?.quoteEveryMs,
-      newsEveryMs: deps.polling?.newsEveryMs,
-    },
-  );
-  polling.start();
+  const polling = new PollingCoordinator(deps.watchlist, () => registry.client, {
+    quoteEveryMs: deps.polling?.quoteEveryMs ?? cfg.polling.cadence.rth.quote,
+    newsEveryMs: deps.polling?.newsEveryMs ?? cfg.polling.cadence.rth.news,
+  });
+  function applyPollingRuntimeConfig(): void {
+    polling.updateCadence({
+      quoteEveryMs: deps.polling?.quoteEveryMs ?? cfg.polling.cadence.rth.quote,
+      newsEveryMs: deps.polling?.newsEveryMs ?? cfg.polling.cadence.rth.news,
+    });
+    if (cfg.polling.enabled) {
+      polling.start();
+      void polling.refreshSymbolsFromWatchlist();
+      return;
+    }
+    polling.stop();
+  }
+  applyPollingRuntimeConfig();
   let recommendationOrchestrator = makeRecommendationOrchestrator();
   function refreshOrchestrators(): void {
     orchestrator = makeOrchestrator();
@@ -670,12 +685,14 @@ export function createApp(deps: AppDeps): AppHandle {
           inflight.set(symbol, pending);
           // Always clear the in-flight slot so a future failure doesn't
           // permanently poison the symbol.
-          pending.finally(() => {
-            if (inflight.get(symbol) === pending) inflight.delete(symbol);
-          }).catch(() => {
-            // The actual rejection is observed below via `await pending`;
-            // swallow it on this side-chain to avoid an unhandled rejection.
-          });
+          pending
+            .finally(() => {
+              if (inflight.get(symbol) === pending) inflight.delete(symbol);
+            })
+            .catch(() => {
+              // The actual rejection is observed below via `await pending`;
+              // swallow it on this side-chain to avoid an unhandled rejection.
+            });
         }
         try {
           const parsed = await pending;
@@ -830,7 +847,10 @@ export function createApp(deps: AppDeps): AppHandle {
           return;
         }
         const r = await validator.validate(raw.trim());
-        if (r.ok) await deps.watchlist.upsert(r.profile);
+        if (r.ok) {
+          await deps.watchlist.upsert(r.profile);
+          polling.registerSymbol(r.profile.symbol);
+        }
         results.push(r);
       }
       res.json({ results });
@@ -918,6 +938,7 @@ export function createApp(deps: AppDeps): AppHandle {
         };
 
         await deps.watchlist.upsert(fullProfile);
+        polling.registerSymbol(fullProfile.symbol);
         results.push({ ok: true, profile: fullProfile, cached: false });
       }
 
@@ -988,6 +1009,7 @@ export function createApp(deps: AppDeps): AppHandle {
         return;
       }
       await deps.watchlist.upsert(result.profile);
+      polling.registerSymbol(result.profile.symbol);
       res.json(result);
     } catch (e) {
       next(e);
@@ -1007,6 +1029,7 @@ export function createApp(deps: AppDeps): AppHandle {
     try {
       const sym = Ticker.parse(req.params.sym.toUpperCase());
       const removed = await deps.watchlist.remove(sym);
+      if (removed) polling.unregisterSymbol(sym);
       res.json({ ok: true, removed });
     } catch (e) {
       next(e);
@@ -1035,7 +1058,10 @@ export function createApp(deps: AppDeps): AppHandle {
     try {
       const rawSymbols =
         typeof req.query.symbols === 'string' && req.query.symbols.trim().length > 0
-          ? req.query.symbols.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean)
+          ? req.query.symbols
+              .split(',')
+              .map((s) => s.trim().toUpperCase())
+              .filter(Boolean)
           : (await deps.watchlist.list()).map((e) => e.profile.symbol.toUpperCase());
 
       res.setHeader('Content-Type', 'text/event-stream');
@@ -1146,9 +1172,12 @@ export function createApp(deps: AppDeps): AppHandle {
       const keepAlive = setInterval(() => {
         res.write(': ping\n\n');
       }, 20_000);
-      const directRefresh = setInterval(() => {
-        void pollTail();
-      }, includeQuotes ? 15_000 : 30_000);
+      const directRefresh = setInterval(
+        () => {
+          void pollTail();
+        },
+        includeQuotes ? 15_000 : 30_000,
+      );
       req.on('close', () => {
         clearInterval(directRefresh);
         clearInterval(keepAlive);
@@ -1322,7 +1351,11 @@ export function createApp(deps: AppDeps): AppHandle {
       const toEt = q.to ?? addDaysEt(fromEt, 14);
       const range = validateDateRange(fromEt, toEt);
       await calendar.maybeRefreshForRead([]);
-      const window = await calendar.getWindow({ fromEt: range.fromEt, days: range.days, symbols: [] });
+      const window = await calendar.getWindow({
+        fromEt: range.fromEt,
+        days: range.days,
+        symbols: [],
+      });
       const events = window.events.filter(
         (ev) => ev.kind === 'market_holiday' || ev.kind === 'market_early_close',
       );
@@ -1355,11 +1388,13 @@ export function createApp(deps: AppDeps): AppHandle {
       const toEt = q.to ?? addDaysEt(fromEt, 30);
       validateDateRange(fromEt, toEt);
       await calendar.maybeRefreshForRead([q.symbol]);
-      const events = (await calendar.getSymbolEarnings({
-        symbol: q.symbol,
-        includePast: true,
-        includeUpcoming: true,
-      })).filter((ev) => {
+      const events = (
+        await calendar.getSymbolEarnings({
+          symbol: q.symbol,
+          includePast: true,
+          includeUpcoming: true,
+        })
+      ).filter((ev) => {
         const dateEt = toEtDateKey(ev.startUtc);
         return dateEt >= fromEt && dateEt < toEt;
       });
@@ -1397,7 +1432,10 @@ export function createApp(deps: AppDeps): AppHandle {
       const q = CalendarWindowQuery.parse(req.query);
       const fromEt =
         q.from && q.from !== 'today'
-          ? z.string().regex(/^\d{4}-\d{2}-\d{2}$/).parse(q.from)
+          ? z
+              .string()
+              .regex(/^\d{4}-\d{2}-\d{2}$/)
+              .parse(q.from)
           : todayEt();
       const watch = await deps.watchlist.list();
       const symbols = watch.map((w) => w.profile.symbol);
@@ -1907,6 +1945,7 @@ export function createApp(deps: AppDeps): AppHandle {
       cfg = next;
       refreshOrchestrators();
       rebuildRegistry();
+      applyPollingRuntimeConfig();
       res.json({ ok: true, aiConfigured: orchestrator !== null, config: redactConfig(cfg) });
     } catch (e) {
       next(e);
@@ -2000,13 +2039,14 @@ export function createApp(deps: AppDeps): AppHandle {
    * feedback that their key works.
    */
   app.post('/config/market-data/test', async (req, res) => {
-    const bodyParsed = z.object({
-      symbol: z.string().optional(),
-      providerId: z.string().optional(),
-    }).safeParse(req.body);
-    const probeSymbol = (bodyParsed.success && bodyParsed.data.symbol)
-      ? bodyParsed.data.symbol.toUpperCase()
-      : 'AAPL';
+    const bodyParsed = z
+      .object({
+        symbol: z.string().optional(),
+        providerId: z.string().optional(),
+      })
+      .safeParse(req.body);
+    const probeSymbol =
+      bodyParsed.success && bodyParsed.data.symbol ? bodyParsed.data.symbol.toUpperCase() : 'AAPL';
     const testProviderId = bodyParsed.success ? bodyParsed.data.providerId : undefined;
 
     let source: LiveQuoteSource | null;
@@ -2022,9 +2062,10 @@ export function createApp(deps: AppDeps): AppHandle {
         { providers: { [testProviderId]: testProvCfg }, activeProvider: testProviderId },
         { fallback: deps.market },
       );
-      source = testReg.liveQuoteSource != null
-        ? (testReg.liveQuoteSource as unknown as LiveQuoteSource)
-        : (deps.liveQuoteSource ?? null);
+      source =
+        testReg.liveQuoteSource != null
+          ? (testReg.liveQuoteSource as unknown as LiveQuoteSource)
+          : (deps.liveQuoteSource ?? null);
       resolvedId = testProviderId;
     } else {
       source = resolveLiveQuoteSource();
@@ -2032,7 +2073,10 @@ export function createApp(deps: AppDeps): AppHandle {
     }
 
     if (!source) {
-      res.json({ ok: false, error: 'No market-data provider configured. Add one in Settings → Market Data.' });
+      res.json({
+        ok: false,
+        error: 'No market-data provider configured. Add one in Settings → Market Data.',
+      });
       return;
     }
     try {
@@ -2121,9 +2165,7 @@ export function createApp(deps: AppDeps): AppHandle {
    *    can hang on auth flows; the timeout keeps the UI snappy.
    */
   app.post('/config/test', async (req, res) => {
-    const body = z
-      .object({ providerId: z.string().min(1).optional() })
-      .safeParse(req.body ?? {});
+    const body = z.object({ providerId: z.string().min(1).optional() }).safeParse(req.body ?? {});
     if (!body.success) {
       const result: ConfigTestResultT = {
         ok: false,
@@ -2234,7 +2276,13 @@ export function createApp(deps: AppDeps): AppHandle {
     },
   );
 
-  return { app, getConfig: () => cfg, emitSentimentUpdate, emitRecommendationUpdate };
+  return {
+    app,
+    getConfig: () => cfg,
+    emitSentimentUpdate,
+    emitRecommendationUpdate,
+    shutdown: (timeoutMs = 5_000) => polling.stopGracefully(timeoutMs),
+  };
 }
 
 function makePlanId(symbol: string, index: number): string {
@@ -2242,10 +2290,7 @@ function makePlanId(symbol: string, index: number): string {
 }
 
 /** Default factory used by the entrypoint. */
-export function createDefaultApp(
-  cfg: AppConfigT,
-  auth?: AppDeps['auth'],
-): AppHandle {
+export function createDefaultApp(cfg: AppConfigT, auth?: AppDeps['auth']): AppHandle {
   return createApp({
     market: new YahooClient(),
     webSearch: new DuckDuckGoSearch(),
@@ -2265,9 +2310,7 @@ export function createDefaultApp(
       // `https://query2.finance.yahoo.com/v7/finance/quote?symbols=<SYM>`
       // request, and Yahoo throttles aggressively per client.
       const mod = await import('yahoo-finance2');
-      return (await mod.default.quoteCombine(symbol)) as Awaited<
-        ReturnType<LiveQuoteSource>
-      >;
+      return (await mod.default.quoteCombine(symbol)) as Awaited<ReturnType<LiveQuoteSource>>;
     },
     llmFromConfig: (c) => {
       try {
