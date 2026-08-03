@@ -5,7 +5,13 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
-import { WatchlistStore, type LLM, type WebSearch } from '@regardedtrader/core';
+import {
+  BriefingStore,
+  WatchlistStore,
+  type BriefingStorePort,
+  type LLM,
+  type WebSearch,
+} from '@regardedtrader/core';
 import { createApp } from './app.js';
 import { SERVER_VERSION } from './version.js';
 
@@ -566,8 +572,11 @@ describe('Origin loopback guard (#128)', () => {
 });
 
 describe('POST /briefing/:symbol (#138)', () => {
-  async function makeBriefingApp(): Promise<void> {
+  async function makeBriefingApp(opts?: {
+    briefings?: BriefingStorePort;
+  }): Promise<void> {
     const watchlist = new WatchlistStore({ path: join(dir, 'watchlist.json') });
+    const briefings = opts?.briefings ?? new BriefingStore({ root: join(dir, 'briefings') });
     // Pre-seed NVDA so requireKnownSymbol succeeds without going through the
     // validator (which would also hit our fake LLM).
     await watchlist.upsert({
@@ -589,6 +598,7 @@ describe('POST /briefing/:symbol (#138)', () => {
       },
       webSearch: fakeWebSearch(),
       watchlist,
+      briefings,
       initialConfig: {
         version: 1,
         providers: { fake: { kind: 'openai-compatible', label: 'fake', baseUrl: 'http://x/v1', model: 'm' } },
@@ -648,6 +658,57 @@ describe('POST /briefing/:symbol (#138)', () => {
       body: JSON.stringify({}),
     });
     expect(r.status).toBe(422);
+  });
+
+  it('persists briefing history and can fetch by id', async () => {
+    await makeBriefingApp();
+    const created = await fetch(`${baseUrl}/briefing/NVDA`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ thesis: 'bullish into earnings', maxLossUsd: 500 }),
+    });
+    expect(created.status).toBe(200);
+
+    const history = await fetch(`${baseUrl}/briefing/NVDA/history?limit=5`);
+    expect(history.status).toBe(200);
+    const historyJson = (await history.json()) as {
+      symbol: string;
+      items: Array<{ id: string }>;
+    };
+    expect(historyJson.symbol).toBe('NVDA');
+    expect(historyJson.items.length).toBeGreaterThan(0);
+
+    const item = historyJson.items[0];
+    expect(item?.id).toContain('NVDA__');
+    const byId = await fetch(`${baseUrl}/briefing/${encodeURIComponent(item!.id)}`);
+    expect(byId.status).toBe(200);
+    const briefing = (await byId.json()) as { symbol: string; strategist?: { thesis: string } };
+    expect(briefing.symbol).toBe('NVDA');
+    expect(briefing.strategist?.thesis).toBe('bullish into earnings');
+  });
+
+  it('returns briefing even if persistence fails (best-effort writes)', async () => {
+    await makeBriefingApp({
+      briefings: {
+        async saveBriefing() {
+          throw new Error('disk full');
+        },
+        async listBriefings() {
+          return [];
+        },
+        async getBriefing() {
+          return null;
+        },
+      },
+    });
+    const r = await fetch(`${baseUrl}/briefing/NVDA`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(r.status).toBe(200);
+    const j = (await r.json()) as { symbol: string };
+    expect(j.symbol).toBe('NVDA');
   });
 });
 
