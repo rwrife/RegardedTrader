@@ -23,6 +23,7 @@ _Last reviewed: 2026-08-03_
 | Full briefing pipeline (analyst + TA + news + strategist + POST overrides) | `regard brief <SYM> [--thesis ... --max-loss N --expiry YYYY-MM-DD]` | `#/brief/:symbol` | ✅ |
 | Technician (TA) commentary | `regard tech <SYM>` | `Tech` tab on `/` | ✅ |
 | NewsScout ranked headlines | `regard news <SYM>` | `News` tab on `/` (live: `GET /news/:symbol`) | ✅ |
+| Sentiment aggregate + mentions feed | `regard sentiment <SYM> [--window=30m] [--watch]` / `regard mentions <SYM> [--source=reddit] [--limit=50]` | `Sentiment` tab on `/` (live: `GET /sentiment/:symbol/latest`, `GET /mentions/:symbol`) | ✅ |
 | Options trade-plan wizard | `regard plan <SYM>` | `#/plan/:sym` | ✅ |
 | Paper trading (simulated only) | `regard paper submit <planId> --paper` / `regard paper positions` / `regard paper orders` | `#/paper` | ✅ |
 | Trade-plan risk graph + risk violations panel | `regard plan <SYM>` (textual break-even + violations) | `#/plan/:sym` (SVG risk graph + violations chip panel) | ✅ |

@@ -14,6 +14,7 @@ import { DashboardScreen } from './screens/dashboard.js';
 import { PaperScreen } from './screens/paper.js';
 import { ChartScreen } from './screens/chart.js';
 import { TailScreen, PollingStatusScreen, PollingToggleScreen } from './screens/polling.js';
+import { MentionsScreen, SentimentScreen } from './screens/sentiment.js';
 
 /**
  * Fancy modal-style shell inspired by Copilot CLI / Claude Code. Everything is
@@ -30,6 +31,8 @@ type SlashId =
   | 'quote'
   | 'tech'
   | 'news'
+  | 'sentiment'
+  | 'mentions'
   | 'plan'
   | 'chart'
   | 'add'
@@ -58,6 +61,8 @@ const COMMANDS: SlashCommand[] = [
   { id: 'quote',    name: '/quote',    usage: '/quote <SYM>',    blurb: 'Quick price snapshot',                    needsArgs: true },
   { id: 'tech',     name: '/tech',     usage: '/tech <SYM>',     blurb: 'Technician (TA) commentary',              needsArgs: true },
   { id: 'news',     name: '/news',     usage: '/news <SYM>',     blurb: 'Ranked traditional headlines (NewsScout)', needsArgs: true },
+  { id: 'sentiment',name: '/sentiment',usage: '/sentiment <SYM> [--window=30m] [--watch]', blurb: 'Sentiment score + source breakdown', needsArgs: true },
+  { id: 'mentions', name: '/mentions', usage: '/mentions <SYM> [--source=reddit] [--limit=50]', blurb: 'Recent mentions list (no usernames)', needsArgs: true },
   { id: 'plan',     name: '/plan',     usage: '/plan <SYM>',     blurb: 'Interactive options trade-plan wizard',   needsArgs: true },
   { id: 'chart',    name: '/chart',    usage: '/chart <SYM>',    blurb: 'ASCII sparkline + RSI/MACD readout',      needsArgs: true },
   { id: 'add',      name: '/add',      usage: '/add <SYM>...',   blurb: 'Validate ticker(s) and add to watchlist', needsArgs: true },
@@ -294,6 +299,35 @@ function RunningBody({
       return <TechScreen symbol={(args[0] ?? '').toUpperCase()} serverUrl={serverUrl} onDone={onDone} />;
     case 'news':
       return <NewsScreen symbol={(args[0] ?? '').toUpperCase()} serverUrl={serverUrl} onDone={onDone} />;
+    case 'sentiment': {
+      const symbol = (args.find((a) => !a.startsWith('--')) ?? '').toUpperCase();
+      const windowArg = args.find((a) => a.startsWith('--window='))?.slice('--window='.length);
+      const watch = args.includes('--watch');
+      return (
+        <SentimentScreen
+          symbol={symbol}
+          serverUrl={serverUrl}
+          window={windowArg}
+          watch={watch}
+          onDone={watch ? undefined : onDone}
+        />
+      );
+    }
+    case 'mentions': {
+      const symbol = (args.find((a) => !a.startsWith('--')) ?? '').toUpperCase();
+      const source = args.find((a) => a.startsWith('--source='))?.slice('--source='.length);
+      const limitRaw = args.find((a) => a.startsWith('--limit='))?.slice('--limit='.length);
+      const limit = limitRaw ? Number(limitRaw) : undefined;
+      return (
+        <MentionsScreen
+          symbol={symbol}
+          serverUrl={serverUrl}
+          source={source}
+          limit={limit}
+          onDone={onDone}
+        />
+      );
+    }
     case 'plan':
       return <PlanScreen symbol={(args[0] ?? '').toUpperCase()} serverUrl={serverUrl} onDone={onDone} />;
     case 'chart':
