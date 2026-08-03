@@ -158,7 +158,13 @@ export class AIRecommender implements Recommender {
     const first = await safeComplete(this.llm, SYSTEM_PROMPT, user);
     const firstParsed = tryParse(first);
     if (firstParsed.ok) {
-      return assembleRecommendation(symbol, firstParsed.value, stamp, this.now);
+      return assembleRecommendation(
+        symbol,
+        firstParsed.value,
+        stamp,
+        this.now,
+        context.risk.maxLossUsd,
+      );
     }
 
     // Single fix-up retry, telling the model exactly what went wrong shape-wise
@@ -167,11 +173,23 @@ export class AIRecommender implements Recommender {
     const second = await safeComplete(this.llm, SYSTEM_PROMPT, retryUser);
     const secondParsed = tryParse(second);
     if (secondParsed.ok) {
-      return assembleRecommendation(symbol, secondParsed.value, stamp, this.now);
+      return assembleRecommendation(
+        symbol,
+        secondParsed.value,
+        stamp,
+        this.now,
+        context.risk.maxLossUsd,
+      );
     }
 
     // Two strikes → fail safe. Hold everything, flag the failure mode.
-    return assembleRecommendation(symbol, holdEverything(), stamp, this.now);
+    return assembleRecommendation(
+      symbol,
+      holdEverything(),
+      stamp,
+      this.now,
+      context.risk.maxLossUsd,
+    );
   }
 }
 
@@ -253,14 +271,16 @@ function assembleRecommendation(
   output: RecommenderLLMOutput,
   stamp: RecommenderStamp,
   now: () => Date,
+  maxLossUsd?: number,
 ): Recommendation {
+  const sanitized = sanitizeOutput(output, maxLossUsd);
   const candidate: Recommendation = {
     symbol,
     generatedAt: stamp.generatedAt ?? now().toISOString(),
     asOf: stamp.asOf,
-    equity: output.equity,
-    options: output.options,
-    riskFlags: dedupeFlags(output.riskFlags),
+    equity: sanitized.equity,
+    options: sanitized.options,
+    riskFlags: dedupeFlags(sanitized.riskFlags),
     sources: [...stamp.sources],
     modelInfo: { ...stamp.modelInfo, ruleVersion: RECOMMENDER_RULE_VERSION },
     // Required, constant, owned by the schema layer. We never let a model
@@ -295,4 +315,89 @@ function dedupeFlags(flags: readonly string[]): string[] {
     out.push(norm);
   }
   return out;
+}
+
+const FORBIDDEN_VERDICT_TERMS: ReadonlyArray<RegExp> = [
+  /\bguaranteed\b/gi,
+  /\brisk[- ]?free\b/gi,
+];
+
+function sanitizeOutput(
+  output: RecommenderLLMOutput,
+  maxLossUsd?: number,
+): RecommenderLLMOutput {
+  return {
+    equity: sanitizeVerdict(output.equity, maxLossUsd),
+    options: {
+      coveredCall: output.options.coveredCall
+        ? sanitizeVerdict(output.options.coveredCall, maxLossUsd)
+        : null,
+      coveredPut: output.options.coveredPut
+        ? sanitizeVerdict(output.options.coveredPut, maxLossUsd)
+        : null,
+      nakedCall: output.options.nakedCall
+        ? sanitizeVerdict(output.options.nakedCall, maxLossUsd)
+        : null,
+      nakedPut: output.options.nakedPut
+        ? sanitizeVerdict(output.options.nakedPut, maxLossUsd)
+        : null,
+    },
+    riskFlags: output.riskFlags,
+  };
+}
+
+function sanitizeVerdict(verdict: Verdict, maxLossUsd?: number): Verdict {
+  return {
+    ...verdict,
+    rationale: sanitizeRationale(verdict.rationale, maxLossUsd),
+  };
+}
+
+function sanitizeRationale(text: string, maxLossUsd?: number): string {
+  let out = text;
+  for (const rx of FORBIDDEN_VERDICT_TERMS) {
+    out = out.replace(rx, 'uncertain');
+  }
+  if (typeof maxLossUsd === 'number' && Number.isFinite(maxLossUsd) && maxLossUsd > 0) {
+    out = clampOversizedDollarGuidance(out, maxLossUsd);
+  }
+  return out.length <= 600 ? out : out.slice(0, 600);
+}
+
+function clampOversizedDollarGuidance(text: string, capUsd: number): string {
+  return text
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => {
+      const exceeds = findDollarValues(sentence).some((value) => value > capUsd);
+      if (!exceeds) return sentence;
+      if (/\b(size|position|risk|allocate|max loss)\b/i.test(sentence)) {
+        return `Keep max loss at or below $${capUsd}.`;
+      }
+      return sentence.replace(
+        /\$\s*[0-9][0-9,]*(?:\.[0-9]+)?/g,
+        (match) => {
+          const parsed = parseDollarAmount(match);
+          return parsed !== null && parsed > capUsd ? `$${capUsd}` : match;
+        },
+      );
+    })
+    .join(' ')
+    .trim();
+}
+
+function findDollarValues(text: string): number[] {
+  const values: number[] = [];
+  const matches = text.match(/\$\s*[0-9][0-9,]*(?:\.[0-9]+)?/g) ?? [];
+  for (const m of matches) {
+    const parsed = parseDollarAmount(m);
+    if (parsed !== null) values.push(parsed);
+  }
+  return values;
+}
+
+function parseDollarAmount(raw: string): number | null {
+  const cleaned = raw.replace(/[^\d.]/g, '');
+  if (!cleaned) return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
 }

@@ -58,6 +58,7 @@ export const DEFAULT_SOURCE_WEIGHTS = Object.freeze({
   hn: 0.4,
   cnn: 1.2,
   'google-news': 1.1,
+  googleNewsOpinion: 1.1,
 }) satisfies Record<SentimentSource, number>;
 
 /** Lookback window (ms) per market state. Defaults per the issue spec. */
@@ -93,6 +94,7 @@ export const SentimentAggregatorWeights = z
     hn: z.number().nonnegative(),
     cnn: z.number().nonnegative(),
     'google-news': z.number().nonnegative(),
+    googleNewsOpinion: z.number().nonnegative(),
   })
   .partial();
 export type SentimentAggregatorWeights = z.infer<typeof SentimentAggregatorWeights>;

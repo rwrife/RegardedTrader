@@ -11,6 +11,7 @@ import { AddScreen } from './screens/add.js';
 import { ListScreen, RemoveScreen } from './screens/watchlist.js';
 import { WatchScreen } from './screens/watch.js';
 import { OptionsScreen } from './screens/options.js';
+import { ChartScreen } from './screens/chart.js';
 
 export interface AppProps {
   command: string;
@@ -34,6 +35,8 @@ export function App({ command, args, serverUrl, flags }: AppProps) {
           expiry={flags?.expiry}
         />
       );
+    case 'chart':
+      return <ChartScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
     case 'briefing':
       return <BriefingScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
     case 'brief':

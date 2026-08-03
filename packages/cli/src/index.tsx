@@ -22,6 +22,7 @@ const cli = meow(
     tech <SYMBOL>              Technician (TA) commentary for a ticker
     plan <SYMBOL>              Interactive options trade-plan wizard
     options <SYMBOL>           Options-chain explorer (calls/puts/greeks)
+    chart <SYMBOL>             ASCII sparkline + RSI/MACD indicator readout
     config [show|test [id]]    Configure AI providers, risk caps, server
     dashboard                  Open the local web dashboard
 
@@ -39,6 +40,7 @@ const cli = meow(
     $ regard rm NVDA
     $ regard config
     $ regard briefing NVDA
+    $ regard chart NVDA
 `,
   {
     importMeta: import.meta,

@@ -46,6 +46,12 @@ export function QuoteHeader({
           <div className="flex items-baseline gap-3">
             <span className="text-xl font-semibold tracking-tight">{t.symbol}</span>
             <span className="text-xs text-fg-muted">{t.name}</span>
+            <a
+              href={`#/ticker/${encodeURIComponent(t.symbol)}`}
+              className="text-[11px] text-ai hover:underline"
+            >
+              full chart
+            </a>
           </div>
           <span className={`num text-2xl ${toneText}`}>${price.toFixed(2)}</span>
           <span className={`num text-sm ${toneText}`}>

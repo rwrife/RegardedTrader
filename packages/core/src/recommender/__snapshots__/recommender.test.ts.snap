@@ -1,0 +1,132 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`AIRecommender > snapshot: prompt + canned output stays stable and schema-valid 1`] = `
+{
+  "json": true,
+  "system": "You are RegardedTrader's research recommender.
+Given a structured RecommendationContext for ONE symbol, produce a single
+JSON object with batched verdicts for the equity and four options stances.
+
+Output STRICT JSON ONLY. No prose, no markdown, no code fences, no
+explanation of your reasoning. Do NOT include any chain-of-thought.
+
+Schema (every field required, exact key names):
+{
+  "equity": {
+    "action": "BUY" | "HOLD" | "SELL" | "AVOID",
+    "conviction": number in [0, 1],
+    "rationale": string up to 600 chars (concise, scannable),
+    "signals":      [ { "name": string, "value": number|string, "contribution": number in [-1, 1] } ],
+    "contraSignals":[ { "name": string, "value": number|string, "contribution": number in [-1, 1] } ]
+  },
+  "options": {
+    "coveredCall": Verdict | null,
+    "coveredPut":  Verdict | null,
+    "nakedCall":   Verdict | null,
+    "nakedPut":    Verdict | null
+  },
+  "riskFlags": [ string ]
+}
+
+Guidance:
+- Use only the data in the provided context. Do not invent prices, dates, or
+  news. If a section is null or stale, lean toward HOLD and add a flag.
+- "contribution" is the signed weight of a signal toward the action. Positive
+  pushes toward BUY for equity / open-the-trade for options.
+- For each options stance, emit a Verdict if the chain has data; emit null if
+  the structure is not actionable given the context (e.g. no chain).
+- Risk flags are short kebab-case tokens (e.g. "low-liquidity", "stale-quote",
+  "wide-spread", "earnings-blackout"). Do not duplicate.
+- Never recommend naked shorts as high-conviction. The orchestrator may strip
+  naked stances entirely; emitting them is fine — they will be gated server-side.
+- Rationale is plain English, no disclaimers (the system appends them). No
+  step-by-step. State the call and the top 1-3 reasons.",
+  "user": "Symbol: NVDA
+
+RecommendationContext (JSON):
+{
+  "symbol": "NVDA",
+  "risk": {
+    "forbidNakedShorts": true,
+    "maxLossUsd": 500
+  },
+  "quote": {
+    "stale": false,
+    "asOf": "2026-06-10T15:00:00.000Z",
+    "last": {
+      "price": 950,
+      "change": 5,
+      "changePercent": 0.5,
+      "volume": 1000000
+    }
+  },
+  "options": {
+    "hasChain": true,
+    "asOf": "2026-06-10T15:00:00.000Z",
+    "stale": false,
+    "expiries": []
+  }
+}
+
+Produce the JSON described in the system prompt for this symbol.",
+}
+`;
+
+exports[`AIRecommender > snapshot: prompt + canned output stays stable and schema-valid 2`] = `
+{
+  "asOf": {
+    "news": null,
+    "options": "2026-06-10T15:00:00.000Z",
+    "quote": "2026-06-10T15:00:00.000Z",
+    "sentiment": null,
+  },
+  "disclaimer": "Educational/research output. Not financial advice. You are responsible for your own trades.",
+  "equity": {
+    "action": "BUY",
+    "contraSignals": [
+      {
+        "contribution": -0.2,
+        "name": "PE",
+        "value": 60,
+      },
+    ],
+    "conviction": 0.65,
+    "rationale": "Trend + volume confirm uptrend; valuation rich but momentum strong.",
+    "signals": [
+      {
+        "contribution": 0.4,
+        "name": "RSI14",
+        "value": 62,
+      },
+    ],
+  },
+  "generatedAt": "2026-06-10T15:00:00.000Z",
+  "modelInfo": {
+    "model": "gpt-4o-mini",
+    "provider": "openai",
+    "ruleVersion": "1.0.0",
+  },
+  "options": {
+    "coveredCall": {
+      "action": "HOLD",
+      "contraSignals": [],
+      "conviction": 0.3,
+      "rationale": "IV elevated; wait for vol crush.",
+      "signals": [],
+    },
+    "coveredPut": null,
+    "nakedCall": null,
+    "nakedPut": null,
+  },
+  "riskFlags": [
+    "high-iv",
+  ],
+  "sources": [
+    {
+      "name": "Yahoo Finance",
+      "url": "https://finance.yahoo.com/quote/NVDA",
+    },
+  ],
+  "symbol": "NVDA",
+}
+`;

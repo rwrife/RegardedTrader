@@ -26,7 +26,7 @@ export const CliProvider = z.object({
   kind: z.literal('cli'),
   label: z.string().min(1),
   backend: CliBackendKind,
-  /** Binary path / command. Defaults: `codex`, `claude`, `gh` */
+  /** Binary path / command. Defaults: `codex`, `claude`, `copilot` */
   command: z.string().optional(),
   /** Extra args appended after the backend's defaults */
   args: z.array(z.string()).optional(),
@@ -96,6 +96,7 @@ export const PollingConfig = z
         hn: PollingSentimentSourceConfig,
         cnn: PollingSentimentSourceConfig,
         'google-news': PollingSentimentSourceConfig,
+        googleNewsOpinion: PollingSentimentSourceConfig,
       })
       .default({
         reddit: { enabled: true, weight: 1 },
@@ -103,6 +104,7 @@ export const PollingConfig = z
         hn: { enabled: true, weight: 0.4 },
         cnn: { enabled: true, weight: 1.2 },
         'google-news': { enabled: true, weight: 1.1 },
+        googleNewsOpinion: { enabled: true, weight: 0.9 },
       }),
   })
   .default({
@@ -112,6 +114,7 @@ export const PollingConfig = z
       hn: { enabled: true, weight: 0.4 },
       cnn: { enabled: true, weight: 1.2 },
       'google-news': { enabled: true, weight: 1.1 },
+      googleNewsOpinion: { enabled: true, weight: 0.9 },
     },
   });
 export type PollingConfig = z.infer<typeof PollingConfig>;
@@ -233,6 +236,12 @@ export function redactConfig(cfg: AppConfig): AppConfig {
           apiToken: maskKey(sentimentSources['google-news'].apiToken),
         }
       : sentimentSources['google-news'],
+    googleNewsOpinion: sentimentSources.googleNewsOpinion.apiToken
+      ? {
+          ...sentimentSources.googleNewsOpinion,
+          apiToken: maskKey(sentimentSources.googleNewsOpinion.apiToken),
+        }
+      : sentimentSources.googleNewsOpinion,
   };
   return {
     ...cfg,

@@ -11,6 +11,7 @@
     "./agents": "./dist/agents/index.js",
     "./marketHours": "./dist/marketHours.js",
     "./rating": "./dist/rating.js",
+    "./indicators": "./dist/indicators/index.js",
     "./options": "./dist/options/index.js",
     "./constants": "./dist/constants.js"
   },
@@ -18,6 +19,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch",
     "test": "vitest run",
+    "eval:recommender": "node ./eval/recommender/run.mjs",
     "test:live:tickers": "vitest run src/tickers/live.test.ts",
     "lint": "tsc -p tsconfig.json --noEmit"
   },
