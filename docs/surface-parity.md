@@ -8,14 +8,14 @@ This file is the source of truth for that mapping. **Update it in the same PR
 that adds or changes a feature on either surface.** A PR that breaks parity
 without filing a tracking issue should be rejected in review.
 
-_Last reviewed: 2026-08-03_
+_Last audited: 2026-08-03 (feature merges through 2026-08-03)_
 
 ## Pairing table
 
 | Capability | CLI (`regard ...`) | Web route | Status |
 | --- | --- | --- | --- |
 | **Configuration / AI providers** | `regard config` / `regard config show` | `/settings` | ✅ |
-| Risk caps editor | `regard config show` (read-only risk caps display) | `/settings` → Risk caps panel + save flow | 🚧 |
+| Risk caps editor | `regard config show` (read-only risk caps display) | `/settings` → Risk caps panel + save flow | 🚧 *(tracked in #234)* |
 | Provider smoke test | `regard config test [id]` | `/settings` “Test” button | ✅ |
 | **Ticker intake & validation** (M1) | `regard add <SYM>...` / `regard ls` / `regard rm <SYM>` | ticker input bar + validated list on `/` | ✅ |
 | Quick quote | `regard quote <SYM>` | `/quote/:sym` | ✅ |
@@ -24,7 +24,7 @@ _Last reviewed: 2026-08-03_
 | Technician (TA) commentary | `regard tech <SYM>` | `Tech` tab on `/` | ✅ |
 | NewsScout ranked headlines | `regard news <SYM>` | `News` tab on `/` (live: `GET /news/:symbol`) | ✅ |
 | Sentiment aggregate + mentions feed | `regard sentiment <SYM> [--window=30m] [--watch]` / `regard mentions <SYM> [--source=reddit] [--limit=50]` | `Sentiment` tab on `/` (live: `GET /sentiment/:symbol/latest`, `GET /mentions/:symbol`) | ✅ |
-| Recommender verdict card + 30d history + recompute | `regard recommend <SYM>` *(tracked)* | `Recommendation` tab on `/` (live: `GET /recommendations/:symbol/latest`, SSE `recommendation.update`, `POST /recommendations/:symbol/recompute`) | 🚧 |
+| Recommender verdict card + 30d history + recompute | `regard recommend <SYM>` *(tracked in #52)* | `Recommendation` tab on `/` (live: `GET /recommendations/:symbol/latest`, SSE `recommendation.update`, `POST /recommendations/:symbol/recompute`) | 🚧 |
 | Options trade-plan wizard | `regard plan <SYM>` | `#/plan/:sym` | ✅ |
 | Paper trading (simulated only) | `regard paper submit <planId> --paper` / `regard paper positions` / `regard paper orders` | `#/paper` | ✅ |
 | Trade-plan risk graph + risk violations panel | `regard plan <SYM>` (textual break-even + violations) | `#/plan/:sym` (SVG risk graph + violations chip panel) | ✅ |
@@ -37,6 +37,15 @@ _Last reviewed: 2026-08-03_
 | Server version chip | `regard dashboard` connect line (`connected to server X (core Y, api Z)`) | TopBar `srv X · core Y` chip (fetches `GET /version`) | ✅ |
 
 Legend: ✅ implemented · 🚧 planned · ❌ explicitly out of scope.
+
+## Audit coverage (last ~30 days)
+
+Recent feature-bearing work is represented in the table above:
+
+- #126 full briefing pipeline → **Full briefing pipeline** row.
+- #131 computeRiskGraph → **Trade-plan risk graph + risk violations panel** row.
+- #133 sentiment aggregator → **Sentiment aggregate + mentions feed** row.
+- #135 recommender orchestrator → **Recommender verdict card + 30d history + recompute** row (CLI gap tracked in #52).
 
 ## Rules
 
