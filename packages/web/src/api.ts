@@ -53,7 +53,7 @@ export interface ApiClient {
   upsertMarketProvider(id: string, provider: MarketDataProviderConfig): Promise<MarketDataConfigResponse>;
   removeMarketProvider(id: string): Promise<MarketDataConfigResponse>;
   activateMarketProvider(id: string | null): Promise<MarketDataConfigResponse>;
-  testMarketProvider(symbol?: string): Promise<MarketDataTestResponse>;
+  testMarketProvider(symbol?: string, providerId?: string): Promise<MarketDataTestResponse>;
   /** Update risk caps (#152). Hot-applies to the in-process Orchestrator. */
   updateRiskCaps(risk: RiskConfig): Promise<ConfigResponse>;
 }
@@ -154,10 +154,10 @@ export function createApi(opts: ApiOptions = {}): ApiClient {
       const res = await f(url('/config/market-data/activate'), json({ id }));
       return readJson<MarketDataConfigResponse>(res);
     },
-    async testMarketProvider(symbol) {
+    async testMarketProvider(symbol?: string, providerId?: string) {
       const res = await f(
         url('/config/market-data/test'),
-        json(symbol ? { symbol } : {}),
+        json({ ...(symbol ? { symbol } : {}), ...(providerId ? { providerId } : {}) }),
       );
       const text = await res.text();
       try {
