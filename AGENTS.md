@@ -248,6 +248,9 @@ npm run lint             # tsc --noEmit + prettier --check
 
 ## When You're An Agent Working Here
 
+- Create all task-specific Git worktrees under `.worktrees/<name>` at the
+  repository root. Keep the primary checkout on `main` or the relevant base
+  branch, and do not create task worktrees beside or above the repository.
 - Read this file first. Then read `packages/<pkg>/README.md` for the area you
   touch.
 - Prefer adding to `core` over duplicating logic in `cli` or `web`.
