@@ -25,6 +25,7 @@ _Last reviewed: 2026-07-20_
 | Options trade-plan wizard | `regard plan <SYM>` | `#/plan/:sym` | ✅ |
 | Trade-plan risk graph + risk violations panel | `regard plan <SYM>` (textual break-even + violations) | `#/plan/:sym` (SVG risk graph + violations chip panel) | ✅ |
 | Options chain explorer | `regard options <SYM>` | `#/options/:sym` | ✅ |
+| Full ticker chart (candles + overlays + RSI/MACD) | `regard chart <SYM>` (ASCII sparkline + indicator readout) | `#/ticker/:sym` | ✅ |
 | Watchlist | `regard watch [add\|ls\|rm]` | `/watchlist` | ✅ |
 | Market calendar (holidays + earnings) | `regard cal` / `regard cal earnings` / `regard cal refresh` (planned in #64) | calendar strip + calendar tab (partial; top-bar pill/per-ticker badge tracked in #63) | 🚧 |
 | Open the other surface | `regard dashboard` | "Open CLI help" link | ✅ / 🚧 |
