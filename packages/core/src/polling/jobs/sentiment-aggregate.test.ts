@@ -124,6 +124,7 @@ describe('aggregateScoredMentions (pure)', () => {
     expect(DEFAULT_SOURCE_WEIGHTS.stocktwits).toBe(0.7);
     expect(DEFAULT_SOURCE_WEIGHTS.cnn).toBe(1.2);
     expect(DEFAULT_SOURCE_WEIGHTS['google-news']).toBe(1.1);
+    expect(DEFAULT_SOURCE_WEIGHTS.googleNewsOpinion).toBe(1.1);
     expect(DEFAULT_SOURCE_WEIGHTS.hn).toBe(0.4);
   });
 });

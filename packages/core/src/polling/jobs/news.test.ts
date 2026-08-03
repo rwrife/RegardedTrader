@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { MentionStore } from '../mention-store.js';
 import { SnapshotStore } from '../store.js';
 import {
   pollNews,
@@ -15,6 +18,12 @@ import {
   NewsPollerItem,
   type NewsNewEvent,
 } from './news.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const GOOGLE_OPINION_FIXTURE = readFileSync(
+  join(__dirname, '__fixtures__', 'google-news-opinion-rss.xml'),
+  'utf8',
+);
 
 function mockFetch(handlers: Record<string, { ok?: boolean; status?: number; body: string }>) {
   return vi.fn(async (input: RequestInfo | URL) => {
@@ -120,6 +129,12 @@ describe('news poller — parsers', () => {
     expect(g.summary).toBe('Press wrap-up');
   });
 
+  it('parseRssItems extracts Google News source metadata when present', () => {
+    const out = parseRssItems(GOOGLE_OPINION_FIXTURE);
+    expect(out[0]?.sourceName).toBe('Bloomberg Opinion');
+    expect(out[0]?.sourceUrl).toBe('https://www.bloomberg.com/opinion');
+  });
+
   it('parseRssItems also handles Atom-style <entry> with href link', () => {
     const atom = `<feed>
       <entry>
@@ -164,6 +179,7 @@ describe('news poller — pollNews', () => {
 
     expect(result.fetched).toBe(3);
     expect(result.inserted).toBe(3);
+    expect(result.routedToMentions).toBe(0);
     expect(result.bySource.yahoo.inserted).toBe(1);
     expect(result.bySource.nasdaq.inserted).toBe(1);
     expect(result.bySource['google-news'].inserted).toBe(1);
@@ -190,6 +206,7 @@ describe('news poller — pollNews', () => {
     const b = await pollNews({ symbol: 'NVDA', store, fetchImpl });
     expect(b.fetched).toBe(3);
     expect(b.inserted).toBe(0);
+    expect(b.routedToMentions).toBe(0);
   });
 
   it('honors per-source on/off toggles (skips disabled sources entirely)', async () => {
@@ -266,5 +283,40 @@ describe('news poller — pollNews', () => {
     const r = await pollNews({ symbol: 'NVDA', store, fetchImpl });
     expect(r.fetched).toBe(1);
     expect(r.inserted).toBe(1);
+    expect(r.routedToMentions).toBe(0);
+  });
+
+  it('routes curated Google News opinion outlets into mention store', async () => {
+    const store = new SnapshotStore({ root });
+    const mentionStore = new MentionStore({ root });
+    const fetchImpl = mockFetch({
+      'query2.finance.yahoo.com': { body: JSON.stringify({ news: [] }) },
+      'nasdaq.com': { body: '<rss><channel></channel></rss>' },
+      'news.google.com': { body: GOOGLE_OPINION_FIXTURE },
+    });
+
+    const r = await pollNews({
+      symbol: 'NVDA',
+      store,
+      mentionStore,
+      fetchImpl,
+    });
+
+    // 3 total from Google; 2 opinion outlets routed to mentions.
+    expect(r.bySource['google-news'].fetched).toBe(3);
+    expect(r.fetched).toBe(3);
+    expect(r.inserted).toBe(1);
+    expect(r.routedToMentions).toBe(2);
+
+    const newsRows: unknown[] = [];
+    for await (const row of store.readRange('NVDA', 'news')) newsRows.push(row);
+    expect(newsRows).toHaveLength(1);
+
+    const mentions: unknown[] = [];
+    for await (const m of mentionStore.readMentions('NVDA')) mentions.push(m);
+    expect(mentions).toHaveLength(2);
+    for (const m of mentions as Array<{ source?: string }>) {
+      expect(m.source).toBe('googleNewsOpinion');
+    }
   });
 });

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Google News - NVDA stock</title>
+    <item>
+      <title>Nvidia's valuation test ahead of results</title>
+      <link>https://news.google.com/articles/CBMiVGh0dHBzOi8vd3d3LmJsb29tYmVyZy5jb20vb3Bpbmlvbi9hcnRpY2xlcy9udmRhLXZhbHVhdGlvbtIBAA?hl=en-US&amp;gl=US&amp;ceid=US%3Aen</link>
+      <pubDate>Tue, 13 May 2026 15:30:00 GMT</pubDate>
+      <description>Opinion take from Bloomberg.</description>
+      <source url="https://www.bloomberg.com/opinion">Bloomberg Opinion</source>
+    </item>
+    <item>
+      <title>Why Nvidia's momentum trade could cool</title>
+      <link>https://news.google.com/articles/CBMiVmh0dHBzOi8vd3d3LnJldXRlcnMuY29tL2JyZWFraW5ndmlld3Mvb3Bpbmlvbi9udmRhLW1vbWVudHVtLXRyYWRl0gEA?hl=en-US&amp;gl=US&amp;ceid=US%3Aen</link>
+      <pubDate>Tue, 13 May 2026 16:00:00 GMT</pubDate>
+      <description>Breakingviews commentary.</description>
+      <source url="https://www.reuters.com/breakingviews">Reuters Breakingviews</source>
+    </item>
+    <item>
+      <title>Nvidia closes higher after chip rally broadens</title>
+      <link>https://news.google.com/articles/CBMiRWh0dHBzOi8vd3d3LmNuYmMuY29tLzIwMjYvMDUvMTMvbnZkYS1jbG9zZXMtaGlnaGVyLmh0bWzSAQA?hl=en-US&amp;gl=US&amp;ceid=US%3Aen</link>
+      <pubDate>Tue, 13 May 2026 17:00:00 GMT</pubDate>
+      <description>Standard market recap article.</description>
+      <source url="https://www.cnbc.com">CNBC</source>
+    </item>
+  </channel>
+</rss>
