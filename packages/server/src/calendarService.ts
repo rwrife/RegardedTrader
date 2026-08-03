@@ -3,6 +3,7 @@ import {
   CalendarStore,
   MarketClock,
   PoliteFetchClient,
+  type EventKind,
   fetchFedHolidays,
   fetchNasdaqEarnings,
   fetchNyseHolidays,
@@ -194,6 +195,20 @@ export class CalendarService {
         return ev.startUtc >= now;
       })
       .sort((a, b) => a.startUtc.localeCompare(b.startUtc));
+  }
+
+  async getNextEvent(opts: {
+    symbol?: string | null;
+    kind?: EventKind;
+    fromEt?: string;
+  }): Promise<CalendarEvent | null> {
+    const symbol =
+      opts.symbol === undefined || opts.symbol === null ? opts.symbol : opts.symbol.toUpperCase();
+    const fromUtc = opts.fromEt ? `${opts.fromEt}T00:00:00.000Z` : undefined;
+    return this.store.nextEvent(symbol, {
+      fromUtc,
+      kinds: opts.kind ? [opts.kind] : undefined,
+    });
   }
 
   async refreshManually(opts: {

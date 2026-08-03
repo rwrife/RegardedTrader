@@ -36,6 +36,7 @@ import {
   MentionStore,
   SentimentSource,
   SentimentSnapshot,
+  EventKind,
   type MentionItem,
   type ScoredMention,
   type WebSearch,
@@ -55,8 +56,20 @@ import {
 import { liveQuote, type LiveQuoteSource, type YahooQuoteLike } from './liveQuote.js';
 import { isLoopbackOrigin } from './bind-guard.js';
 import { SERVER_VERSION } from './version.js';
-import { CalendarService, todayEt, toEtDateKey } from './calendarService.js';
+import {
+  CalendarService,
+  type CalendarRefreshResponse,
+  type CalendarStatus,
+  todayEt,
+  toEtDateKey,
+} from './calendarService.js';
 import { PollingCoordinator } from './polling.js';
+
+function addDaysEt(dateEt: string, days: number): string {
+  const d = new Date(`${dateEt}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
 
 export interface AppDeps {
   /**
@@ -253,6 +266,7 @@ export function createApp(deps: AppDeps): AppHandle {
     at: string;
   };
   const sseClients = new Set<express.Response>();
+  let calendarRefreshFlight: Promise<CalendarRefreshResponse> | null = null;
 
   function emitSentimentUpdate(symbol: string, snapshot: SentimentSnapshot | null): void {
     const payload: SentimentSsePayload = {
@@ -276,6 +290,23 @@ export function createApp(deps: AppDeps): AppHandle {
     if (!Number.isFinite(asOfMs)) return undefined;
     if (Date.now() - asOfMs > BRIEFING_SENTIMENT_MAX_AGE_MS) return undefined;
     return snapshot;
+  }
+
+  function emitCalendarUpdate(update: {
+    refresh?: CalendarRefreshResponse;
+    status: CalendarStatus;
+    reason: 'manual-refresh' | 'read-refresh';
+  }): void {
+    const payload = {
+      type: 'calendar.update' as const,
+      id: randomUUID(),
+      at: new Date().toISOString(),
+      reason: update.reason,
+      refresh: update.refresh,
+      status: update.status,
+    };
+    const frame = `event: calendar.update\ndata: ${JSON.stringify(payload)}\n\n`;
+    for (const client of sseClients) client.write(frame);
   }
 
   function makeValidator(): TickerValidator | null {
@@ -429,6 +460,7 @@ export function createApp(deps: AppDeps): AppHandle {
   });
 
   app.get('/health', (_req, res) => {
+    const calendarStatus = calendar.status();
     res.json({
       ok: true,
       name: 'regardedtrader-server',
@@ -439,6 +471,13 @@ export function createApp(deps: AppDeps): AppHandle {
       aiConfigured: orchestrator !== null,
       activeProvider: cfg.activeProvider,
       sentimentSources: sentimentHealth,
+      calendar: {
+        stale: calendarStatus.stale,
+        holidaysStale: calendarStatus.holidaysStale,
+        earningsStale: calendarStatus.earningsStale,
+        marketState: calendarStatus.marketState,
+        sources: calendarStatus.sources,
+      },
     });
   });
 
@@ -910,7 +949,7 @@ export function createApp(deps: AppDeps): AppHandle {
 
   app.get('/polling/tail/:symbol', async (req, res, next) => {
     try {
-      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
       const includeQuotes = String(req.query.quotes ?? 'false').toLowerCase() === 'true';
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -1084,6 +1123,21 @@ export function createApp(deps: AppDeps): AppHandle {
   });
 
   // --- Calendar ---
+  const DateEt = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+  const CalendarHolidaysQuery = z.object({
+    from: DateEt.optional(),
+    to: DateEt.optional(),
+  });
+  const CalendarEarningsRangeQuery = z.object({
+    symbol: Ticker,
+    from: DateEt.optional(),
+    to: DateEt.optional(),
+  });
+  const CalendarNextQuery = z.object({
+    symbol: Ticker.optional(),
+    kind: EventKind.optional(),
+    from: DateEt.optional(),
+  });
   const CalendarWindowQuery = z.object({
     from: z.string().optional(),
     days: z.coerce.number().int().min(1).max(90).optional().default(14),
@@ -1097,7 +1151,114 @@ export function createApp(deps: AppDeps): AppHandle {
     earnings: z.boolean().optional().default(false),
   });
 
-  app.get('/calendar/events', async (req, res, next) => {
+  function validateDateRange(from: string, to: string): { fromEt: string; days: number } {
+    const start = new Date(`${from}T00:00:00.000Z`);
+    const end = new Date(`${to}T00:00:00.000Z`);
+    const diffDays = Math.ceil((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000));
+    if (diffDays <= 0) {
+      throw new Error(`Invalid calendar range: "to" (${to}) must be after "from" (${from}).`);
+    }
+    return { fromEt: from, days: diffDays };
+  }
+
+  function requireCalendarAdmin(
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ): void {
+    if (!authToken) {
+      next();
+      return;
+    }
+    const adminHeader = req.header('x-regardedtrader-admin');
+    if (adminHeader === '1' || adminHeader?.toLowerCase() === 'true') {
+      next();
+      return;
+    }
+    res.status(403).json({
+      error: 'Calendar refresh is admin-only.',
+      hint: 'Retry with header `x-regardedtrader-admin: true`.',
+    });
+  }
+
+  app.get('/calendar/holidays', requireDashboardToken, async (req, res, next) => {
+    try {
+      const q = CalendarHolidaysQuery.parse(req.query);
+      const fromEt = q.from ?? todayEt();
+      const toEt = q.to ?? addDaysEt(fromEt, 14);
+      const range = validateDateRange(fromEt, toEt);
+      await calendar.maybeRefreshForRead([]);
+      const window = await calendar.getWindow({ fromEt: range.fromEt, days: range.days, symbols: [] });
+      const events = window.events.filter(
+        (ev) => ev.kind === 'market_holiday' || ev.kind === 'market_early_close',
+      );
+      emitCalendarUpdate({ reason: 'read-refresh', status: calendar.status() });
+      res.json({
+        fromEt,
+        toEtExclusive: toEt,
+        events,
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/calendar/earnings', requireDashboardToken, async (req, res, next) => {
+    try {
+      const q = CalendarEarningsRangeQuery.parse({
+        ...req.query,
+        symbol: String(req.query.symbol ?? '').toUpperCase(),
+      });
+      const known = await deps.watchlist.get(q.symbol);
+      if (!known) {
+        res.status(422).json({
+          error: `Unknown ticker "${q.symbol}". Add it first with \`regard add ${q.symbol}\`.`,
+          hint: 'POST /tickers/validate or `regard add <SYM>`',
+        });
+        return;
+      }
+      const fromEt = q.from ?? todayEt();
+      const toEt = q.to ?? addDaysEt(fromEt, 30);
+      validateDateRange(fromEt, toEt);
+      await calendar.maybeRefreshForRead([q.symbol]);
+      const events = (await calendar.getSymbolEarnings({
+        symbol: q.symbol,
+        includePast: true,
+        includeUpcoming: true,
+      })).filter((ev) => {
+        const dateEt = toEtDateKey(ev.startUtc);
+        return dateEt >= fromEt && dateEt < toEt;
+      });
+      emitCalendarUpdate({ reason: 'read-refresh', status: calendar.status() });
+      res.json({
+        symbol: q.symbol,
+        fromEt,
+        toEtExclusive: toEt,
+        events,
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/calendar/next', requireDashboardToken, async (req, res, next) => {
+    try {
+      const q = CalendarNextQuery.parse({
+        ...req.query,
+        symbol: req.query.symbol ? String(req.query.symbol).toUpperCase() : undefined,
+      });
+      const event = await calendar.getNextEvent({
+        symbol: q.symbol ?? undefined,
+        kind: q.kind,
+        fromEt: q.from,
+      });
+      res.json({ event });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/calendar/events', requireDashboardToken, async (req, res, next) => {
     try {
       const q = CalendarWindowQuery.parse(req.query);
       const fromEt =
@@ -1112,15 +1273,16 @@ export function createApp(deps: AppDeps): AppHandle {
         days: q.days,
         symbols,
       });
+      emitCalendarUpdate({ reason: 'read-refresh', status: calendar.status() });
       res.json(window);
     } catch (e) {
       next(e);
     }
   });
 
-  app.get('/calendar/earnings/:symbol', async (req, res, next) => {
+  app.get('/calendar/earnings/:symbol', requireDashboardToken, async (req, res, next) => {
     try {
-      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
       const known = await deps.watchlist.get(symbol);
       if (!known) {
         res.status(422).json({
@@ -1138,39 +1300,55 @@ export function createApp(deps: AppDeps): AppHandle {
         includePast,
         includeUpcoming,
       });
+      emitCalendarUpdate({ reason: 'read-refresh', status: calendar.status() });
       res.json({ symbol, events });
     } catch (e) {
       next(e);
     }
   });
 
-  app.post('/calendar/refresh', async (req, res, next) => {
-    try {
-      const body = CalendarRefreshBody.parse(req.body ?? {});
-      const watch = await deps.watchlist.list();
-      const out = await calendar.refreshManually({
-        holidays: body.holidays,
-        earnings: body.earnings,
-        symbols: watch.map((w) => w.profile.symbol),
-      });
-      if (out.skipped && out.skipped.length > 0 && !out.holidays && !out.earnings) {
-        const retryAfterMs = Math.max(...out.skipped.map((s) => s.retryAfterMs));
-        res.setHeader('Retry-After', Math.max(1, Math.ceil(retryAfterMs / 1000)).toString());
-        res.status(429).json(out);
-        return;
+  app.post(
+    '/calendar/refresh',
+    requireDashboardToken,
+    requireCalendarAdmin,
+    async (req, res, next) => {
+      try {
+        const body = CalendarRefreshBody.parse(req.body ?? {});
+        if (calendarRefreshFlight) {
+          const coalesced = await calendarRefreshFlight;
+          res.setHeader('X-Calendar-Refresh-Coalesced', '1');
+          res.json(coalesced);
+          return;
+        }
+        const watch = await deps.watchlist.list();
+        calendarRefreshFlight = calendar.refreshManually({
+          holidays: body.holidays,
+          earnings: body.earnings,
+          symbols: watch.map((w) => w.profile.symbol),
+        });
+        const out = await calendarRefreshFlight;
+        if (out.skipped && out.skipped.length > 0 && !out.holidays && !out.earnings) {
+          const retryAfterMs = Math.max(...out.skipped.map((s) => s.retryAfterMs));
+          res.setHeader('Retry-After', Math.max(1, Math.ceil(retryAfterMs / 1000)).toString());
+          res.status(429).json(out);
+          return;
+        }
+        emitCalendarUpdate({ reason: 'manual-refresh', refresh: out, status: calendar.status() });
+        res.json(out);
+      } catch (e) {
+        next(e);
+      } finally {
+        calendarRefreshFlight = null;
       }
-      res.json(out);
-    } catch (e) {
-      next(e);
-    }
-  });
+    },
+  );
 
-  app.get('/calendar/status', (_req, res) => {
+  app.get('/calendar/status', requireDashboardToken, (_req, res) => {
     res.json(calendar.status());
   });
 
   // Compatibility endpoint used by the web CalendarStrip. Market-only list.
-  app.get('/calendar/upcoming', async (req, res, next) => {
+  app.get('/calendar/upcoming', requireDashboardToken, async (req, res, next) => {
     try {
       const q = CalendarWindowQuery.parse(req.query);
       const fromEt = todayEt();
@@ -1190,6 +1368,7 @@ export function createApp(deps: AppDeps): AppHandle {
           kind: ev.kind,
           title: ev.title,
         }));
+      emitCalendarUpdate({ reason: 'read-refresh', status: calendar.status() });
       res.json({ today: fromEt, events });
     } catch (e) {
       next(e);
