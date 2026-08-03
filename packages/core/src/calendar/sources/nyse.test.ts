@@ -75,9 +75,14 @@ describe('parseNyseHolidaysHtml', () => {
   });
 
   it('returns empty array on a page with no holiday-shaped tables', () => {
+    const warnings: string[] = [];
     const html = '<html><body><p>nothing here</p><table><tr><th>foo</th></tr></table></body></html>';
-    const events = parseNyseHolidaysHtml(html, { fetchedAt: FETCHED_AT });
+    const events = parseNyseHolidaysHtml(html, {
+      fetchedAt: FETCHED_AT,
+      logger: { warn: (msg) => warnings.push(msg) },
+    });
     expect(events).toEqual([]);
+    expect(warnings).toContain('nyse: no holiday table detected; page layout may have changed');
   });
 
   it('produces stable ids for the same input (idempotent upsert)', async () => {
