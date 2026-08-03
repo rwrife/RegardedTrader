@@ -28,6 +28,7 @@ import {
   TickerValidator,
   WatchlistStore,
   DuckDuckGoSearch,
+  MarketClock,
   type WebSearch,
   type LLM,
   type AppConfig as AppConfigT,
@@ -494,6 +495,59 @@ export function createApp(deps: AppDeps): AppHandle {
     }
   });
 
+  // --- Calendar ---
+
+  // Returns real upcoming market holidays and early closes for the next N days
+  // (default 14) derived from the bundled market-calendar.json. This replaces
+  // the static SAMPLE_CALENDAR in the web CalendarStrip.
+  app.get('/calendar/upcoming', (req, res) => {
+    const days = Math.min(Number(req.query.days ?? 14), 90);
+    const clock = new MarketClock();
+    const cal = clock.getCalendar();
+
+    // Build the set of dates to check (ET dates, YYYY-MM-DD).
+    const etFormatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+
+    const now = new Date();
+    const todayEt = (() => {
+      const p = etFormatter.formatToParts(now);
+      const m: Record<string, string> = {};
+      for (const part of p) m[part.type] = part.value;
+      return `${m.year}-${m.month}-${m.day}`;
+    })();
+
+    const events: Array<{ dateOffset: number; kind: string; title: string }> = [];
+
+    for (let i = 0; i <= days; i++) {
+      const d = new Date(now);
+      d.setDate(d.getDate() + i);
+      const p = etFormatter.formatToParts(d);
+      const m: Record<string, string> = {};
+      for (const part of p) m[part.type] = part.value;
+      const date = `${m.year}-${m.month}-${m.day}`;
+
+      const offset = i; // relative to today (today = 0)
+
+      if (cal.holidays.has(date)) {
+        events.push({ dateOffset: offset, kind: 'market_holiday', title: holidayName(date) });
+      } else if (cal.earlyCloses.has(date)) {
+        const closeTime = cal.earlyCloses.get(date)!;
+        events.push({
+          dateOffset: offset,
+          kind: 'market_early_close',
+          title: `Early close ${closeTime} ET`,
+        });
+      }
+    }
+
+    res.json({ today: todayEt, events });
+  });
+
   // --- AI ---
 
   function requireOrchestrator(res: express.Response): Orchestrator | null {
@@ -900,6 +954,45 @@ export function createApp(deps: AppDeps): AppHandle {
   );
 
   return { app, getConfig: () => cfg };
+}
+
+/** Maps well-known NYSE holiday dates (YYYY-MM-DD) to human-readable names. */
+function holidayName(date: string): string {
+  // month-day suffix for recurring holidays
+  const md = date.slice(5); // MM-DD
+  // Fixed-date holidays
+  const fixed: Record<string, string> = {
+    '01-01': "New Year's Day — markets closed",
+    '06-19': 'Juneteenth — markets closed',
+    '12-25': 'Christmas Day — markets closed',
+  };
+  if (fixed[md]) return fixed[md];
+  // Variable holidays — use a small lookup of known dates
+  const known: Record<string, string> = {
+    '2025-01-09': 'National Day of Mourning — markets closed',
+    '2025-01-20': "Martin Luther King Jr. Day — markets closed",
+    '2025-02-17': "Presidents' Day — markets closed",
+    '2025-04-18': 'Good Friday — markets closed',
+    '2025-05-26': 'Memorial Day — markets closed',
+    '2025-09-01': 'Labor Day — markets closed',
+    '2025-11-27': 'Thanksgiving Day — markets closed',
+    '2026-01-19': "Martin Luther King Jr. Day — markets closed",
+    '2026-02-16': "Presidents' Day — markets closed",
+    '2026-04-03': 'Good Friday — markets closed',
+    '2026-05-25': 'Memorial Day — markets closed',
+    '2026-09-07': 'Labor Day — markets closed',
+    '2026-11-26': 'Thanksgiving Day — markets closed',
+    '2027-01-18': "Martin Luther King Jr. Day — markets closed",
+    '2027-02-15': "Presidents' Day — markets closed",
+    '2027-04-02': 'Good Friday — markets closed',
+    '2027-05-31': 'Memorial Day — markets closed',
+    '2027-09-06': 'Labor Day — markets closed',
+    '2027-11-25': 'Thanksgiving Day — markets closed',
+    '2027-12-24': 'Christmas Eve (observed) — markets closed',
+    '2026-07-03': 'Independence Day (observed) — markets closed',
+    '2027-07-05': 'Independence Day (observed) — markets closed',
+  };
+  return known[date] ?? `Market holiday — markets closed`;
 }
 
 /** Default factory used by the entrypoint. */

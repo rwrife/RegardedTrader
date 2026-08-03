@@ -247,9 +247,17 @@ export const TickerProfileExtraction = z.object({
   symbol: z.string().min(1).max(10),
   name: z.string().min(1),
   exchange: z.string().min(1),
-  sector: z.string().min(1),
-  industry: z.string().min(1),
-  description: z.string().min(1),
+  // Allow empty strings from the LLM; coerce to "Unknown" so validation
+  // doesn't hard-fail for well-known tickers where the LLM omits a field.
+  sector: z
+    .string()
+    .transform((s) => s.trim() || 'Unknown'),
+  industry: z
+    .string()
+    .transform((s) => s.trim() || 'Unknown'),
+  description: z
+    .string()
+    .transform((s) => s.trim() || 'No description available'),
 });
 export type TickerProfileExtraction = z.infer<typeof TickerProfileExtraction>;
 
