@@ -106,6 +106,60 @@ describe('POST /tickers/validate', () => {
       llmFromConfig: () => fakeLLM(goodReply),
     });
 
+    describe('polling control routes', () => {
+      it('returns status rows and supports pause/resume toggles', async () => {
+        const watchlist = new WatchlistStore({ path: join(dir, 'watchlist.json') });
+        await watchlist.upsert({
+          symbol: 'NVDA',
+          name: 'NVIDIA Corporation',
+          exchange: 'NASDAQ',
+          sector: 'Technology',
+          industry: 'Semiconductors',
+          description: 'Designs GPUs and AI chips.',
+          sources: ['https://example.com/nvda'],
+          validatedAt: new Date().toISOString(),
+        });
+        const { app } = createApp({
+          market: {
+            quote: async () => ({ symbol: 'NVDA', price: 100, change: 1, changePercent: 1, volume: 1, asOf: new Date().toISOString() }),
+            history: async () => [{ t: '2026-01-01', o: 1, h: 1, l: 1, c: 1, v: 1 }],
+            news: async () => [{ title: 'Headline', url: 'https://example.com/n', source: 'example', publishedAt: new Date().toISOString() }],
+            optionsChain: async () => [],
+          },
+          webSearch: fakeWebSearch(),
+          watchlist,
+          initialConfig: {
+            version: 1,
+            providers: {},
+            activeProvider: null,
+            risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
+            server: { host: '127.0.0.1', port: 4317 },
+            marketData: { providers: {}, activeProvider: null },
+            polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
+          },
+          llmFromConfig: () => null,
+          polling: { quoteEveryMs: 1000, newsEveryMs: 1000 },
+        });
+        baseUrl = await listen(app);
+
+        const status1 = await fetch(`${baseUrl}/polling/status`);
+        expect(status1.status).toBe(200);
+        const j1 = (await status1.json()) as { paused: boolean; jobs: Array<{ id: string }> };
+        expect(j1.paused).toBe(false);
+        expect(j1.jobs.map((j) => j.id)).toEqual(expect.arrayContaining(['quotes', 'news']));
+
+        const pause = await fetch(`${baseUrl}/polling/pause`, { method: 'POST' });
+        expect(pause.status).toBe(200);
+        const p = (await pause.json()) as { paused: boolean };
+        expect(p.paused).toBe(true);
+
+        const resume = await fetch(`${baseUrl}/polling/resume`, { method: 'POST' });
+        expect(resume.status).toBe(200);
+        const r = (await resume.json()) as { paused: boolean };
+        expect(r.paused).toBe(false);
+      });
+    });
+
     describe('paper orders API', () => {
       const plan: TradePlan = {
         name: 'Long call',

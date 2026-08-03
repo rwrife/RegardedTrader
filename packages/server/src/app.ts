@@ -32,7 +32,7 @@ import {
   BriefingStore,
   looksLikeBriefingId,
   DuckDuckGoSearch,
-  MarketClock,
+  computeIndicators,
   MentionStore,
   SentimentSource,
   SentimentSnapshot,
@@ -50,11 +50,13 @@ import {
   PaperStore,
   TradePlan,
   type BriefingStorePort,
+  type OHLCV,
 } from '@regardedtrader/core';
 import { liveQuote, type LiveQuoteSource, type YahooQuoteLike } from './liveQuote.js';
 import { isLoopbackOrigin } from './bind-guard.js';
 import { SERVER_VERSION } from './version.js';
 import { CalendarService, todayEt, toEtDateKey } from './calendarService.js';
+import { PollingCoordinator } from './polling.js';
 
 export interface AppDeps {
   /**
@@ -87,6 +89,11 @@ export interface AppDeps {
   paperStore?: PaperStore;
   /** Optional injectable calendar service (tests). */
   calendar?: CalendarService;
+  /** Optional polling cadence overrides (tests). */
+  polling?: {
+    quoteEveryMs?: number;
+    newsEveryMs?: number;
+  };
   /**
    * Optional runtime auth gate for dashboard sessions (#18). Tests and
    * internal dev mode can omit this to keep the app unauthenticated.
@@ -160,6 +167,15 @@ export function createApp(deps: AppDeps): AppHandle {
   }
 
   let orchestrator = makeOrchestrator();
+  const polling = new PollingCoordinator(
+    deps.watchlist,
+    () => registry.client,
+    {
+      quoteEveryMs: deps.polling?.quoteEveryMs,
+      newsEveryMs: deps.polling?.newsEveryMs,
+    },
+  );
+  polling.start();
   const paperStore = deps.paperStore ?? new PaperStore();
   function makePaperBroker(): PaperBroker {
     return new PaperBroker({ market: registry.client, store: paperStore });
@@ -259,6 +275,25 @@ export function createApp(deps: AppDeps): AppHandle {
     new CalendarService({
       now: deps.now ? () => new Date(deps.now!()) : undefined,
     });
+
+  async function tapePointForSymbol(symbol: string) {
+    const [quote, history, news] = await Promise.all([
+      registry.client.quote(symbol),
+      registry.client.history(symbol, 60),
+      registry.client.news(symbol),
+    ]);
+    const indicators = computeIndicators(history as OHLCV[]);
+    const top = [...news].sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt))[0];
+    return {
+      symbol,
+      last: quote.price,
+      change: quote.change,
+      changePercent: quote.changePercent,
+      rsi: indicators.rsi14 ?? null,
+      lastHeadline: top?.title ?? null,
+      asOf: quote.asOf,
+    };
+  }
 
   // Process start timestamp for `GET /version` (issue #179). Captured once
   // at app creation so consumers can spot silent restarts.
@@ -787,6 +822,152 @@ export function createApp(deps: AppDeps): AppHandle {
       const sym = Ticker.parse(req.params.sym.toUpperCase());
       const removed = await deps.watchlist.remove(sym);
       res.json({ ok: true, removed });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // --- Polling subsystem (issue #27 parity) ---
+  app.get('/polling/status', (_req, res) => {
+    res.json({
+      paused: polling.status().every((j) => j.state === 'paused'),
+      jobs: polling.status(),
+    });
+  });
+
+  app.post('/polling/pause', (_req, res) => {
+    polling.pause();
+    res.json({ ok: true, paused: true, jobs: polling.status() });
+  });
+
+  app.post('/polling/resume', (_req, res) => {
+    polling.resume();
+    res.json({ ok: true, paused: false, jobs: polling.status() });
+  });
+
+  app.get('/polling/watch', async (req, res, next) => {
+    try {
+      const rawSymbols =
+        typeof req.query.symbols === 'string' && req.query.symbols.trim().length > 0
+          ? req.query.symbols.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean)
+          : (await deps.watchlist.list()).map((e) => e.profile.symbol.toUpperCase());
+
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders?.();
+
+      const send = (event: string, data: unknown) => {
+        res.write(`event: ${event}\n`);
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+      };
+
+      send('ready', { symbols: rawSymbols });
+      const sendCurrent = async () => {
+        if (polling.isPaused) return;
+        await Promise.all(
+          rawSymbols.map(async (symbol) => {
+            const point = await tapePointForSymbol(symbol);
+            send('tape', point);
+          }),
+        );
+      };
+      await sendCurrent();
+
+      const unsubscribe = polling.subscribe((evt) => {
+        if (evt.type !== 'tape') return;
+        if (!rawSymbols.includes(evt.data.symbol)) return;
+        send('tape', evt.data);
+      });
+      const directRefresh = setInterval(() => {
+        void sendCurrent();
+      }, 15_000);
+      const keepAlive = setInterval(() => {
+        res.write(': ping\n\n');
+      }, 20_000);
+      req.on('close', () => {
+        clearInterval(directRefresh);
+        clearInterval(keepAlive);
+        unsubscribe();
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/polling/tail/:symbol', async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+      const includeQuotes = String(req.query.quotes ?? 'false').toLowerCase() === 'true';
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders?.();
+
+      const send = (event: string, data: unknown) => {
+        res.write(`event: ${event}\n`);
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+      };
+
+      send('ready', { symbol, includeQuotes });
+      const seen = new Set<string>();
+      const pollTail = async () => {
+        if (polling.isPaused) return;
+        const [news, quote, history] = await Promise.all([
+          registry.client.news(symbol),
+          includeQuotes ? registry.client.quote(symbol) : Promise.resolve(null),
+          includeQuotes ? registry.client.history(symbol, 60) : Promise.resolve([]),
+        ]);
+        for (const item of [...news]
+          .sort((a, b) => Date.parse(a.publishedAt) - Date.parse(b.publishedAt))
+          .slice(-10)) {
+          const key = `${item.url}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          send('news', {
+            symbol,
+            title: item.title,
+            url: item.url,
+            source: item.source,
+            publishedAt: item.publishedAt,
+          });
+        }
+        if (quote) {
+          const indicators = computeIndicators(history as OHLCV[]);
+          send('quote', {
+            symbol,
+            price: quote.price,
+            change: quote.change,
+            changePercent: quote.changePercent,
+            rsi: indicators.rsi14 ?? null,
+            asOf: quote.asOf,
+          });
+        }
+      };
+      await pollTail();
+
+      const latest = polling.getTape([symbol])[0];
+      if (latest) send('tape', latest);
+
+      const unsubscribe = polling.subscribe((evt) => {
+        if (evt.type === 'news' && evt.data.symbol === symbol) {
+          send('news', evt.data);
+        }
+        if (includeQuotes && evt.type === 'quote' && evt.data.symbol === symbol) {
+          send('quote', evt.data);
+        }
+      });
+      const keepAlive = setInterval(() => {
+        res.write(': ping\n\n');
+      }, 20_000);
+      const directRefresh = setInterval(() => {
+        void pollTail();
+      }, includeQuotes ? 15_000 : 30_000);
+      req.on('close', () => {
+        clearInterval(directRefresh);
+        clearInterval(keepAlive);
+        unsubscribe();
+      });
     } catch (e) {
       next(e);
     }

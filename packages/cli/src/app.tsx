@@ -15,6 +15,7 @@ import { OptionsScreen } from './screens/options.js';
 import { PaperScreen } from './screens/paper.js';
 import { ChartScreen } from './screens/chart.js';
 import { CalendarScreen } from './screens/calendar.js';
+import { TailScreen, PollingStatusScreen, PollingToggleScreen } from './screens/polling.js';
 
 export interface AppProps {
   command: string;
@@ -32,6 +33,7 @@ export interface AppProps {
     upcoming?: boolean;
     holidays?: boolean;
     earnings?: boolean;
+    quotes?: boolean;
   };
 }
 
@@ -101,6 +103,19 @@ export function App({ command, args, serverUrl, flags }: AppProps) {
           earnings={!!flags?.earnings}
         />
       );
+    case 'tail':
+      return <TailScreen symbol={args[0] ?? ''} includeQuotes={!!flags?.quotes} serverUrl={serverUrl} />;
+    case 'polling': {
+      const sub = (args[0] ?? '').toLowerCase();
+      if (sub === 'status') return <PollingStatusScreen serverUrl={serverUrl} />;
+      if (sub === 'pause') return <PollingToggleScreen action="pause" serverUrl={serverUrl} />;
+      if (sub === 'resume') return <PollingToggleScreen action="resume" serverUrl={serverUrl} />;
+      return (
+        <Box flexDirection="column">
+          <Text color="red">Usage: regard polling &lt;status|pause|resume&gt;</Text>
+        </Box>
+      );
+    }
     default:
       return (
         <Box flexDirection="column">

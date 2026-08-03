@@ -2,18 +2,18 @@ import React from 'react';
 import { Box, Text } from 'ink';
 import { AddScreen } from './add.js';
 import { ListScreen, RemoveScreen } from './watchlist.js';
+import { WatchTapeScreen } from './polling.js';
 import { ReturnPrompt } from './menu.js';
 
 /**
- * `regard watch <ls|add|rm>` dispatcher — the explicit "managed watchlist"
- * surface called out in `docs/surface-parity.md`.
+ * `regard watch [SYM...]` live-tape dispatcher.
  *
  * The underlying screens (`ListScreen`, `AddScreen`, `RemoveScreen`) already
  * exist for the legacy `regard ls|add|rm` entrypoints and talk to the same
  * `/tickers` endpoints. This screen is a thin verb dispatcher so the CLI
  * mirrors the web `/watchlist` route and the parity-table entry for #167.
  *
- * Subcommands map 1:1 to existing flows:
+ * Legacy subcommands still map 1:1 to existing watchlist flows:
  *   - `watch ls`            → `ListScreen`
  *   - `watch add <SYM>...`  → `AddScreen` (no `--refresh` here; use
  *                             the legacy `regard add` for refresh flows)
@@ -23,39 +23,36 @@ export type WatchSub = 'ls' | 'add' | 'rm';
 
 /** Parse the `regard watch <sub> [...args]` argv slice. Exported for tests. */
 export function parseWatchArgs(args: readonly string[]):
-  | { kind: 'ls' }
-  | { kind: 'add'; symbols: string[] }
-  | { kind: 'rm'; symbol: string }
+  | { kind: 'tape'; symbols: string[] }
+  | { kind: 'legacy-ls' }
+  | { kind: 'legacy-add'; symbols: string[] }
+  | { kind: 'legacy-rm'; symbol: string }
   | { kind: 'error'; message: string } {
   const [sub, ...rest] = args;
-  if (!sub) {
-    return {
-      kind: 'error',
-      message: 'Usage: regard watch <ls|add|rm> [SYM...]',
-    };
+  if (!sub) return { kind: 'tape', symbols: [] };
+  const first = sub.toLowerCase();
+  if (!['ls', 'list', 'add', 'rm', 'remove'].includes(first)) {
+    const symbols = [sub, ...rest].map((s) => s.toUpperCase()).filter((s) => s.length > 0);
+    return { kind: 'tape', symbols };
   }
-  const normalized = sub.toLowerCase();
-  if (normalized === 'ls' || normalized === 'list') {
-    return { kind: 'ls' };
+  if (first === 'ls' || first === 'list') {
+    return { kind: 'legacy-ls' };
   }
-  if (normalized === 'add') {
+  if (first === 'add') {
     const symbols = rest.map((s) => s.toUpperCase()).filter((s) => s.length > 0);
     if (symbols.length === 0) {
       return { kind: 'error', message: 'Usage: regard watch add <SYM> [<SYM>...]' };
     }
-    return { kind: 'add', symbols };
+    return { kind: 'legacy-add', symbols };
   }
-  if (normalized === 'rm' || normalized === 'remove') {
+  if (first === 'rm' || first === 'remove') {
     const symbol = (rest[0] ?? '').toUpperCase();
     if (!symbol) {
       return { kind: 'error', message: 'Usage: regard watch rm <SYM>' };
     }
-    return { kind: 'rm', symbol };
+    return { kind: 'legacy-rm', symbol };
   }
-  return {
-    kind: 'error',
-    message: `Unknown subcommand: regard watch ${sub}. Try ls | add | rm.`,
-  };
+  return { kind: 'tape', symbols: [] };
 }
 
 export function WatchScreen({
@@ -77,10 +74,13 @@ export function WatchScreen({
       </Box>
     );
   }
-  if (parsed.kind === 'ls') {
+  if (parsed.kind === 'tape') {
+    return <WatchTapeScreen symbols={parsed.symbols} serverUrl={serverUrl} />;
+  }
+  if (parsed.kind === 'legacy-ls') {
     return <ListScreen serverUrl={serverUrl} onDone={onDone} />;
   }
-  if (parsed.kind === 'add') {
+  if (parsed.kind === 'legacy-add') {
     return (
       <AddScreen
         symbols={parsed.symbols}

@@ -13,6 +13,7 @@ import { WatchScreen } from './screens/watch.js';
 import { DashboardScreen } from './screens/dashboard.js';
 import { PaperScreen } from './screens/paper.js';
 import { ChartScreen } from './screens/chart.js';
+import { TailScreen, PollingStatusScreen, PollingToggleScreen } from './screens/polling.js';
 
 /**
  * Fancy modal-style shell inspired by Copilot CLI / Claude Code. Everything is
@@ -35,6 +36,8 @@ type SlashId =
   | 'ls'
   | 'rm'
   | 'watch'
+  | 'tail'
+  | 'polling'
   | 'config'
   | 'dashboard'
   | 'paper'
@@ -60,7 +63,9 @@ const COMMANDS: SlashCommand[] = [
   { id: 'add',      name: '/add',      usage: '/add <SYM>...',   blurb: 'Validate ticker(s) and add to watchlist', needsArgs: true },
   { id: 'ls',       name: '/ls',       usage: '/ls',             blurb: 'Show watchlist' },
   { id: 'rm',       name: '/rm',       usage: '/rm <SYM>',       blurb: 'Remove a ticker from watchlist',          needsArgs: true },
-  { id: 'watch',    name: '/watch',    usage: '/watch <ls|add|rm> [SYM...]', blurb: 'Managed watchlist (parity twin of /watchlist)', needsArgs: true },
+  { id: 'watch',    name: '/watch',    usage: '/watch [SYM...]', blurb: 'Live tape stream (SSE): price/RSI/headline' },
+  { id: 'tail',     name: '/tail',     usage: '/tail <SYM> [--quotes]', blurb: 'Tail per-symbol news stream', needsArgs: true },
+  { id: 'polling',  name: '/polling',  usage: '/polling <status|pause|resume>', blurb: 'Polling subsystem controls', needsArgs: true },
   { id: 'config',   name: '/config',   usage: '/config [show|test [id]]', blurb: 'AI providers, risk, server' },
   { id: 'dashboard',name: '/dashboard',usage: '/dashboard',      blurb: 'Open local web dashboard' },
   { id: 'paper',    name: '/paper',    usage: '/paper <submit|orders|positions> ...', blurb: 'Paper-only simulated execution', needsArgs: true },
@@ -308,6 +313,18 @@ function RunningBody({
       return <RemoveScreen symbol={(args[0] ?? '').toUpperCase()} serverUrl={serverUrl} onDone={onDone} />;
     case 'watch':
       return <WatchScreen args={args} serverUrl={serverUrl} onDone={onDone} />;
+    case 'tail': {
+      const includeQuotes = args.includes('--quotes');
+      const symbol = args.find((a) => !a.startsWith('--')) ?? '';
+      return <TailScreen symbol={symbol.toUpperCase()} includeQuotes={includeQuotes} serverUrl={serverUrl} />;
+    }
+    case 'polling': {
+      const sub = (args[0] ?? '').toLowerCase();
+      if (sub === 'status') return <PollingStatusScreen serverUrl={serverUrl} />;
+      if (sub === 'pause') return <PollingToggleScreen action="pause" serverUrl={serverUrl} />;
+      if (sub === 'resume') return <PollingToggleScreen action="resume" serverUrl={serverUrl} />;
+      return <Text color="red">Usage: /polling &lt;status|pause|resume&gt;</Text>;
+    }
     case 'config':
       return <ConfigScreen sub={args[0]} testProviderId={args[1]} serverUrl={serverUrl} onDone={onDone} />;
     case 'dashboard':
