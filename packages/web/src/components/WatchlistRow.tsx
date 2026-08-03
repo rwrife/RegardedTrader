@@ -1,12 +1,16 @@
 import React from 'react';
-import type { SampleTicker } from '../sample-data.js';
 import { useLiveQuote } from '../hooks/useLiveQuote.js';
 
+export interface WatchlistRowTicker {
+  symbol: string;
+  name: string;
+  quote?: { price: number; change: number; changePercent: number };
+}
+
 /**
- * Single row in the watchlist. Subscribes to live quote polling when the
- * backend is reachable so prices/percent change reflect reality; in demo
- * mode it falls back to the seeded sample quote. Extracted from App.tsx
- * in #112.
+ * Single row in the watchlist. Works with both sample and real tickers.
+ * Uses live quote polling when the backend is reachable; falls back to
+ * static quote data when provided (sample/demo mode).
  */
 export function WatchlistRow({
   t,
@@ -14,18 +18,15 @@ export function WatchlistRow({
   onPick,
   demo,
 }: {
-  t: SampleTicker;
+  t: WatchlistRowTicker;
   active: boolean;
   onPick: (s: string) => void;
   demo: boolean;
 }): JSX.Element {
-  // Subscribe each row to live quotes when the backend is reachable. The hook
-  // pauses polling when the tab is hidden and adapts cadence to market state,
-  // so N rows == N polls but each one is cheap.
   const live = useLiveQuote(t.symbol, { enabled: !demo });
-  const price = live.quote?.price ?? t.quote.price;
-  const change = live.quote?.change ?? t.quote.change;
-  const changePercent = live.quote?.changePercent ?? t.quote.changePercent;
+  const price = live.quote?.price ?? t.quote?.price;
+  const change = live.quote?.change ?? t.quote?.change ?? 0;
+  const changePercent = live.quote?.changePercent ?? t.quote?.changePercent ?? 0;
   const up = change >= 0;
   return (
     <li>
@@ -36,11 +37,15 @@ export function WatchlistRow({
         }`}
       >
         <span className="font-semibold tracking-tight w-12">{t.symbol}</span>
-        <span className="num text-fg-secondary">${price.toFixed(2)}</span>
-        <span className={`num ml-auto ${up ? 'text-up' : 'text-down'}`}>
-          {up ? '▲' : '▼'} {up ? '+' : ''}
-          {changePercent.toFixed(2)}%
+        <span className="num text-fg-secondary truncate flex-1">
+          {price != null ? `$${price.toFixed(2)}` : t.name}
         </span>
+        {price != null && (
+          <span className={`num ml-auto ${up ? 'text-up' : 'text-down'}`}>
+            {up ? '▲' : '▼'} {up ? '+' : ''}
+            {changePercent.toFixed(2)}%
+          </span>
+        )}
       </button>
     </li>
   );

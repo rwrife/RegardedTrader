@@ -19,7 +19,12 @@ import { NewsTab } from './routes/tabs/NewsTab.js';
 import { CalendarTab } from './routes/tabs/CalendarTab.js';
 import { ChartTab } from './routes/tabs/ChartTab.js';
 import { TechTab } from './routes/tabs/TechTab.js';
+import { useLiveQuote } from './hooks/useLiveQuote.js';
+import { useHistory } from './hooks/useHistory.js';
+import { CandleChart } from './components/CandleChart.js';
+import { LiveQuoteIndicator } from './components/LiveQuoteIndicator.js';
 import type { Tab } from './types.js';
+import type { WatchlistEntry } from './types.js';
 
 // Tiny hash-based router so the dashboard stays a single bundle without
 // pulling in react-router. Routes: `#/` (default), `#/settings`,
@@ -100,23 +105,34 @@ export function App(): JSX.Element {
   const [demo, setDemo] = useState<boolean>(demoForced || true);
   // These hooks must be declared unconditionally so the order stays stable
   // across renders, even when a non-home route returns early below.
-  const [active, setActive] = useState<string>(SAMPLE_TICKERS[0]!.symbol);
+  const [active, setActive] = useState<string>('');
   const [tab, setTab] = useState<Tab>('briefing');
   const [query, setQuery] = useState('');
 
   // Probe the API once to decide if we should drop demo mode.
+  // On success, also fetch the watchlist and activate the first entry.
   useEffect(() => {
     if (demoForced) return;
     fetch('/api/health', { method: 'GET' })
       .then((r) => {
-        if (r.ok) setDemo(false);
+        if (!r.ok) return;
+        setDemo(false);
+        // Pick the first watchlist entry as the default active ticker.
+        return fetch('/api/tickers')
+          .then((wr) => wr.json())
+          .then((data: { entries: Array<{ profile: { symbol: string } }> }) => {
+            const first = data?.entries?.[0]?.profile?.symbol;
+            if (first) setActive(first);
+          });
       })
-      .catch(() => {
-        /* stay in demo */
-      });
+      .catch(() => { /* stay in demo */ });
   }, [demoForced]);
 
-  const ticker: SampleTicker | undefined = useMemo(() => findSample(active), [active]);
+  const ticker: SampleTicker | undefined = useMemo(() => {
+    // In demo mode with nothing active yet, fall back to the first sample ticker.
+    const effectiveActive = active || (demo ? SAMPLE_TICKERS[0]!.symbol : '');
+    return findSample(effectiveActive);
+  }, [active, demo]);
 
   if (route.kind === 'settings') {
     return <Settings onClose={() => navigate('home')} />;
