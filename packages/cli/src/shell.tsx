@@ -73,7 +73,7 @@ const COMMANDS: SlashCommand[] = [
   { id: 'watch',    name: '/watch',    usage: '/watch [SYM...]', blurb: 'Live tape stream (SSE): price/RSI/headline' },
   { id: 'tail',     name: '/tail',     usage: '/tail <SYM> [--quotes]', blurb: 'Tail per-symbol news stream', needsArgs: true },
   { id: 'polling',  name: '/polling',  usage: '/polling <status|pause|resume>', blurb: 'Polling subsystem controls', needsArgs: true },
-  { id: 'config',   name: '/config',   usage: '/config [show|test [id]]', blurb: 'AI providers, risk, server' },
+  { id: 'config',   name: '/config',   usage: '/config [show|test [id]|risk]', blurb: 'AI providers, risk, server' },
   { id: 'cache',    name: '/cache',    usage: '/cache clear', blurb: 'Clear shared market-data cache', needsArgs: true },
   { id: 'dashboard',name: '/dashboard',usage: '/dashboard',      blurb: 'Open local web dashboard' },
   { id: 'paper',    name: '/paper',    usage: '/paper <submit|orders|positions> ...', blurb: 'Paper-only simulated execution', needsArgs: true },
