@@ -35,6 +35,8 @@ export const HARD_GATE_FLAGS = {
   nakedShortsForbidden: 'naked-shorts-forbidden',
   staleQuote: 'stale-quote',
   lowConfidence: 'low-confidence',
+  earningsWithin7d: 'earnings within 7d',
+  ivCrushRisk: 'iv crush risk',
 } as const;
 
 export interface HardGatesOptions {
@@ -97,6 +99,31 @@ export class HardGates implements Rule {
         options: clampOptionsConviction(next.options, this.staleConvictionCap),
       };
       flags.push(HARD_GATE_FLAGS.staleQuote);
+    }
+
+    // 3b. Earnings proximity guardrails.
+    if (ctx.nextEarnings && ctx.nextEarnings.daysUntil <= 7) {
+      next = {
+        ...next,
+        options: {
+          ...next.options,
+          nakedCall: next.options.nakedCall
+            ? forceAvoid(next.options.nakedCall, 'earnings within 7d')
+            : null,
+          nakedPut: next.options.nakedPut
+            ? forceAvoid(next.options.nakedPut, 'earnings within 7d')
+            : null,
+        },
+      };
+      flags.push(HARD_GATE_FLAGS.earningsWithin7d);
+    }
+
+    if (ctx.nextEarnings && ctx.nextEarnings.daysUntil <= 1) {
+      next = {
+        ...next,
+        options: forceAvoidAcrossOptions(next.options, 'iv crush risk'),
+      };
+      flags.push(HARD_GATE_FLAGS.ivCrushRisk);
     }
 
     // 4. Low aggregate confidence — force equity HOLD; collapse non-null
@@ -176,6 +203,25 @@ function forceHoldAcrossOptions(
     coveredPut: o.coveredPut ? forceHold(o.coveredPut, reason) : null,
     nakedCall: o.nakedCall ? forceHold(o.nakedCall, reason) : null,
     nakedPut: o.nakedPut ? forceHold(o.nakedPut, reason) : null,
+  };
+}
+
+function forceAvoid(v: Verdict, reason: string): Verdict {
+  if (v.action === 'AVOID' || v.action === 'HOLD') return v;
+  const prefix = `[HardGates: ${reason}] `;
+  const rationale = (prefix + v.rationale).slice(0, 600);
+  return { ...v, action: 'AVOID', rationale };
+}
+
+function forceAvoidAcrossOptions(
+  o: OptionsVerdicts,
+  reason: string,
+): OptionsVerdicts {
+  return {
+    coveredCall: o.coveredCall ? forceAvoid(o.coveredCall, reason) : null,
+    coveredPut: o.coveredPut ? forceAvoid(o.coveredPut, reason) : null,
+    nakedCall: o.nakedCall ? forceAvoid(o.nakedCall, reason) : null,
+    nakedPut: o.nakedPut ? forceAvoid(o.nakedPut, reason) : null,
   };
 }
 

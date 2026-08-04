@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Bloomberg Opinion",
+    "domains": ["bloomberg.com"]
+  },
+  {
+    "name": "Reuters Breakingviews",
+    "domains": ["reuters.com"]
+  },
+  {
+    "name": "WSJ Opinion",
+    "domains": ["wsj.com"]
+  },
+  {
+    "name": "FT Alphaville",
+    "domains": ["ft.com", "blogs.ft.com"]
+  },
+  {
+    "name": "Seeking Alpha",
+    "domains": ["seekingalpha.com"]
+  }
+]

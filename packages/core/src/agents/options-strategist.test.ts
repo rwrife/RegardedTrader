@@ -93,6 +93,81 @@ describe('OptionsStrategist', () => {
       expect.objectContaining({ json: true }),
     );
   });
+
+  it('reorders plans toward favorable latestRecommendation stances and annotates thesis conflicts', async () => {
+    const bearishCallCredit: TradePlan = definedRiskPlan({
+      name: 'bear call spread',
+      thesis: 'bearish',
+      legs: [
+        {
+          action: 'sell',
+          qty: 1,
+          contract: makeContract({ strike: 100, type: 'call', bid: 2.0, ask: 2.2 }),
+        },
+        {
+          action: 'buy',
+          qty: 1,
+          contract: makeContract({ strike: 110, type: 'call', bid: 0.8, ask: 1.0 }),
+        },
+      ],
+      maxLoss: 800,
+      maxGain: 120,
+    });
+    const bullishLongCall: TradePlan = definedRiskPlan({
+      name: 'long call',
+      thesis: 'bullish',
+      legs: [
+        {
+          action: 'buy',
+          qty: 1,
+          contract: makeContract({ strike: 105, type: 'call', bid: 1.0, ask: 1.2 }),
+        },
+      ],
+      maxLoss: 120,
+      maxGain: null,
+    });
+    const llm = fakeLLM(JSON.stringify({ plans: [bullishLongCall, bearishCallCredit] }));
+    const s = new OptionsStrategist(llm);
+
+    const out = await s.propose({
+      symbol: 'NVDA',
+      thesis: 'bullish breakout continuation',
+      maxLossUsd: 500,
+      chain: SAMPLE_CHAIN,
+      latestRecommendation: {
+        symbol: 'NVDA',
+        generatedAt: '2026-01-01T00:00:00.000Z',
+        asOf: { quote: '2026-01-01T00:00:00.000Z', options: null, sentiment: null, news: null },
+        equity: {
+          action: 'SELL',
+          conviction: 0.82,
+          rationale: 'downtrend',
+          signals: [],
+          contraSignals: [],
+        },
+        options: {
+          coveredCall: {
+            action: 'BUY',
+            conviction: 0.7,
+            rationale: 'income while bearish',
+            signals: [],
+            contraSignals: [],
+          },
+          coveredPut: null,
+          nakedCall: null,
+          nakedPut: null,
+        },
+        riskFlags: [],
+        sources: [],
+        modelInfo: { provider: 'test', model: 'test', ruleVersion: '1.0.0' },
+        disclaimer: 'Not financial advice.',
+      },
+    });
+
+    expect(out[0]?.name).toBe('bear call spread');
+    expect(out[0]?.notes).toMatch(/conflict/i);
+    expect(out[0]?.notes).toMatch(/SELL/i);
+  });
 });
 
 describe('attachRiskGraph', () => {

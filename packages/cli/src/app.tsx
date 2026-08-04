@@ -4,6 +4,7 @@ import { BriefingScreen } from './screens/briefing.js';
 import { BriefScreen } from './screens/brief.js';
 import { QuoteScreen } from './screens/quote.js';
 import { TechScreen } from './screens/tech.js';
+import { NewsScreen } from './screens/news.js';
 import { PlanScreen } from './screens/plan.js';
 import { DashboardScreen } from './screens/dashboard.js';
 import { ConfigScreen } from './screens/config.js';
@@ -11,6 +12,12 @@ import { AddScreen } from './screens/add.js';
 import { ListScreen, RemoveScreen } from './screens/watchlist.js';
 import { WatchScreen } from './screens/watch.js';
 import { OptionsScreen } from './screens/options.js';
+import { PaperScreen } from './screens/paper.js';
+import { ChartScreen } from './screens/chart.js';
+import { CalendarScreen } from './screens/calendar.js';
+import { TailScreen, PollingStatusScreen, PollingToggleScreen } from './screens/polling.js';
+import { MentionsScreen, SentimentScreen } from './screens/sentiment.js';
+import { CacheClearScreen } from './screens/cache.js';
 
 export interface AppProps {
   command: string;
@@ -21,6 +28,18 @@ export interface AppProps {
     thesis?: string;
     maxLoss?: number;
     expiry?: string;
+    paper?: boolean;
+    from?: string;
+    days?: number;
+    past?: boolean;
+    upcoming?: boolean;
+    holidays?: boolean;
+    earnings?: boolean;
+    quotes?: boolean;
+    window?: string;
+    watch?: boolean;
+    source?: string;
+    limit?: number;
   };
 }
 
@@ -34,6 +53,8 @@ export function App({ command, args, serverUrl, flags }: AppProps) {
           expiry={flags?.expiry}
         />
       );
+    case 'chart':
+      return <ChartScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
     case 'briefing':
       return <BriefingScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
     case 'brief':
@@ -50,6 +71,26 @@ export function App({ command, args, serverUrl, flags }: AppProps) {
       return <QuoteScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
     case 'tech':
       return <TechScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
+    case 'news':
+      return <NewsScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
+    case 'sentiment':
+      return (
+        <SentimentScreen
+          symbol={args[0] ?? ''}
+          serverUrl={serverUrl}
+          window={flags?.window}
+          watch={flags?.watch}
+        />
+      );
+    case 'mentions':
+      return (
+        <MentionsScreen
+          symbol={args[0] ?? ''}
+          serverUrl={serverUrl}
+          source={flags?.source}
+          limit={flags?.limit}
+        />
+      );
     case 'plan':
       return <PlanScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
     case 'dashboard':
@@ -70,6 +111,44 @@ export function App({ command, args, serverUrl, flags }: AppProps) {
       return <RemoveScreen symbol={args[0] ?? ''} serverUrl={serverUrl} />;
     case 'watch':
       return <WatchScreen args={args} serverUrl={serverUrl} />;
+    case 'paper':
+      return <PaperScreen args={args} serverUrl={serverUrl} paperFlag={flags?.paper} />;
+    case 'cal':
+    case 'calendar':
+      return (
+        <CalendarScreen
+          args={args}
+          serverUrl={serverUrl}
+          from={flags?.from}
+          days={flags?.days}
+          past={!!flags?.past}
+          upcoming={!!flags?.upcoming}
+          holidays={!!flags?.holidays}
+          earnings={!!flags?.earnings}
+        />
+      );
+    case 'tail':
+      return <TailScreen symbol={args[0] ?? ''} includeQuotes={!!flags?.quotes} serverUrl={serverUrl} />;
+    case 'polling': {
+      const sub = (args[0] ?? '').toLowerCase();
+      if (sub === 'status') return <PollingStatusScreen serverUrl={serverUrl} />;
+      if (sub === 'pause') return <PollingToggleScreen action="pause" serverUrl={serverUrl} />;
+      if (sub === 'resume') return <PollingToggleScreen action="resume" serverUrl={serverUrl} />;
+      return (
+        <Box flexDirection="column">
+          <Text color="red">Usage: regard polling &lt;status|pause|resume&gt;</Text>
+        </Box>
+      );
+    }
+    case 'cache': {
+      const sub = (args[0] ?? '').toLowerCase();
+      if (sub === 'clear') return <CacheClearScreen serverUrl={serverUrl} />;
+      return (
+        <Box flexDirection="column">
+          <Text color="red">Usage: regard cache clear</Text>
+        </Box>
+      );
+    }
     default:
       return (
         <Box flexDirection="column">

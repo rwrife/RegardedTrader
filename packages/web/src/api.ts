@@ -53,9 +53,11 @@ export interface ApiClient {
   upsertMarketProvider(id: string, provider: MarketDataProviderConfig): Promise<MarketDataConfigResponse>;
   removeMarketProvider(id: string): Promise<MarketDataConfigResponse>;
   activateMarketProvider(id: string | null): Promise<MarketDataConfigResponse>;
-  testMarketProvider(symbol?: string): Promise<MarketDataTestResponse>;
+  testMarketProvider(symbol?: string, providerId?: string): Promise<MarketDataTestResponse>;
   /** Update risk caps (#152). Hot-applies to the in-process Orchestrator. */
   updateRiskCaps(risk: RiskConfig): Promise<ConfigResponse>;
+  updateCacheEnabled(enabled: boolean): Promise<ConfigResponse>;
+  clearCache(namespace?: string): Promise<{ ok: boolean; namespace: string | null; deleted: number }>;
 }
 
 export interface ApiOptions {
@@ -66,6 +68,7 @@ export interface ApiOptions {
 }
 
 const DEFAULT_BASE = '/api';
+const AUTH_STORAGE_KEY = 'rt.auth';
 
 async function readJson<T>(res: Response): Promise<T> {
   const text = await res.text();
@@ -154,10 +157,10 @@ export function createApi(opts: ApiOptions = {}): ApiClient {
       const res = await f(url('/config/market-data/activate'), json({ id }));
       return readJson<MarketDataConfigResponse>(res);
     },
-    async testMarketProvider(symbol) {
+    async testMarketProvider(symbol?: string, providerId?: string) {
       const res = await f(
         url('/config/market-data/test'),
-        json(symbol ? { symbol } : {}),
+        json({ ...(symbol ? { symbol } : {}), ...(providerId ? { providerId } : {}) }),
       );
       const text = await res.text();
       try {
@@ -172,7 +175,31 @@ export function createApi(opts: ApiOptions = {}): ApiClient {
       const res = await f(url('/config/risk'), json(risk));
       return readJson<ConfigResponse>(res);
     },
+    async updateCacheEnabled(enabled) {
+      const res = await f(url('/config/cache'), json({ enabled }));
+      return readJson<ConfigResponse>(res);
+    },
+    async clearCache(namespace) {
+      const body = namespace ? { namespace } : {};
+      const res = await f(url('/cache/clear'), json(body));
+      return readJson<{ ok: boolean; namespace: string | null; deleted: number }>(res);
+    },
   };
+}
+
+export function streamUrl(base = DEFAULT_BASE): string {
+  const origin =
+    typeof window !== 'undefined'
+      ? window.location.origin
+      : 'http://127.0.0.1';
+  const baseUrl = new URL(base, origin);
+  const wsProtocol = baseUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = new URL('/stream', `${wsProtocol}//${baseUrl.host}`);
+  if (typeof window !== 'undefined') {
+    const token = window.sessionStorage.getItem(AUTH_STORAGE_KEY);
+    if (token) url.searchParams.set('t', token);
+  }
+  return url.toString();
 }
 
 /** Mask key for display. Mirrors the server-side redactor for in-browser inputs. */

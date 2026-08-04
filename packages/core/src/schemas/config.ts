@@ -26,7 +26,7 @@ export const CliProvider = z.object({
   kind: z.literal('cli'),
   label: z.string().min(1),
   backend: CliBackendKind,
-  /** Binary path / command. Defaults: `codex`, `claude`, `gh` */
+  /** Binary path / command. Defaults: `codex`, `claude`, `copilot` */
   command: z.string().optional(),
   /** Extra args appended after the backend's defaults */
   args: z.array(z.string()).optional(),
@@ -74,6 +74,197 @@ export const RiskConfig = z.object({
 });
 export type RiskConfig = z.infer<typeof RiskConfig>;
 
+export const PollingSentimentSourceConfig = z
+  .object({
+    enabled: z.boolean().default(true),
+    weight: z.number().nonnegative().default(1),
+    cadenceMs: z.number().int().positive().optional(),
+    apiToken: z.string().min(1).optional(),
+  })
+  .default({
+    enabled: true,
+    weight: 1,
+  });
+export type PollingSentimentSourceConfig = z.infer<typeof PollingSentimentSourceConfig>;
+
+export const PollingCadenceWindow = z.object({
+  quote: z.number().int().positive(),
+  options: z.number().int().positive(),
+  news: z.number().int().positive(),
+});
+export type PollingCadenceWindow = z.infer<typeof PollingCadenceWindow>;
+
+export const PollingCadenceConfig = z
+  .object({
+    rth: PollingCadenceWindow.default({ quote: 30_000, options: 300_000, news: 600_000 }),
+    pre: PollingCadenceWindow.default({ quote: 60_000, options: 600_000, news: 900_000 }),
+    post: PollingCadenceWindow.default({ quote: 60_000, options: 600_000, news: 900_000 }),
+    closed: PollingCadenceWindow.default({ quote: 300_000, options: 1_800_000, news: 1_800_000 }),
+  })
+  .default({
+    rth: { quote: 30_000, options: 300_000, news: 600_000 },
+    pre: { quote: 60_000, options: 600_000, news: 900_000 },
+    post: { quote: 60_000, options: 600_000, news: 900_000 },
+    closed: { quote: 300_000, options: 1_800_000, news: 1_800_000 },
+  });
+export type PollingCadenceConfig = z.infer<typeof PollingCadenceConfig>;
+
+export const PollingSourcesConfig = z
+  .object({
+    news: z
+      .object({
+        yahoo: z.boolean().default(true),
+        nasdaq: z.boolean().default(true),
+        googleNews: z.boolean().default(true),
+      })
+      .default({ yahoo: true, nasdaq: true, googleNews: true }),
+  })
+  .default({
+    news: { yahoo: true, nasdaq: true, googleNews: true },
+  });
+export type PollingSourcesConfig = z.infer<typeof PollingSourcesConfig>;
+
+export const PollingRetentionDaysConfig = z
+  .object({
+    quote: z.number().int().positive().default(30),
+    options: z.number().int().positive().default(7),
+    news: z.number().int().positive().default(90),
+  })
+  .default({
+    quote: 30,
+    options: 7,
+    news: 90,
+  });
+export type PollingRetentionDaysConfig = z.infer<typeof PollingRetentionDaysConfig>;
+
+export const PollingConfig = z
+  .object({
+    enabled: z.boolean().default(true),
+    cadence: PollingCadenceConfig,
+    sources: PollingSourcesConfig,
+    retentionDays: PollingRetentionDaysConfig,
+    sentimentSources: z
+      .object({
+        reddit: PollingSentimentSourceConfig,
+        stocktwits: PollingSentimentSourceConfig,
+        hn: PollingSentimentSourceConfig,
+        cnn: PollingSentimentSourceConfig,
+        'google-news': PollingSentimentSourceConfig,
+        googleNewsOpinion: PollingSentimentSourceConfig,
+      })
+      .default({
+        reddit: { enabled: true, weight: 1 },
+        stocktwits: { enabled: true, weight: 0.7 },
+        hn: { enabled: true, weight: 0.4 },
+        cnn: { enabled: true, weight: 1.2 },
+        'google-news': { enabled: true, weight: 1.1 },
+        googleNewsOpinion: { enabled: true, weight: 0.9 },
+      }),
+    sentimentAlerts: z
+      .object({
+        enabled: z.boolean().default(false),
+        stdDevThreshold: z.number().positive().default(2),
+        windowSize: z.number().int().min(2).default(12),
+        minSamples: z.number().int().min(2).optional().default(8),
+      })
+      .optional(),
+    recommendations: z
+      .object({
+        /**
+         * Enables the background recommendation polling job. This controls
+         * generation only; consumers read the latest persisted recommendation.
+         */
+        enabled: z.boolean().default(true),
+        /**
+         * Recommendation polling is read-only from briefing/plan call paths:
+         * those flows consume `latestRecommendation` context but never write.
+         */
+        readOnly: z.boolean().default(true),
+        cadenceMs: z
+          .object({
+            rth: z
+              .number()
+              .int()
+              .positive()
+              .default(15 * 60 * 1000),
+            pre: z
+              .number()
+              .int()
+              .positive()
+              .default(60 * 60 * 1000),
+            post: z
+              .number()
+              .int()
+              .positive()
+              .default(60 * 60 * 1000),
+            closed: z
+              .number()
+              .int()
+              .positive()
+              .default(4 * 60 * 60 * 1000),
+            holiday: z
+              .number()
+              .int()
+              .positive()
+              .default(4 * 60 * 60 * 1000),
+          })
+          .default({
+            rth: 15 * 60 * 1000,
+            pre: 60 * 60 * 1000,
+            post: 60 * 60 * 1000,
+            closed: 4 * 60 * 60 * 1000,
+            holiday: 4 * 60 * 60 * 1000,
+          }),
+      })
+      .optional(),
+  })
+  .default({
+    enabled: true,
+    cadence: {
+      rth: { quote: 30_000, options: 300_000, news: 600_000 },
+      pre: { quote: 60_000, options: 600_000, news: 900_000 },
+      post: { quote: 60_000, options: 600_000, news: 900_000 },
+      closed: { quote: 300_000, options: 1_800_000, news: 1_800_000 },
+    },
+    sources: {
+      news: { yahoo: true, nasdaq: true, googleNews: true },
+    },
+    retentionDays: { quote: 30, options: 7, news: 90 },
+    sentimentSources: {
+      reddit: { enabled: true, weight: 1 },
+      stocktwits: { enabled: true, weight: 0.7 },
+      hn: { enabled: true, weight: 0.4 },
+      cnn: { enabled: true, weight: 1.2 },
+      'google-news': { enabled: true, weight: 1.1 },
+      googleNewsOpinion: { enabled: true, weight: 0.9 },
+    },
+    recommendations: {
+      enabled: true,
+      readOnly: true,
+      cadenceMs: {
+        rth: 15 * 60 * 1000,
+        pre: 60 * 60 * 1000,
+        post: 60 * 60 * 1000,
+        closed: 4 * 60 * 60 * 1000,
+        holiday: 4 * 60 * 60 * 1000,
+      },
+    },
+    sentimentAlerts: {
+      enabled: false,
+      stdDevThreshold: 2,
+      windowSize: 12,
+      minSamples: 8,
+    },
+  });
+export type PollingConfig = z.infer<typeof PollingConfig>;
+
+export const CacheConfig = z
+  .object({
+    enabled: z.boolean().default(true),
+  })
+  .default({ enabled: true });
+export type CacheConfig = z.infer<typeof CacheConfig>;
+
 export const AppConfig = z.object({
   /** Schema version for safe migrations */
   version: z.literal(1).default(1),
@@ -99,6 +290,9 @@ export const AppConfig = z.object({
     .default({ host: '127.0.0.1', port: 4317 }),
   /** Pluggable market-data provider config (#91). */
   marketData: MarketDataConfig,
+  /** Shared local SQLite cache for market data. */
+  cache: CacheConfig,
+  polling: PollingConfig,
 });
 export type AppConfig = z.infer<typeof AppConfig>;
 
@@ -170,7 +364,39 @@ export function redactConfig(cfg: AppConfig): AppConfig {
       mdProviders[id] = p;
     }
   }
-  return { ...cfg, providers, marketData: { ...md, providers: mdProviders } };
+  const sentimentSources = cfg.polling.sentimentSources;
+  const redactedSentimentSources = {
+    reddit: sentimentSources.reddit.apiToken
+      ? { ...sentimentSources.reddit, apiToken: maskKey(sentimentSources.reddit.apiToken) }
+      : sentimentSources.reddit,
+    stocktwits: sentimentSources.stocktwits.apiToken
+      ? { ...sentimentSources.stocktwits, apiToken: maskKey(sentimentSources.stocktwits.apiToken) }
+      : sentimentSources.stocktwits,
+    hn: sentimentSources.hn.apiToken
+      ? { ...sentimentSources.hn, apiToken: maskKey(sentimentSources.hn.apiToken) }
+      : sentimentSources.hn,
+    cnn: sentimentSources.cnn.apiToken
+      ? { ...sentimentSources.cnn, apiToken: maskKey(sentimentSources.cnn.apiToken) }
+      : sentimentSources.cnn,
+    'google-news': sentimentSources['google-news'].apiToken
+      ? {
+          ...sentimentSources['google-news'],
+          apiToken: maskKey(sentimentSources['google-news'].apiToken),
+        }
+      : sentimentSources['google-news'],
+    googleNewsOpinion: sentimentSources.googleNewsOpinion.apiToken
+      ? {
+          ...sentimentSources.googleNewsOpinion,
+          apiToken: maskKey(sentimentSources.googleNewsOpinion.apiToken),
+        }
+      : sentimentSources.googleNewsOpinion,
+  };
+  return {
+    ...cfg,
+    providers,
+    marketData: { ...md, providers: mdProviders },
+    polling: { ...cfg.polling, sentimentSources: redactedSentimentSources },
+  };
 }
 
 function maskKey(k: string): string {

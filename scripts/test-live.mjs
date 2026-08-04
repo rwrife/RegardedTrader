@@ -16,15 +16,16 @@ function parseFilter(argv) {
 
 const args = process.argv.slice(2);
 const filter = parseFilter(args);
+const supportedFilters = new Set(['tickers', 'polling', 'calendar']);
 
-if (filter !== null && filter !== 'tickers') {
+if (filter !== null && !supportedFilters.has(filter)) {
   console.error(`Unsupported --filter value: ${filter}`);
-  console.error('Supported values: tickers');
+  console.error(`Supported values: ${Array.from(supportedFilters).join(', ')}`);
   process.exit(1);
 }
 
 if (filter === null) {
-  console.error('Missing --filter. Example: npm run test:live -- --filter=tickers');
+  console.error('Missing --filter. Example: npm run test:live -- --filter=calendar');
   process.exit(1);
 }
 
@@ -34,14 +35,23 @@ const forwarded = args.filter((arg, idx) => {
   return !arg.startsWith('--filter=');
 });
 
+const testByFilter = {
+  tickers: 'test:live:tickers',
+  polling: 'test:live:polling',
+  calendar: 'test:live:calendar',
+};
+
 const run = spawnSync(
   'npm',
-  ['--workspace', '@regardedtrader/core', 'run', 'test:live:tickers', '--', ...forwarded],
+  ['--workspace', '@regardedtrader/core', 'run', testByFilter[filter], '--', ...forwarded],
   {
     stdio: 'inherit',
+    shell: true,
     env: {
       ...process.env,
-      RUN_LIVE_TICKER_TESTS: '1',
+      RUN_LIVE_TICKER_TESTS: filter === 'tickers' ? '1' : process.env.RUN_LIVE_TICKER_TESTS,
+      RUN_LIVE_POLLING_TESTS: filter === 'polling' ? '1' : process.env.RUN_LIVE_POLLING_TESTS,
+      RUN_LIVE_CALENDAR_TESTS: filter === 'calendar' ? '1' : process.env.RUN_LIVE_CALENDAR_TESTS,
     },
   },
 );

@@ -39,3 +39,6 @@ coverage/
 
 # vite
 .vite/
+
+# local git worktrees
+.worktrees/

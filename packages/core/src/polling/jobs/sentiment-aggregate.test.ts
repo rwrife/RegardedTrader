@@ -8,7 +8,7 @@ import {
   aggregateScoredMentions,
   aggregateSentiment,
   DEFAULT_SOURCE_WEIGHTS,
-  type SentimentUpdateEvent,
+  type SentimentEvent,
 } from './sentiment-aggregate.js';
 import type { ScoredMention } from '../../schemas/sentiment.js';
 
@@ -124,6 +124,7 @@ describe('aggregateScoredMentions (pure)', () => {
     expect(DEFAULT_SOURCE_WEIGHTS.stocktwits).toBe(0.7);
     expect(DEFAULT_SOURCE_WEIGHTS.cnn).toBe(1.2);
     expect(DEFAULT_SOURCE_WEIGHTS['google-news']).toBe(1.1);
+    expect(DEFAULT_SOURCE_WEIGHTS.googleNewsOpinion).toBe(1.1);
     expect(DEFAULT_SOURCE_WEIGHTS.hn).toBe(0.4);
   });
 });
@@ -161,7 +162,7 @@ describe('aggregateSentiment (store-backed)', () => {
       }),
     );
 
-    const events: SentimentUpdateEvent[] = [];
+    const events: SentimentEvent[] = [];
     const res = await aggregateSentiment({
       symbol: 'nvda',
       store,
@@ -179,7 +180,9 @@ describe('aggregateSentiment (store-backed)', () => {
 
     expect(events).toHaveLength(1);
     expect(events[0]!.type).toBe('sentiment.update');
-    expect(events[0]!.snapshot?.symbol).toBe('NVDA');
+    if (events[0]?.type === 'sentiment.update') {
+      expect(events[0].snapshot?.symbol).toBe('NVDA');
+    }
 
     // Persisted: readSentiment should yield exactly one row.
     const persisted: unknown[] = [];
@@ -196,7 +199,7 @@ describe('aggregateSentiment (store-backed)', () => {
       }),
     );
 
-    const events: SentimentUpdateEvent[] = [];
+    const events: SentimentEvent[] = [];
     const res = await aggregateSentiment({
       symbol: 'NVDA',
       store,
@@ -208,7 +211,9 @@ describe('aggregateSentiment (store-backed)', () => {
     expect(res.snapshot).toBeNull();
     expect(res.contributing).toBe(0);
     expect(events).toHaveLength(1);
-    expect(events[0]!.snapshot).toBeNull();
+    if (events[0]?.type === 'sentiment.update') {
+      expect(events[0].snapshot).toBeNull();
+    }
 
     const persisted: unknown[] = [];
     for await (const s of store.readSentiment('NVDA')) persisted.push(s);
@@ -266,5 +271,130 @@ describe('aggregateSentiment (store-backed)', () => {
 
     expect(res.contributing).toBe(1);
     expect(res.snapshot!.volume).toBe(1);
+  });
+
+  it('emits sentiment.alert when the new score moves beyond configured std-dev threshold', async () => {
+    await store.appendSentiment({
+      symbol: 'NVDA',
+      asOf: new Date(now.getTime() - 60 * 60 * 1000).toISOString(),
+      score: -0.2,
+      confidence: 0.8,
+      volume: 12,
+      bySource: {},
+    });
+    await store.appendSentiment({
+      symbol: 'NVDA',
+      asOf: new Date(now.getTime() - 55 * 60 * 1000).toISOString(),
+      score: -0.1,
+      confidence: 0.8,
+      volume: 12,
+      bySource: {},
+    });
+    await store.appendSentiment({
+      symbol: 'NVDA',
+      asOf: new Date(now.getTime() - 50 * 60 * 1000).toISOString(),
+      score: -0.2,
+      confidence: 0.8,
+      volume: 12,
+      bySource: {},
+    });
+    await store.appendSentiment({
+      symbol: 'NVDA',
+      asOf: new Date(now.getTime() - 45 * 60 * 1000).toISOString(),
+      score: -0.1,
+      confidence: 0.8,
+      volume: 12,
+      bySource: {},
+    });
+
+    await store.appendScoredMention(
+      scored('reddit', 0.9, 0.95, new Date(now.getTime() - 5 * 60 * 1000).toISOString(), {
+        sourceId: 'alert-scored',
+        engagement: 100,
+      }),
+    );
+
+    const events: SentimentEvent[] = [];
+    await aggregateSentiment({
+      symbol: 'NVDA',
+      store,
+      marketState: 'rth',
+      now: () => now,
+      sentimentAlerts: {
+        enabled: true,
+        stdDevThreshold: 2,
+        windowSize: 4,
+        minSamples: 4,
+      },
+      onEvent: (e) => events.push(e),
+    });
+
+    const alert = events.find(
+      (e): e is Extract<SentimentEvent, { type: 'sentiment.alert' }> =>
+        e.type === 'sentiment.alert',
+    );
+    expect(alert).toBeDefined();
+    expect(alert?.symbol).toBe('NVDA');
+    expect(alert?.zScore).toBeGreaterThan(2);
+    expect(alert?.direction).toBe('up');
+  });
+
+  it('does not emit sentiment.alert when alerts are disabled', async () => {
+    await store.appendSentiment({
+      symbol: 'NVDA',
+      asOf: new Date(now.getTime() - 60 * 60 * 1000).toISOString(),
+      score: -0.2,
+      confidence: 0.8,
+      volume: 12,
+      bySource: {},
+    });
+    await store.appendSentiment({
+      symbol: 'NVDA',
+      asOf: new Date(now.getTime() - 55 * 60 * 1000).toISOString(),
+      score: -0.1,
+      confidence: 0.8,
+      volume: 12,
+      bySource: {},
+    });
+    await store.appendSentiment({
+      symbol: 'NVDA',
+      asOf: new Date(now.getTime() - 50 * 60 * 1000).toISOString(),
+      score: -0.2,
+      confidence: 0.8,
+      volume: 12,
+      bySource: {},
+    });
+    await store.appendSentiment({
+      symbol: 'NVDA',
+      asOf: new Date(now.getTime() - 45 * 60 * 1000).toISOString(),
+      score: -0.1,
+      confidence: 0.8,
+      volume: 12,
+      bySource: {},
+    });
+    await store.appendScoredMention(
+      scored('reddit', 0.9, 0.95, new Date(now.getTime() - 5 * 60 * 1000).toISOString(), {
+        sourceId: 'no-alert-scored',
+        engagement: 100,
+      }),
+    );
+
+    const events: SentimentEvent[] = [];
+    await aggregateSentiment({
+      symbol: 'NVDA',
+      store,
+      marketState: 'rth',
+      now: () => now,
+      sentimentAlerts: {
+        enabled: false,
+        stdDevThreshold: 2,
+        windowSize: 4,
+        minSamples: 4,
+      },
+      onEvent: (e) => events.push(e),
+    });
+
+    expect(events.some((e) => e.type === 'sentiment.alert')).toBe(false);
+    expect(events.some((e) => e.type === 'sentiment.update')).toBe(true);
   });
 });

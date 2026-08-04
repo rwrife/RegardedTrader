@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { DISCLAIMER } from '../constants.js';
 export { AiOutputEnvelope, envelope, type AiEnvelope } from './envelope.js';
+export * from './stream.js';
 export {
   ContextBudgetOptionsSchema,
   ContextBudgetSectionCharsSchema,
@@ -10,6 +11,12 @@ export {
   type ContextBudgetSectionChars,
   type ContextBudgetTelemetry,
 } from './context-budget.js';
+export {
+  HeadlineBundle,
+  ScoredHeadline,
+  NewsScoutOutputSchema,
+} from './news.js';
+export type { HeadlineBundle as HeadlineBundleT, NewsScoutOutput } from './news.js';
 
 export const Ticker = z.string().regex(/^[A-Z.\-]{1,10}$/);
 export type Ticker = z.infer<typeof Ticker>;
@@ -99,6 +106,7 @@ export const Indicators = z.object({
 export type Indicators = z.infer<typeof Indicators>;
 
 export const NewsItem = z.object({
+  id: z.string().optional(),
   title: z.string(),
   url: z.string().url(),
   source: z.string(),
@@ -125,6 +133,20 @@ export const OptionContract = z.object({
   vega: z.number().nullable().optional(),
 });
 export type OptionContract = z.infer<typeof OptionContract>;
+
+export const ImpliedMoveRow = z.object({
+  expiry: z.string(),
+  straddleMid: z.number(),
+  impliedMoveAbs: z.number(),
+  impliedMovePct: z.number(),
+});
+export type ImpliedMoveRow = z.infer<typeof ImpliedMoveRow>;
+
+export const OptionsChainResponse = z.object({
+  contracts: z.array(OptionContract),
+  impliedMoves: z.array(ImpliedMoveRow),
+});
+export type OptionsChainResponse = z.infer<typeof OptionsChainResponse>;
 
 export const TradePlanLeg = z.object({
   action: z.enum(['buy', 'sell']),
@@ -204,10 +226,57 @@ export type TradePlan = z.infer<typeof TradePlan>;
  * a wall of red.
  */
 export const ReviewedTradePlan = z.object({
+  id: z.string().min(1).optional(),
   plan: TradePlan,
   review: RiskReview,
 });
 export type ReviewedTradePlan = z.infer<typeof ReviewedTradePlan>;
+
+export const PaperOrder = z.object({
+  id: z.string().min(1),
+  planId: z.string().min(1),
+  symbol: Ticker,
+  mode: z.literal('paper'),
+  submittedAt: z.string(),
+  plan: TradePlan,
+  notes: z.string().optional(),
+});
+export type PaperOrder = z.infer<typeof PaperOrder>;
+
+export const PaperFill = z.object({
+  id: z.string().min(1),
+  orderId: z.string().min(1),
+  planId: z.string().min(1),
+  symbol: Ticker,
+  filledAt: z.string(),
+  underlyingPrice: z.number(),
+  legFills: z.array(
+    z.object({
+      contractSymbol: z.string().min(1),
+      action: z.enum(['buy', 'sell']),
+      qty: z.number().int().positive(),
+      mark: z.number(),
+    }),
+  ),
+  netPremiumUsd: z.number(),
+  estimatedMaxLossUsd: z.number(),
+  estimatedMaxGainUsd: z.number().nullable(),
+  notes: z.string().optional(),
+});
+export type PaperFill = z.infer<typeof PaperFill>;
+
+export const PaperPosition = z.object({
+  id: z.string().min(1),
+  planId: z.string().min(1),
+  symbol: Ticker,
+  openedAt: z.string(),
+  netPremiumUsd: z.number(),
+  maxLossUsd: z.number(),
+  maxGainUsd: z.number().nullable(),
+  status: z.literal('open'),
+  notes: z.string().optional(),
+});
+export type PaperPosition = z.infer<typeof PaperPosition>;
 
 /**
  * Request body for `POST /briefing/:symbol` (issue #138). When `thesis` and
@@ -247,9 +316,17 @@ export const TickerProfileExtraction = z.object({
   symbol: z.string().min(1).max(10),
   name: z.string().min(1),
   exchange: z.string().min(1),
-  sector: z.string().min(1),
-  industry: z.string().min(1),
-  description: z.string().min(1),
+  // Allow empty strings from the LLM; coerce to "Unknown" so validation
+  // doesn't hard-fail for well-known tickers where the LLM omits a field.
+  sector: z
+    .string()
+    .transform((s) => s.trim() || 'Unknown'),
+  industry: z
+    .string()
+    .transform((s) => s.trim() || 'Unknown'),
+  description: z
+    .string()
+    .transform((s) => s.trim() || 'No description available'),
 });
 export type TickerProfileExtraction = z.infer<typeof TickerProfileExtraction>;
 

@@ -12,6 +12,7 @@ export const SentimentSource = z.enum([
   'hn',
   'cnn',
   'google-news',
+  'googleNewsOpinion',
 ]);
 export type SentimentSource = z.infer<typeof SentimentSource>;
 

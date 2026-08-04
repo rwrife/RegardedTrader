@@ -58,6 +58,7 @@ export const DEFAULT_SOURCE_WEIGHTS = Object.freeze({
   hn: 0.4,
   cnn: 1.2,
   'google-news': 1.1,
+  googleNewsOpinion: 1.1,
 }) satisfies Record<SentimentSource, number>;
 
 /** Lookback window (ms) per market state. Defaults per the issue spec. */
@@ -93,6 +94,7 @@ export const SentimentAggregatorWeights = z
     hn: z.number().nonnegative(),
     cnn: z.number().nonnegative(),
     'google-news': z.number().nonnegative(),
+    googleNewsOpinion: z.number().nonnegative(),
   })
   .partial();
 export type SentimentAggregatorWeights = z.infer<typeof SentimentAggregatorWeights>;
@@ -112,6 +114,33 @@ export interface SentimentUpdateEvent {
   readonly snapshot: SentimentSnapshot | null;
 }
 
+export interface SentimentAlertSettings {
+  readonly enabled: boolean;
+  /** Alert when |z-score| is >= this threshold. */
+  readonly stdDevThreshold: number;
+  /** Trailing snapshot count used as the baseline distribution. */
+  readonly windowSize: number;
+  /** Minimum baseline points required before alerting. */
+  readonly minSamples?: number;
+}
+
+export interface SentimentAlertEvent {
+  readonly type: 'sentiment.alert';
+  readonly symbol: string;
+  readonly snapshot: SentimentSnapshot;
+  readonly thresholdStdDev: number;
+  readonly baseline: {
+    readonly mean: number;
+    readonly stdDev: number;
+    readonly sampleSize: number;
+  };
+  readonly zScore: number;
+  readonly direction: 'up' | 'down';
+  readonly at: string;
+}
+
+export type SentimentEvent = SentimentUpdateEvent | SentimentAlertEvent;
+
 export interface AggregateSentimentOptions {
   readonly symbol: string;
   readonly store: MentionStore;
@@ -127,8 +156,10 @@ export interface AggregateSentimentOptions {
   readonly sourceWeights?: SentimentAggregatorWeights;
   /** Market state to pick the window for. Defaults to `'rth'`. */
   readonly marketState?: MarketState;
-  /** Optional event sink for `sentiment.update`. */
-  readonly onEvent?: (e: SentimentUpdateEvent) => void;
+  /** Optional sentiment-alert hook (issue #42). */
+  readonly sentimentAlerts?: SentimentAlertSettings;
+  /** Optional event sink for `sentiment.update` and `sentiment.alert`. */
+  readonly onEvent?: (e: SentimentEvent) => void;
   /** Injectable clock (tests). Defaults to `() => new Date()`. */
   readonly now?: () => Date;
 }
@@ -252,6 +283,51 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
+function sampleStdDev(values: readonly number[], mean: number): number {
+  if (values.length < 2) return 0;
+  const variance =
+    values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length;
+  return Math.sqrt(variance);
+}
+
+async function maybeEmitSentimentAlert(
+  opts: AggregateSentimentOptions,
+  symbol: string,
+  snapshot: SentimentSnapshot,
+): Promise<void> {
+  const alertCfg = opts.sentimentAlerts;
+  if (!alertCfg?.enabled) return;
+
+  const windowSize = Math.max(2, Math.floor(alertCfg.windowSize));
+  const minSamples = Math.max(2, Math.floor(alertCfg.minSamples ?? windowSize));
+  const history: SentimentSnapshot[] = [];
+  for await (const prior of opts.store.readSentiment(symbol)) {
+    history.push(prior);
+  }
+  history.sort((a, b) => Date.parse(a.asOf) - Date.parse(b.asOf));
+  const baseline = history.slice(-windowSize);
+  if (baseline.length < minSamples) return;
+
+  const values = baseline.map((row) => row.score);
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const stdDev = sampleStdDev(values, mean);
+  if (!Number.isFinite(stdDev) || stdDev <= 0) return;
+
+  const zScore = (snapshot.score - mean) / stdDev;
+  if (Math.abs(zScore) < alertCfg.stdDevThreshold) return;
+
+  opts.onEvent?.({
+    type: 'sentiment.alert',
+    symbol,
+    snapshot,
+    thresholdStdDev: alertCfg.stdDevThreshold,
+    baseline: { mean, stdDev, sampleSize: baseline.length },
+    zScore,
+    direction: zScore >= 0 ? 'up' : 'down',
+    at: snapshot.asOf,
+  });
+}
+
 /* -------------------------------------------------------------------------- */
 /* Job entrypoint                                                             */
 /* -------------------------------------------------------------------------- */
@@ -293,6 +369,7 @@ export async function aggregateSentiment(
   });
 
   if (snapshot !== null) {
+    await maybeEmitSentimentAlert(opts, symbol, snapshot);
     await opts.store.appendSentiment(snapshot);
   }
 

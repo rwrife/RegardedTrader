@@ -5,7 +5,20 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
-import { WatchlistStore, type LLM, type WebSearch } from '@regardedtrader/core';
+import {
+  BriefingStore,
+  CalendarStore,
+  MentionStore,
+  SnapshotStore,
+  RecommendationStore,
+  WatchlistStore,
+  PaperStore,
+  type BriefingStorePort,
+  type LLM,
+  type Recommendation,
+  type TradePlan,
+  type WebSearch,
+} from '@regardedtrader/core';
 import { createApp } from './app.js';
 import { SERVER_VERSION } from './version.js';
 
@@ -48,6 +61,45 @@ const noMatchReply = {
   reason: 'Could not confidently map this symbol to a tradable US equity.',
   suggestions: [{ symbol: 'NVDA', name: 'NVIDIA Corporation' }],
 };
+
+function makeRecommendation(
+  overrides: Partial<Recommendation> = {},
+): Recommendation {
+  const symbol = overrides.symbol ?? 'NVDA';
+  const generatedAt = overrides.generatedAt ?? '2026-07-01T15:00:00.000Z';
+  return {
+    symbol,
+    generatedAt,
+    asOf: {
+      quote: generatedAt,
+      options: generatedAt,
+      sentiment: generatedAt,
+      news: generatedAt,
+      ...(overrides.asOf ?? {}),
+    },
+    equity: {
+      action: 'BUY',
+      conviction: 0.72,
+      rationale: 'Momentum and sentiment remain constructive.',
+      signals: [{ name: 'rsi14', value: 62, contribution: 0.33 }],
+      contraSignals: [{ name: 'iv.skew', value: 'elevated', contribution: -0.16 }],
+      ...(overrides.equity ?? {}),
+    },
+    options: {
+      coveredCall: null,
+      coveredPut: null,
+      nakedCall: null,
+      nakedPut: null,
+      ...(overrides.options ?? {}),
+    },
+    riskFlags: ['earnings-within-7d'],
+    sources: [{ name: 'Reuters', url: 'https://example.com/reuters/nvda' }],
+    modelInfo: { provider: 'fake', model: 'gpt', ruleVersion: '1.0.0', ...(overrides.modelInfo ?? {}) },
+    disclaimer:
+      'Research only. Not financial advice. You are responsible for your own trades.',
+    ...overrides,
+  };
+}
 
 let dir: string;
 let server: Server | null = null;
@@ -92,8 +144,155 @@ describe('POST /tickers/validate', () => {
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
       },
       llmFromConfig: () => fakeLLM(goodReply),
+    });
+
+    describe('polling control routes', () => {
+      it('returns status rows and supports pause/resume toggles', async () => {
+        const watchlist = new WatchlistStore({ path: join(dir, 'watchlist.json') });
+        await watchlist.upsert({
+          symbol: 'NVDA',
+          name: 'NVIDIA Corporation',
+          exchange: 'NASDAQ',
+          sector: 'Technology',
+          industry: 'Semiconductors',
+          description: 'Designs GPUs and AI chips.',
+          sources: ['https://example.com/nvda'],
+          validatedAt: new Date().toISOString(),
+        });
+        const { app } = createApp({
+          market: {
+            quote: async () => ({ symbol: 'NVDA', price: 100, change: 1, changePercent: 1, volume: 1, asOf: new Date().toISOString() }),
+            history: async () => [{ t: '2026-01-01', o: 1, h: 1, l: 1, c: 1, v: 1 }],
+            news: async () => [{ title: 'Headline', url: 'https://example.com/n', source: 'example', publishedAt: new Date().toISOString() }],
+            optionsChain: async () => [],
+          },
+          webSearch: fakeWebSearch(),
+          watchlist,
+          initialConfig: {
+            version: 1,
+            providers: {},
+            activeProvider: null,
+            risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
+            server: { host: '127.0.0.1', port: 4317 },
+            marketData: { providers: {}, activeProvider: null },
+            polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
+          },
+          llmFromConfig: () => null,
+          polling: { quoteEveryMs: 1000, newsEveryMs: 1000 },
+        });
+        baseUrl = await listen(app);
+
+        const status1 = await fetch(`${baseUrl}/polling/status`);
+        expect(status1.status).toBe(200);
+        const j1 = (await status1.json()) as { paused: boolean; jobs: Array<{ id: string }> };
+        expect(j1.paused).toBe(false);
+        expect(j1.jobs.map((j) => j.id)).toEqual(expect.arrayContaining(['quotes', 'news']));
+
+        const pause = await fetch(`${baseUrl}/polling/pause`, { method: 'POST' });
+        expect(pause.status).toBe(200);
+        const p = (await pause.json()) as { paused: boolean };
+        expect(p.paused).toBe(true);
+
+        const resume = await fetch(`${baseUrl}/polling/resume`, { method: 'POST' });
+        expect(resume.status).toBe(200);
+        const r = (await resume.json()) as { paused: boolean };
+        expect(r.paused).toBe(false);
+      });
+    });
+
+    describe('paper orders API', () => {
+      const plan: TradePlan = {
+        name: 'Long call',
+        thesis: 'Upside continuation',
+        legs: [
+          {
+            action: 'buy',
+            qty: 1,
+            contract: {
+              symbol: 'NVDA260918C00125000',
+              underlying: 'NVDA',
+              expiry: '2026-09-18',
+              strike: 125,
+              type: 'call',
+              bid: 5,
+              ask: 5.4,
+              last: 5.2,
+              volume: 100,
+              openInterest: 500,
+              iv: 0.42,
+            },
+          },
+        ],
+        maxLoss: 540,
+        maxGain: null,
+        breakEvens: [130.4],
+      };
+
+      async function boot(): Promise<void> {
+        const watchlist = new WatchlistStore({ path: join(dir, 'watchlist.json') });
+        const { app } = createApp({
+          market: {
+            quote: async () => ({ symbol: 'NVDA', price: 131, change: 0, changePercent: 0, volume: 0, asOf: '' }),
+            history: async () => [],
+            news: async () => [],
+            optionsChain: async () => [],
+          },
+          webSearch: fakeWebSearch(),
+          watchlist,
+          initialConfig: {
+            version: 1,
+            providers: {},
+            activeProvider: null,
+            risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
+            server: { host: '127.0.0.1', port: 4317 },
+            marketData: { providers: {}, activeProvider: null },
+            polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
+          },
+          llmFromConfig: () => null,
+          paperStore: new PaperStore({ homeDir: dir }),
+        });
+        baseUrl = await listen(app);
+      }
+
+      it('rejects submits when paper !== true', async () => {
+        await boot();
+        const r = await fetch(`${baseUrl}/paper/orders`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ paper: false, planId: 'plan-1', plan }),
+        });
+        expect(r.status).toBe(400);
+        expect((await r.json()) as { error: string }).toMatchObject({
+          error: 'Paper mode must be explicitly enabled (paper=true).',
+        });
+      });
+
+      it('submits a paper order and lists orders + positions', async () => {
+        await boot();
+        const submit = await fetch(`${baseUrl}/paper/orders`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ paper: true, planId: 'plan-2', plan }),
+        });
+        expect(submit.status).toBe(200);
+        const fill = (await submit.json()) as { planId: string; symbol: string; netPremiumUsd: number };
+        expect(fill.planId).toBe('plan-2');
+        expect(fill.symbol).toBe('NVDA');
+        expect(fill.netPremiumUsd).toBe(520);
+
+        const orders = await fetch(`${baseUrl}/paper/orders`);
+        expect(orders.status).toBe(200);
+        const o = (await orders.json()) as { orders: Array<{ planId: string }> };
+        expect(o.orders.map((x) => x.planId)).toEqual(['plan-2']);
+
+        const positions = await fetch(`${baseUrl}/paper/positions`);
+        expect(positions.status).toBe(200);
+        const p = (await positions.json()) as { positions: Array<{ planId: string }> };
+        expect(p.positions.map((x) => x.planId)).toEqual(['plan-2']);
+      });
     });
     baseUrl = await listen(app);
 
@@ -143,6 +342,7 @@ describe('POST /tickers/validate', () => {
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
       },
       llmFromConfig: () => fakeLLM(goodReply),
     });
@@ -190,6 +390,7 @@ describe('POST /tickers/validate', () => {
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
       },
       llmFromConfig: () => fakeLLM(noMatchReply),
     });
@@ -224,6 +425,7 @@ describe('POST /tickers/validate', () => {
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
       },
       llmFromConfig: () => fakeLLM(goodReply),
     });
@@ -252,6 +454,7 @@ describe('POST /tickers/validate', () => {
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
       },
       llmFromConfig: () => null,
     });
@@ -262,6 +465,566 @@ describe('POST /tickers/validate', () => {
       body: JSON.stringify({ symbols: ['NVDA'] }),
     });
     expect(r.status).toBe(503);
+  });
+});
+
+describe('GET /news/:symbol', () => {
+  it('returns a scored headline bundle for known symbols', async () => {
+    const knownProfile = {
+      symbol: 'NVDA',
+      name: 'NVIDIA Corporation',
+      exchange: 'NASDAQ',
+      sector: 'Technology',
+      industry: 'Semiconductors',
+      description: 'Designs GPUs and AI chips.',
+      sources: ['https://example.com/nvda'],
+      validatedAt: '2026-08-03T00:00:00.000Z',
+    };
+    const watchlist = new WatchlistStore({ path: join(dir, 'watchlist.json') });
+    await watchlist.upsert(knownProfile);
+    const { app } = createApp({
+      market: {
+        quote: async () => ({ symbol: 'NVDA', price: 0, change: 0, changePercent: 0, volume: 0, asOf: '' }),
+        history: async () => [],
+        news: async () => [
+          {
+            title: 'NVIDIA raises guidance',
+            url: 'https://example.com/nvda-guide',
+            source: 'Reuters',
+            publishedAt: '2026-08-03T08:00:00.000Z',
+          },
+        ],
+        optionsChain: async () => [],
+      },
+      webSearch: fakeWebSearch(),
+      watchlist,
+      initialConfig: {
+        version: 1,
+        providers: { fake: { kind: 'openai-compatible', label: 'fake', baseUrl: 'http://x/v1', model: 'm' } },
+        activeProvider: 'fake',
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
+        server: { host: '127.0.0.1', port: 4317 },
+        marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
+      },
+      llmFromConfig: () =>
+        fakeLLM({
+          summary: 'Guide raise is material for near-term setup.',
+          headlines: [{ id: 'h1', relevance: 5, materiality: 5, rationale: 'Direct fundamental update.' }],
+        }),
+    });
+    baseUrl = await listen(app);
+    const r = await fetch(`${baseUrl}/news/NVDA`);
+    expect(r.status).toBe(200);
+    const j = (await r.json()) as {
+      symbol: string;
+      summary: string;
+      headlines: Array<{ id: string; relevance: number }>;
+      disclaimer: string;
+    };
+    expect(j.symbol).toBe('NVDA');
+    expect(j.summary).toMatch(/material/i);
+    expect(j.headlines[0]?.id).toBe('h1');
+    expect(j.headlines[0]?.relevance).toBe(5);
+    expect(j.disclaimer).toMatch(/Not financial advice/i);
+  });
+});
+
+describe('Sentiment routes + SSE (#39)', () => {
+  const nowIso = '2026-07-01T15:00:00.000Z';
+  let prevToken: string | undefined;
+
+  beforeEach(() => {
+    prevToken = process.env.REGARDEDTRADER_AUTH_TOKEN;
+    process.env.REGARDEDTRADER_AUTH_TOKEN = 'dash-token-39';
+  });
+  afterEach(() => {
+    if (prevToken === undefined) delete process.env.REGARDEDTRADER_AUTH_TOKEN;
+    else process.env.REGARDEDTRADER_AUTH_TOKEN = prevToken;
+  });
+
+  async function makeSentimentApp() {
+    const watchlist = new WatchlistStore({ path: join(dir, 'watchlist.json') });
+    const mentions = new MentionStore({ root: join(dir, 'snapshots') });
+    await mentions.appendScoredMention({
+      source: 'reddit',
+      sourceId: 'r1',
+      symbol: 'NVDA',
+      url: 'https://example.com/reddit/r1',
+      title: 'Bullish flow',
+      text: 'Strong demand setup',
+      publishedAt: '2026-07-01T14:30:00.000Z',
+      fetchedAt: '2026-07-01T14:31:00.000Z',
+      sentiment: { score: 0.7, confidence: 0.8, label: 'bullish' },
+      scoredAt: '2026-07-01T14:31:30.000Z',
+    });
+    await mentions.appendSentiment({
+      symbol: 'NVDA',
+      asOf: nowIso,
+      score: 0.52,
+      confidence: 0.76,
+      volume: 11,
+      bySource: {
+        reddit: { score: 0.7, confidence: 0.8, volume: 5 },
+        'google-news': { score: 0.3, confidence: 0.7, volume: 6 },
+      },
+    });
+    return createApp({
+      market: {
+        quote: async () => ({ symbol: 'NVDA', price: 0, change: 0, changePercent: 0, volume: 0, asOf: '' }),
+        history: async () => [],
+        news: async () => [],
+        optionsChain: async () => [],
+      },
+      webSearch: fakeWebSearch(),
+      watchlist,
+      mentions,
+      initialConfig: {
+        version: 1,
+        providers: {},
+        activeProvider: null,
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
+        server: { host: '127.0.0.1', port: 4317 },
+        marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
+      },
+      llmFromConfig: () => null,
+    });
+  }
+
+  it('requires dashboard auth token on sentiment/mentions endpoints', async () => {
+    const { app } = await makeSentimentApp();
+    baseUrl = await listen(app);
+
+    const denied = await fetch(`${baseUrl}/sentiment/NVDA/latest`);
+    expect(denied.status).toBe(401);
+
+    const allowed = await fetch(`${baseUrl}/sentiment/NVDA/latest?t=dash-token-39`);
+    expect(allowed.status).toBe(200);
+  });
+
+  it('serves latest and ranged sentiment snapshots plus mention filtering', async () => {
+    const { app } = await makeSentimentApp();
+    baseUrl = await listen(app);
+
+    const latest = await fetch(`${baseUrl}/sentiment/NVDA/latest`, {
+      headers: { Authorization: 'Bearer dash-token-39' },
+    });
+    expect(latest.status).toBe(200);
+    const latestJson = (await latest.json()) as { symbol: string; score: number; volume: number };
+    expect(latestJson.symbol).toBe('NVDA');
+    expect(latestJson.score).toBeCloseTo(0.52);
+    expect(latestJson.volume).toBe(11);
+
+    const ranged = await fetch(
+      `${baseUrl}/sentiment/NVDA?since=2026-07-01T14:00:00.000Z&until=2026-07-01T16:00:00.000Z`,
+      { headers: { Authorization: 'dash-token-39' } },
+    );
+    expect(ranged.status).toBe(200);
+    const rangedJson = (await ranged.json()) as { items: Array<{ asOf: string }> };
+    expect(rangedJson.items).toHaveLength(1);
+    expect(rangedJson.items[0]?.asOf).toBe(nowIso);
+
+    const mentions = await fetch(
+      `${baseUrl}/mentions/NVDA?source=reddit&limit=5&since=2026-07-01T14:00:00.000Z`,
+      { headers: { Authorization: 'dash-token-39' } },
+    );
+    expect(mentions.status).toBe(200);
+    const mentionsJson = (await mentions.json()) as { items: Array<{ source: string }> };
+    expect(mentionsJson.items.length).toBeGreaterThan(0);
+    expect(mentionsJson.items.every((x) => x.source === 'reddit')).toBe(true);
+  });
+
+  it('streams sentiment.update events over SSE and exposes source health in /health', async () => {
+    const { app, emitSentimentUpdate } = await makeSentimentApp();
+    baseUrl = await listen(app);
+    const ac = new AbortController();
+    const sse = await fetch(`${baseUrl}/events?t=dash-token-39`, { signal: ac.signal });
+    expect(sse.status).toBe(200);
+
+    emitSentimentUpdate('NVDA', {
+      symbol: 'NVDA',
+      asOf: '2026-07-01T16:00:00.000Z',
+      score: 0.6,
+      confidence: 0.8,
+      volume: 12,
+      bySource: {},
+    });
+
+    const reader = sse.body?.getReader();
+    expect(reader).toBeDefined();
+    const decoder = new TextDecoder();
+    let text = '';
+    const started = Date.now();
+    while (Date.now() - started < 1500 && !text.includes('event: sentiment.update')) {
+      const chunk = await reader!.read();
+      if (chunk.done) break;
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    expect(text).toContain('event: sentiment.update');
+    expect(text).toContain('"symbol":"NVDA"');
+    ac.abort();
+
+    const m = await fetch(`${baseUrl}/mentions/NVDA?source=reddit`, {
+      headers: { Authorization: 'dash-token-39' },
+    });
+    expect(m.status).toBe(200);
+    const health = await fetch(`${baseUrl}/health`);
+    const healthJson = (await health.json()) as {
+      sentimentSources: { reddit: { lastSuccess: string | null; lastError: string | null } };
+    };
+    expect(healthJson.sentimentSources.reddit.lastSuccess).toBeTruthy();
+    expect(healthJson.sentimentSources.reddit.lastError).toBeNull();
+  });
+});
+
+describe('Calendar endpoints + SSE (#62)', () => {
+  let prevToken: string | undefined;
+
+  beforeEach(() => {
+    prevToken = process.env.REGARDEDTRADER_AUTH_TOKEN;
+    process.env.REGARDEDTRADER_AUTH_TOKEN = 'dash-token-62';
+  });
+  afterEach(() => {
+    if (prevToken === undefined) delete process.env.REGARDEDTRADER_AUTH_TOKEN;
+    else process.env.REGARDEDTRADER_AUTH_TOKEN = prevToken;
+  });
+
+  async function makeCalendarApp() {
+    const watchlist = new WatchlistStore({ path: join(dir, 'watchlist.json') });
+    await watchlist.upsert({
+      symbol: 'NVDA',
+      name: 'NVIDIA Corporation',
+      exchange: 'NASDAQ',
+      sector: 'Technology',
+      industry: 'Semiconductors',
+      description: 'Designs GPUs and AI chips.',
+      sources: ['https://example.com/nvda'],
+      validatedAt: '2026-07-01T12:00:00.000Z',
+    });
+
+    const store = new CalendarStore({ root: join(dir, 'calendar'), staleMs: 7 * 24 * 60 * 60 * 1000 });
+    await store.upsertEvents([
+      {
+        id: 'holiday-1',
+        kind: 'market_holiday',
+        symbol: null,
+        startUtc: '2026-07-03T00:00:00.000Z',
+        endUtc: '2026-07-04T00:00:00.000Z',
+        allDay: true,
+        title: 'Independence Day (Observed)',
+        sources: [{ name: 'nyse', url: 'https://example.com/nyse' }],
+        fetchedAt: '2026-07-01T12:00:00.000Z',
+      },
+      {
+        id: 'earnings-1',
+        kind: 'earnings',
+        symbol: 'NVDA',
+        startUtc: '2026-07-10T20:00:00.000Z',
+        endUtc: '2026-07-10T20:30:00.000Z',
+        allDay: false,
+        title: 'NVDA earnings',
+        details: { when: 'amc', epsEstimate: 1.23 },
+        sources: [{ name: 'sec', url: 'https://example.com/sec' }],
+        fetchedAt: '2026-07-01T12:00:00.000Z',
+      },
+    ]);
+
+    const { CalendarService } = await import('./calendarService.js');
+    const calendar = new CalendarService({
+      store,
+      now: () => new Date('2026-07-01T12:00:00.000Z'),
+      minManualRefreshMs: 60_000,
+    });
+
+    calendar.maybeRefreshForRead = async () => {};
+    calendar.refreshManually = async () => ({
+      holidays: { ok: true, events: 1, staleSources: [], errors: [] },
+      earnings: { ok: true, events: 1, staleSources: [], errors: [] },
+    });
+    return createApp({
+      market: {
+        quote: async () => ({ symbol: 'NVDA', price: 0, change: 0, changePercent: 0, volume: 0, asOf: '' }),
+        history: async () => [],
+        news: async () => [],
+        optionsChain: async () => [],
+      },
+      webSearch: fakeWebSearch(),
+      watchlist,
+      calendar,
+      initialConfig: {
+        version: 1,
+        providers: {},
+        activeProvider: null,
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
+        server: { host: '127.0.0.1', port: 4317 },
+        marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
+      },
+      llmFromConfig: () => null,
+    });
+  }
+
+  it('exposes auth-gated calendar holiday/earnings/next endpoints and emits calendar.update SSE', async () => {
+    const { app } = await makeCalendarApp();
+    baseUrl = await listen(app);
+
+    const denied = await fetch(`${baseUrl}/calendar/holidays?from=2026-07-01&to=2026-07-15`);
+    expect(denied.status).toBe(401);
+
+    const holidays = await fetch(`${baseUrl}/calendar/holidays?from=2026-07-01&to=2026-07-15`, {
+      headers: { Authorization: 'dash-token-62' },
+    });
+    expect(holidays.status).toBe(200);
+    const holidaysJson = (await holidays.json()) as { events: Array<{ kind: string }> };
+    expect(holidaysJson.events).toHaveLength(1);
+    expect(holidaysJson.events[0]?.kind).toBe('market_holiday');
+
+    const earnings = await fetch(
+      `${baseUrl}/calendar/earnings?symbol=NVDA&from=2026-07-01&to=2026-07-31`,
+      { headers: { Authorization: 'dash-token-62' } },
+    );
+    expect(earnings.status).toBe(200);
+    const earningsJson = (await earnings.json()) as { symbol: string; events: Array<{ kind: string }> };
+    expect(earningsJson.symbol).toBe('NVDA');
+    expect(earningsJson.events).toHaveLength(1);
+    expect(earningsJson.events[0]?.kind).toBe('earnings');
+
+    const next = await fetch(`${baseUrl}/calendar/next?symbol=NVDA&kind=earnings&from=2026-07-01`, {
+      headers: { Authorization: 'dash-token-62' },
+    });
+    expect(next.status).toBe(200);
+    const nextJson = (await next.json()) as { event: { kind: string; symbol: string | null } | null };
+    expect(nextJson.event?.kind).toBe('earnings');
+    expect(nextJson.event?.symbol).toBe('NVDA');
+
+    const blockedRefresh = await fetch(`${baseUrl}/calendar/refresh`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'dash-token-62',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ holidays: true }),
+    });
+    expect(blockedRefresh.status).toBe(403);
+
+    const ac = new AbortController();
+    const sse = await fetch(`${baseUrl}/events?t=dash-token-62`, { signal: ac.signal });
+    expect(sse.status).toBe(200);
+
+    const refreshed = await fetch(`${baseUrl}/calendar/refresh`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'dash-token-62',
+        'x-regardedtrader-admin': 'true',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ holidays: true }),
+    });
+    expect(refreshed.status).toBe(200);
+
+    const reader = sse.body?.getReader();
+    expect(reader).toBeDefined();
+    const decoder = new TextDecoder();
+    let text = '';
+    const started = Date.now();
+    while (Date.now() - started < 1500 && !text.includes('event: calendar.update')) {
+      const chunk = await reader!.read();
+      if (chunk.done) break;
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    expect(text).toContain('event: calendar.update');
+    ac.abort();
+
+    const health = await fetch(`${baseUrl}/health`);
+    expect(health.status).toBe(200);
+    const healthJson = (await health.json()) as {
+      calendar: {
+        stale: boolean;
+        sources: { nyse: { lastSuccessAt: string | null; lastError: string | null } };
+      };
+    };
+    expect(typeof healthJson.calendar.stale).toBe('boolean');
+    expect(healthJson.calendar.sources.nyse).toBeDefined();
+  });
+});
+
+describe('Recommendation routes + SSE (#50)', () => {
+  const quoteAsOf = '2026-07-01T15:00:00.000Z';
+  let prevToken: string | undefined;
+
+  beforeEach(() => {
+    prevToken = process.env.REGARDEDTRADER_AUTH_TOKEN;
+    process.env.REGARDEDTRADER_AUTH_TOKEN = 'dash-token-50';
+  });
+  afterEach(() => {
+    if (prevToken === undefined) delete process.env.REGARDEDTRADER_AUTH_TOKEN;
+    else process.env.REGARDEDTRADER_AUTH_TOKEN = prevToken;
+  });
+
+  async function makeRecommendationApp() {
+    const watchlist = new WatchlistStore({ path: join(dir, 'watchlist.json') });
+    await watchlist.upsert({
+      symbol: 'NVDA',
+      name: 'NVIDIA Corporation',
+      exchange: 'NASDAQ',
+      sector: 'Technology',
+      industry: 'Semiconductors',
+      description: 'Designs GPUs and AI chips.',
+      sources: ['https://example.com/nvda'],
+      validatedAt: quoteAsOf,
+    });
+    const snapshots = new SnapshotStore({ root: join(dir, 'snapshots') });
+    const recommendations = new RecommendationStore({ root: join(dir, 'snapshots') });
+    await snapshots.appendSnapshot('NVDA', 'quote', {
+      ts: quoteAsOf,
+      data: {
+        symbol: 'NVDA',
+        price: 100,
+        change: 1,
+        changePercent: 1,
+        volume: 1_000_000,
+        asOf: quoteAsOf,
+      },
+    });
+    await snapshots.appendSnapshot('NVDA', 'news', {
+      ts: quoteAsOf,
+      data: {
+        title: 'NVIDIA announces roadmap update',
+        url: 'https://example.com/news/nvda-roadmap',
+        source: 'ExampleWire',
+        publishedAt: quoteAsOf,
+      },
+    });
+    return createApp({
+      market: {
+        quote: async () => ({ symbol: 'NVDA', price: 0, change: 0, changePercent: 0, volume: 0, asOf: '' }),
+        history: async () => [],
+        news: async () => [],
+        optionsChain: async () => [],
+      },
+      webSearch: fakeWebSearch(),
+      watchlist,
+      snapshots,
+      recommendations,
+      initialConfig: {
+        version: 1,
+        providers: { fake: { kind: 'openai-compatible', label: 'fake', baseUrl: 'http://x/v1', model: 'm' } },
+        activeProvider: 'fake',
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
+        server: { host: '127.0.0.1', port: 4317 },
+        marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
+      },
+      llmFromConfig: () =>
+        fakeLLM({
+          equity: {
+            action: 'BUY',
+            conviction: 0.74,
+            rationale: 'Momentum plus supportive headline.',
+            signals: [{ name: 'price', value: 100, contribution: 0.5 }],
+            contraSignals: [{ name: 'volatility', value: 'medium', contribution: -0.1 }],
+          },
+          options: {
+            coveredCall: null,
+            coveredPut: null,
+            nakedCall: null,
+            nakedPut: null,
+          },
+          riskFlags: ['event-risk'],
+        }),
+    });
+  }
+
+  it('requires dashboard auth token on recommendations endpoints', async () => {
+    const { app } = await makeRecommendationApp();
+    baseUrl = await listen(app);
+    const denied = await fetch(`${baseUrl}/recommendations/NVDA/latest`);
+    expect(denied.status).toBe(401);
+
+    const allowed = await fetch(`${baseUrl}/recommendations/NVDA/latest?t=dash-token-50`);
+    expect(allowed.status).toBe(404);
+  });
+
+  it('recomputes once, serves latest/range, and rate-limits follow-up requests', async () => {
+    const { app } = await makeRecommendationApp();
+    baseUrl = await listen(app);
+
+    const recompute = await fetch(`${baseUrl}/recommendations/NVDA/recompute`, {
+      method: 'POST',
+      headers: { Authorization: 'dash-token-50' },
+    });
+    expect(recompute.status).toBe(200);
+    const recomputeJson = (await recompute.json()) as {
+      symbol: string;
+      persisted: boolean;
+      recommendation: { symbol: string; equity: { action: string } };
+    };
+    expect(recomputeJson.symbol).toBe('NVDA');
+    expect(recomputeJson.persisted).toBe(true);
+    expect(recomputeJson.recommendation.symbol).toBe('NVDA');
+    expect(recomputeJson.recommendation.equity.action).toBe('BUY');
+
+    const latest = await fetch(`${baseUrl}/recommendations/NVDA/latest`, {
+      headers: { Authorization: 'dash-token-50' },
+    });
+    expect(latest.status).toBe(200);
+    const latestJson = (await latest.json()) as { symbol: string };
+    expect(latestJson.symbol).toBe('NVDA');
+
+    const ranged = await fetch(
+      `${baseUrl}/recommendations/NVDA?since=2000-01-01T00:00:00.000Z&until=2100-01-01T00:00:00.000Z`,
+      { headers: { Authorization: 'dash-token-50' } },
+    );
+    expect(ranged.status).toBe(200);
+    const rangedJson = (await ranged.json()) as { items: Array<{ symbol: string }> };
+    expect(rangedJson.items).toHaveLength(1);
+    expect(rangedJson.items[0]?.symbol).toBe('NVDA');
+
+    const rateLimited = await fetch(`${baseUrl}/recommendations/NVDA/recompute`, {
+      method: 'POST',
+      headers: { Authorization: 'dash-token-50' },
+    });
+    expect(rateLimited.status).toBe(429);
+    const rl = (await rateLimited.json()) as { retryAfterSec: number };
+    expect(rl.retryAfterSec).toBeGreaterThan(0);
+  });
+
+  it('streams recommendation.update and exposes recommendation health in /health', async () => {
+    const { app } = await makeRecommendationApp();
+    baseUrl = await listen(app);
+    const ac = new AbortController();
+    const sse = await fetch(`${baseUrl}/events?t=dash-token-50`, { signal: ac.signal });
+    expect(sse.status).toBe(200);
+
+    const recompute = await fetch(`${baseUrl}/recommendations/NVDA/recompute`, {
+      method: 'POST',
+      headers: { Authorization: 'dash-token-50' },
+    });
+    expect(recompute.status).toBe(200);
+
+    const reader = sse.body?.getReader();
+    expect(reader).toBeDefined();
+    const decoder = new TextDecoder();
+    let text = '';
+    const started = Date.now();
+    while (Date.now() - started < 1500 && !text.includes('event: recommendation.update')) {
+      const chunk = await reader!.read();
+      if (chunk.done) break;
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    expect(text).toContain('event: recommendation.update');
+    expect(text).toContain('"symbol":"NVDA"');
+    ac.abort();
+
+    const health = await fetch(`${baseUrl}/health`);
+    const healthJson = (await health.json()) as {
+      recommendationBySymbol: {
+        NVDA?: { lastSuccess: string | null; lastError: string | null };
+      };
+    };
+    expect(healthJson.recommendationBySymbol.NVDA?.lastSuccess).toBeTruthy();
+    expect(healthJson.recommendationBySymbol.NVDA?.lastError).toBeNull();
   });
 });
 
@@ -296,6 +1059,7 @@ describe('POST /config/test', () => {
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
       },
       llmFromConfig: () => fakeLLM(goodReply),
       buildLLMForProvider: opts.buildLLM,
@@ -406,6 +1170,7 @@ describe('GET /version (#179)', () => {
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
       },
       llmFromConfig: () => null,
     });
@@ -466,6 +1231,7 @@ describe('GET /health (#180)', () => {
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
       },
       llmFromConfig: () => null,
     });
@@ -503,6 +1269,26 @@ describe('GET /health (#180)', () => {
     expect(j.aiConfigured).toBe(false);
     expect(j.activeProvider).toBeNull();
   });
+
+  it('surfaces calendar stale state for fail-open visibility (#55)', async () => {
+    const { app } = makeMinimalApp();
+    baseUrl = await listen(app);
+    const r = await fetch(`${baseUrl}/health`);
+    expect(r.status).toBe(200);
+    const j = (await r.json()) as {
+      calendar?: {
+        stale: boolean;
+        holidaysStale: boolean;
+        earningsStale: boolean;
+        marketState: string;
+      };
+    };
+    expect(j.calendar).toBeDefined();
+    expect(j.calendar?.stale).toBe(false);
+    expect(j.calendar?.holidaysStale).toBe(false);
+    expect(j.calendar?.earningsStale).toBe(false);
+    expect(typeof j.calendar?.marketState).toBe('string');
+  });
 });
 
 describe('Origin loopback guard (#128)', () => {
@@ -523,6 +1309,7 @@ describe('Origin loopback guard (#128)', () => {
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
       },
       llmFromConfig: () => null,
     });
@@ -566,8 +1353,11 @@ describe('Origin loopback guard (#128)', () => {
 });
 
 describe('POST /briefing/:symbol (#138)', () => {
-  async function makeBriefingApp(): Promise<void> {
+  async function makeBriefingApp(opts?: {
+    briefings?: BriefingStorePort;
+  }): Promise<void> {
     const watchlist = new WatchlistStore({ path: join(dir, 'watchlist.json') });
+    const briefings = opts?.briefings ?? new BriefingStore({ root: join(dir, 'briefings') });
     // Pre-seed NVDA so requireKnownSymbol succeeds without going through the
     // validator (which would also hit our fake LLM).
     await watchlist.upsert({
@@ -589,6 +1379,7 @@ describe('POST /briefing/:symbol (#138)', () => {
       },
       webSearch: fakeWebSearch(),
       watchlist,
+      briefings,
       initialConfig: {
         version: 1,
         providers: { fake: { kind: 'openai-compatible', label: 'fake', baseUrl: 'http://x/v1', model: 'm' } },
@@ -596,6 +1387,7 @@ describe('POST /briefing/:symbol (#138)', () => {
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
       },
       // Analyst tolerates missing fields, strategist returns []; both safe.
       llmFromConfig: () => fakeLLM({ bullCase: 'b', bearCase: 'b', catalysts: [], risks: [], plans: [] }),
@@ -649,6 +1441,57 @@ describe('POST /briefing/:symbol (#138)', () => {
     });
     expect(r.status).toBe(422);
   });
+
+  it('persists briefing history and can fetch by id', async () => {
+    await makeBriefingApp();
+    const created = await fetch(`${baseUrl}/briefing/NVDA`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ thesis: 'bullish into earnings', maxLossUsd: 500 }),
+    });
+    expect(created.status).toBe(200);
+
+    const history = await fetch(`${baseUrl}/briefing/NVDA/history?limit=5`);
+    expect(history.status).toBe(200);
+    const historyJson = (await history.json()) as {
+      symbol: string;
+      items: Array<{ id: string }>;
+    };
+    expect(historyJson.symbol).toBe('NVDA');
+    expect(historyJson.items.length).toBeGreaterThan(0);
+
+    const item = historyJson.items[0];
+    expect(item?.id).toContain('NVDA__');
+    const byId = await fetch(`${baseUrl}/briefing/${encodeURIComponent(item!.id)}`);
+    expect(byId.status).toBe(200);
+    const briefing = (await byId.json()) as { symbol: string; strategist?: { thesis: string } };
+    expect(briefing.symbol).toBe('NVDA');
+    expect(briefing.strategist?.thesis).toBe('bullish into earnings');
+  });
+
+  it('returns briefing even if persistence fails (best-effort writes)', async () => {
+    await makeBriefingApp({
+      briefings: {
+        async saveBriefing() {
+          throw new Error('disk full');
+        },
+        async listBriefings() {
+          return [];
+        },
+        async getBriefing() {
+          return null;
+        },
+      },
+    });
+    const r = await fetch(`${baseUrl}/briefing/NVDA`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(r.status).toBe(200);
+    const j = (await r.json()) as { symbol: string };
+    expect(j.symbol).toBe('NVDA');
+  });
 });
 
 describe('POST /config/risk', () => {
@@ -680,6 +1523,7 @@ describe('POST /config/risk', () => {
         risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
         server: { host: '127.0.0.1', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
       },
       llmFromConfig: () => fakeLLM(goodReply),
     });
@@ -800,6 +1644,15 @@ describe('Config routes coverage (#105)', () => {
           providers: opts?.marketProviders ?? {},
           activeProvider: opts?.activeMarketProvider ?? null,
         },
+        polling: {
+          sentimentSources: {
+            reddit: { enabled: true, weight: 1 },
+            stocktwits: { enabled: true, weight: 0.7 },
+            hn: { enabled: true, weight: 0.4 },
+            cnn: { enabled: true, weight: 1.2 },
+            'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 },
+          },
+        },
       },
       llmFromConfig: () => fakeLLM(goodReply),
       buildLLMForProvider: (provider) => ({
@@ -837,11 +1690,37 @@ describe('Config routes coverage (#105)', () => {
       activeMarketProvider: 'finnhub',
     });
 
+    const current = (await (await fetch(`${baseUrl}/config`)).json()) as Record<string, unknown>;
+    const withToken = {
+      ...current,
+      polling: {
+        sentimentSources: {
+          ...((current.polling as { sentimentSources: Record<string, unknown> }).sentimentSources ?? {}),
+          reddit: {
+            ...(((current.polling as { sentimentSources: Record<string, unknown> }).sentimentSources?.reddit ??
+              {}) as Record<string, unknown>),
+            apiToken: 'rdt-secret-12345',
+          },
+        },
+      },
+    };
+    const put = await fetch(`${baseUrl}/config`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(withToken),
+    });
+    expect(put.status).toBe(200);
+
     const r = await fetch(`${baseUrl}/config`);
     expect(r.status).toBe(200);
     const j = (await r.json()) as {
       providers: Record<string, { apiKey?: string }>;
       marketData: { providers: Record<string, { apiKey?: string }> };
+      polling: {
+        sentimentSources: {
+          reddit: { apiToken?: string };
+        };
+      };
     };
 
     expect(j.providers.openai?.apiKey).toBeDefined();
@@ -850,10 +1729,13 @@ describe('Config routes coverage (#105)', () => {
     expect(j.marketData.providers.finnhub?.apiKey).toBeDefined();
     expect(j.marketData.providers.finnhub?.apiKey).not.toBe(mdKey);
     expect(j.marketData.providers.finnhub?.apiKey).toContain('••••');
+    expect(j.polling.sentimentSources.reddit.apiToken).toBeDefined();
+    expect(j.polling.sentimentSources.reddit.apiToken).toContain('••••');
 
     const raw = JSON.stringify(j);
     expect(raw).not.toContain(aiKey);
     expect(raw).not.toContain(mdKey);
+    expect(raw).not.toContain('rdt-secret-12345');
   });
 
   it('POST /config/providers supports happy path and rejects invalid payloads', async () => {
@@ -1041,8 +1923,109 @@ describe('Config routes coverage (#105)', () => {
         },
         server: { host: '0.0.0.0', port: 4317 },
         marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
       }),
     });
     expect(badHost.status).toBe(400);
+  });
+});
+
+describe('Recommendation routes + SSE (#51)', () => {
+  let prevToken: string | undefined;
+
+  beforeEach(() => {
+    prevToken = process.env.REGARDEDTRADER_AUTH_TOKEN;
+    process.env.REGARDEDTRADER_AUTH_TOKEN = 'dash-token-51';
+  });
+  afterEach(() => {
+    if (prevToken === undefined) delete process.env.REGARDEDTRADER_AUTH_TOKEN;
+    else process.env.REGARDEDTRADER_AUTH_TOKEN = prevToken;
+  });
+
+  it('serves latest + history and emits recommendation.update on recompute', async () => {
+    const watchlist = new WatchlistStore({ path: join(dir, 'watchlist.json') });
+    await watchlist.upsert({
+      symbol: 'NVDA',
+      name: 'NVIDIA Corporation',
+      exchange: 'NASDAQ',
+      sector: 'Technology',
+      industry: 'Semiconductors',
+      description: 'Designs GPUs and AI chips.',
+      sources: ['https://example.com/nvda'],
+      validatedAt: '2026-08-03T00:00:00.000Z',
+    });
+    const recommendations = new RecommendationStore({ root: join(dir, 'snapshots') });
+    const now = Date.now();
+    const rec1 = makeRecommendation({ generatedAt: new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString() });
+    const rec2 = makeRecommendation({
+      generatedAt: new Date(now - 1 * 24 * 60 * 60 * 1000).toISOString(),
+      equity: { ...rec1.equity, action: 'HOLD' },
+    });
+    await recommendations.append('NVDA', rec1);
+    await recommendations.append('NVDA', rec2);
+
+    const { app } = createApp({
+      market: {
+        quote: async () => ({ symbol: 'NVDA', price: 0, change: 0, changePercent: 0, volume: 0, asOf: '' }),
+        history: async () => [],
+        news: async () => [],
+        optionsChain: async () => [],
+      },
+      webSearch: fakeWebSearch(),
+      watchlist,
+      recommendations,
+      initialConfig: {
+        version: 1,
+        providers: {},
+        activeProvider: null,
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
+        server: { host: '127.0.0.1', port: 4317 },
+        marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
+      },
+      llmFromConfig: () => null,
+      recomputeRecommendation: async () =>
+        makeRecommendation({
+          generatedAt: new Date().toISOString(),
+          equity: { ...rec1.equity, action: 'BUY', conviction: 0.81 },
+        }),
+    });
+    baseUrl = await listen(app);
+
+    const latest = await fetch(`${baseUrl}/recommendations/NVDA/latest?t=dash-token-51`);
+    expect(latest.status).toBe(200);
+    const latestJson = (await latest.json()) as Recommendation;
+    expect(latestJson.equity.action).toBe('HOLD');
+
+    const history = await fetch(`${baseUrl}/recommendations/NVDA?days=30&t=dash-token-51`);
+    expect(history.status).toBe(200);
+    const histJson = (await history.json()) as { items: Recommendation[] };
+    expect(histJson.items).toHaveLength(2);
+    expect(histJson.items.map((r) => r.equity.action)).toEqual(['BUY', 'HOLD']);
+
+    const sse = await fetch(`${baseUrl}/events?t=dash-token-51`);
+    expect(sse.status).toBe(200);
+    const reader = sse.body?.getReader();
+    expect(reader).toBeTruthy();
+
+    const rec = await fetch(`${baseUrl}/recommendations/NVDA/recompute?t=dash-token-51`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(rec.status).toBe(200);
+    const recJson = (await rec.json()) as { recommendation: Recommendation };
+    expect(recJson.recommendation.equity.action).toBe('BUY');
+
+    const started = Date.now();
+    let text = '';
+    while (Date.now() - started < 1500 && !text.includes('event: recommendation.update')) {
+      const next = await reader!.read();
+      if (next.value) text += new TextDecoder().decode(next.value);
+      if (next.done) break;
+    }
+    expect(text).toContain('event: recommendation.update');
+    expect(text).toContain('"symbol":"NVDA"');
+
+    await reader?.cancel();
   });
 });

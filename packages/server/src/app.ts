@@ -1,10 +1,12 @@
 import express from 'express';
 import cors from 'cors';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { logger } from './logging.js';
 import {
   Orchestrator,
   Technician,
+  NewsScout,
   YahooClient,
   Ticker,
   QuoteSchema,
@@ -17,6 +19,7 @@ import {
   RiskConfig,
   BriefingRequest,
   PlansResponse,
+  Recommendation,
   ConfigTestResult,
   CORE_VERSION,
   ServerVersion,
@@ -27,19 +30,70 @@ import {
   createMarketDataRegistry,
   TickerValidator,
   WatchlistStore,
+  BriefingStore,
+  looksLikeBriefingId,
   DuckDuckGoSearch,
+  computeIndicators,
+  MentionStore,
+  SnapshotStore,
+  RecommendationStore,
+  SQLiteCache,
+  AIRecommender,
+  RecommenderOrchestrator,
+  buildRecommendationContext,
+  hardGatesRule,
+  computeImpliedMoves,
+  SentimentSource,
+  SentimentSnapshot,
+  EventKind,
+  type MentionItem,
+  type ScoredMention,
   type WebSearch,
   type LLM,
+  type Recommendation as RecommendationValue,
   type AppConfig as AppConfigT,
   type AiProvider as AiProviderT,
   type WatchlistEntry,
   type ValidationResult,
   type MarketDataClient,
   type LiveQuote,
+  PaperBroker,
+  PaperStore,
+  TradePlan,
+  type BriefingStorePort,
+  type OHLCV,
+  StaleInputError,
+  type RecommendationSource,
+  type SnapshotReader,
+  OptionsChainResponse,
 } from '@regardedtrader/core';
 import { liveQuote, type LiveQuoteSource, type YahooQuoteLike } from './liveQuote.js';
 import { isLoopbackOrigin } from './bind-guard.js';
 import { SERVER_VERSION } from './version.js';
+import {
+  CalendarService,
+  type CalendarRefreshResponse,
+  type CalendarStatus,
+  todayEt,
+  toEtDateKey,
+} from './calendarService.js';
+import { PollingCoordinator } from './polling.js';
+
+type DeepPartial<T> = {
+  [K in keyof T]?: T[K] extends readonly (infer U)[]
+    ? readonly DeepPartial<U>[]
+    : T[K] extends (infer U)[]
+      ? DeepPartial<U>[]
+      : T[K] extends object
+        ? DeepPartial<T[K]>
+        : T[K];
+};
+
+function addDaysEt(dateEt: string, days: number): string {
+  const d = new Date(`${dateEt}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
 
 export interface AppDeps {
   /**
@@ -57,7 +111,9 @@ export interface AppDeps {
    */
   buildLLMForProvider?: (provider: AiProviderT) => LLM;
   watchlist: WatchlistStore;
-  initialConfig: AppConfigT;
+  mentions?: MentionStore;
+  briefings?: BriefingStorePort;
+  initialConfig: DeepPartial<AppConfigT>;
   /**
    * Built-in live-quote source used when no provider is configured (or when
    * the configured provider is `yahoo`). Production wires the lazy
@@ -66,12 +122,61 @@ export interface AppDeps {
   liveQuoteSource?: LiveQuoteSource;
   /** Optional clock override for testing the live-quote cache. */
   now?: () => number;
+  /** Optional paper-trading store override for tests. */
+  paperStore?: PaperStore;
+  /** Optional injectable calendar service (tests). */
+  calendar?: CalendarService;
+  /** Optional polling cadence overrides (tests). */
+  polling?: {
+    quoteEveryMs?: number;
+    newsEveryMs?: number;
+    maintenanceEveryMs?: number;
+  };
+  /** Optional injectable snapshot store (tests). */
+  snapshots?: SnapshotStore;
+  /** Optional injectable recommendation store (tests). */
+  recommendations?: RecommendationStore;
+  /** Optional injectable shared market-data cache (tests). */
+  cache?: SQLiteCache;
+  /**
+   * Optional recompute hook override (tests). When omitted, createApp wires
+   * the in-process recommender pipeline from core.
+   */
+  recomputeRecommendation?: (symbol: string) => Promise<RecommendationValue>;
+  /**
+   * Optional runtime auth gate for dashboard sessions (#18). Tests and
+   * internal dev mode can omit this to keep the app unauthenticated.
+   */
+  auth?:
+    | {
+        mode: 'required';
+        token: string;
+        dashboardOrigin: string;
+      }
+    | {
+        mode: 'allow-no-auth';
+      };
 }
 
 export interface AppHandle {
   app: express.Express;
   /** Currently-active config (mutated by /config endpoints). Read for tests. */
   getConfig: () => AppConfigT;
+  emitSentimentUpdate: (symbol: string, snapshot: SentimentSnapshot | null) => void;
+  emitRecommendationUpdate: (
+    symbol: string,
+    recommendation: RecommendationValue,
+    persisted?: boolean,
+  ) => void;
+  shutdown: (timeoutMs?: number) => Promise<void>;
+  stream: {
+    subscribe: (listener: (event: import('./polling.js').PollEvent) => void) => () => void;
+    loadChain: (symbol: string) => Promise<import('@regardedtrader/core').OptionContract[]>;
+    auth: {
+      required: boolean;
+      validate: (candidate: string | null) => boolean;
+    };
+  };
 }
 
 /**
@@ -79,14 +184,57 @@ export interface AppHandle {
  * (`index.ts`) wires defaults; tests pass mocks.
  */
 export function createApp(deps: AppDeps): AppHandle {
-  let cfg: AppConfigT = deps.initialConfig;
+  let cfg: AppConfigT = AppConfig.parse(deps.initialConfig);
+  const marketCache =
+    deps.cache ??
+    new SQLiteCache({
+      enabled: cfg.cache.enabled,
+      namespaceTtls: {
+        quotes: 30_000,
+        history: 5 * 60_000,
+        chain: 60_000,
+        news: 5 * 60_000,
+      },
+    });
+  const mentionStore = deps.mentions ?? new MentionStore();
+  const snapshotStore = deps.snapshots ?? new SnapshotStore({ root: mentionStore.rootDir });
+  const recommendationStore = deps.recommendations ?? new RecommendationStore({ root: mentionStore.rootDir });
+  const authToken = process.env.REGARDEDTRADER_AUTH_TOKEN?.trim() || null;
+  const runtimeAuthToken = deps.auth?.mode === 'required' ? deps.auth.token.trim() : null;
+  const briefings = deps.briefings ?? new BriefingStore();
+  const recommendationSnapshotReader: SnapshotReader = {
+    readLatest: async (symbol) => {
+      const latest = await snapshotStore.readLatest(symbol);
+      const entries = Object.fromEntries(
+        Object.entries(latest.entries ?? {}).map(([kind, entry]) => [
+          kind,
+          { ts: entry.ts, data: entry.data ?? null },
+        ]),
+      );
+      return {
+        ...latest,
+        entries,
+      };
+    },
+    readRange: async function* (symbol, kind, since, until) {
+      for await (const entry of snapshotStore.readRange(symbol, kind, since, until)) {
+        yield { ts: entry.ts, data: entry.data ?? null };
+      }
+    },
+  };
 
   // --- Market data registry (#91) ---
   // Rebuilt whenever the marketData config changes so route handlers always
   // see the active provider without restarting the server.
-  let registry = createMarketDataRegistry(cfg.marketData, { fallback: deps.market });
+  let registry = createMarketDataRegistry(cfg.marketData, {
+    fallback: deps.market,
+    cache: marketCache,
+  });
   function rebuildRegistry(): void {
-    registry = createMarketDataRegistry(cfg.marketData, { fallback: deps.market });
+    registry = createMarketDataRegistry(cfg.marketData, {
+      fallback: deps.market,
+      cache: marketCache,
+    });
   }
   /** Resolve the live-quote source for the active provider, or fall back. */
   function resolveLiveQuoteSource(): LiveQuoteSource | null {
@@ -114,18 +262,305 @@ export function createApp(deps: AppDeps): AppHandle {
         accountSizeUsd: cfg.risk.accountSizeUsd,
         maxPctOfAccount: cfg.risk.maxPctOfAccount,
       },
-      // Wire the Technician agent (issue #74) by default so /briefing
-      // includes a TA section whenever an LLM is configured.
-      { technician: new Technician(llm) },
+      // Wire optional agents by default so /briefing includes TA + ranked
+      // headline context whenever an LLM is configured.
+      { technician: new Technician(llm), newsScout: new NewsScout(llm) },
+      { briefings },
     );
   }
 
+  function activeProviderModel(config: AppConfigT): {
+    provider: string;
+    model: string;
+  } {
+    const activeId = config.activeProvider;
+    if (!activeId) return { provider: 'unconfigured', model: 'unconfigured' };
+    const provider = config.providers[activeId];
+    if (!provider) return { provider: activeId, model: 'unknown' };
+    const model =
+      provider.kind === 'openai-compatible' ? provider.model : (provider.model ?? provider.backend);
+    return { provider: activeId, model };
+  }
+
+  function gatherRecommendationSources(
+    context: Awaited<ReturnType<typeof buildRecommendationContext>>,
+  ): Array<{ name: string; url: string }> {
+    const out = new Map<string, { name: string; url: string }>();
+    for (const item of context.news?.items ?? []) {
+      const entry = { name: item.source || 'news', url: item.url };
+      if (entry.url) out.set(entry.url, entry);
+    }
+    for (const item of context.opinions?.items ?? []) {
+      if (!item.url) continue;
+      const entry = { name: item.source || 'opinion', url: item.url };
+      out.set(entry.url, entry);
+    }
+    return Array.from(out.values());
+  }
+
+  function makeRecommendationOrchestrator(): RecommenderOrchestrator | null {
+    const llm = deps.llmFromConfig(cfg);
+    if (!llm) return null;
+    const ai = new AIRecommender(llm);
+    return new RecommenderOrchestrator({
+      recommender: ai,
+      store: recommendationStore,
+      buildContext: async (symbol) =>
+        buildRecommendationContext({
+          symbol,
+          snapshots: recommendationSnapshotReader,
+          mentions: mentionStore,
+          forbidNakedShorts: cfg.risk.forbidNakedShorts,
+          maxLossUsd: cfg.risk.maxLossUsd,
+        }),
+      stampFor: (context) => {
+        const p = activeProviderModel(cfg);
+        const sources = gatherRecommendationSources(context);
+        return {
+          asOf: {
+            quote: context.quote.asOf ?? new Date(0).toISOString(),
+            options: context.options?.asOf ?? null,
+            sentiment: context.sentiment?.asOf ?? null,
+            news: context.news?.asOf ?? null,
+          },
+          sources,
+          modelInfo: { provider: p.provider, model: p.model },
+        };
+      },
+      rules: [hardGatesRule],
+      onEvent: (e) => emitRecommendationUpdate(e.symbol, e.recommendation),
+    });
+  }
+
   let orchestrator = makeOrchestrator();
+  const polling = new PollingCoordinator(
+    deps.watchlist,
+    () => registry.client,
+    {
+      quoteEveryMs: deps.polling?.quoteEveryMs ?? cfg.polling.cadence.rth.quote,
+      newsEveryMs: deps.polling?.newsEveryMs ?? cfg.polling.cadence.rth.news,
+      maintenanceEveryMs: deps.polling?.maintenanceEveryMs,
+      onMaintenance: async () => {
+        await marketCache.sweep();
+      },
+    },
+  );
+  function applyPollingRuntimeConfig(): void {
+    polling.updateCadence({
+      quoteEveryMs: deps.polling?.quoteEveryMs ?? cfg.polling.cadence.rth.quote,
+      newsEveryMs: deps.polling?.newsEveryMs ?? cfg.polling.cadence.rth.news,
+    });
+    if (cfg.polling.enabled) {
+      polling.start();
+      void polling.refreshSymbolsFromWatchlist();
+      return;
+    }
+    polling.stop();
+  }
+  applyPollingRuntimeConfig();
+  let recommendationOrchestrator = makeRecommendationOrchestrator();
+  function refreshOrchestrators(): void {
+    orchestrator = makeOrchestrator();
+    recommendationOrchestrator = makeRecommendationOrchestrator();
+  }
+  const paperStore = deps.paperStore ?? new PaperStore();
+  function makePaperBroker(): PaperBroker {
+    return new PaperBroker({ market: registry.client, store: paperStore });
+  }
+
+  type SentimentHealth = {
+    lastSuccess: string | null;
+    lastError: string | null;
+    lastErrorAt: string | null;
+  };
+  type RecommendationHealth = {
+    lastSuccess: string | null;
+    lastError: string | null;
+    lastErrorAt: string | null;
+  };
+  const sentimentHealth: Record<z.infer<typeof SentimentSource>, SentimentHealth> = {
+    reddit: { lastSuccess: null, lastError: null, lastErrorAt: null },
+    stocktwits: { lastSuccess: null, lastError: null, lastErrorAt: null },
+    hn: { lastSuccess: null, lastError: null, lastErrorAt: null },
+    cnn: { lastSuccess: null, lastError: null, lastErrorAt: null },
+    'google-news': { lastSuccess: null, lastError: null, lastErrorAt: null },
+    googleNewsOpinion: { lastSuccess: null, lastError: null, lastErrorAt: null },
+  };
+  const recommendationHealth = new Map<string, RecommendationHealth>();
+
+  function setSentimentSuccess(source: z.infer<typeof SentimentSource>, at: string): void {
+    const cur = sentimentHealth[source];
+    cur.lastSuccess = at;
+    cur.lastError = null;
+    cur.lastErrorAt = null;
+  }
+
+  function setSentimentError(source: z.infer<typeof SentimentSource>, err: unknown): void {
+    const cur = sentimentHealth[source];
+    cur.lastError = err instanceof Error ? err.message : String(err);
+    cur.lastErrorAt = new Date().toISOString();
+  }
+
+  function recommendationHealthFor(symbol: string): RecommendationHealth {
+    const sym = symbol.toUpperCase();
+    const existing = recommendationHealth.get(sym);
+    if (existing) return existing;
+    const created: RecommendationHealth = {
+      lastSuccess: null,
+      lastError: null,
+      lastErrorAt: null,
+    };
+    recommendationHealth.set(sym, created);
+    return created;
+  }
+
+  function setRecommendationSuccess(symbol: string): void {
+    const cur = recommendationHealthFor(symbol);
+    cur.lastSuccess = new Date().toISOString();
+    cur.lastError = null;
+    cur.lastErrorAt = null;
+  }
+
+  function setRecommendationError(symbol: string, err: unknown): void {
+    const cur = recommendationHealthFor(symbol);
+    cur.lastError = err instanceof Error ? err.message : String(err);
+    cur.lastErrorAt = new Date().toISOString();
+  }
+
+  function secureTokenEquals(expected: string, candidate: string): boolean {
+    const a = Buffer.from(candidate);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length) return false;
+    return timingSafeEqual(a, b);
+  }
+
+  function tokenMatches(candidate: string | null | undefined): boolean {
+    if (!authToken && !runtimeAuthToken) return true;
+    if (!candidate) return false;
+    if (runtimeAuthToken && secureTokenEquals(runtimeAuthToken, candidate)) return true;
+    if (authToken && secureTokenEquals(authToken, candidate)) return true;
+    return false;
+  }
+
+  function authTokenFrom(req: express.Request): string | null {
+    const header = req.header('authorization');
+    if (header) {
+      const v = header.trim();
+      if (v.toLowerCase().startsWith('bearer ')) return v.slice(7).trim();
+      return v;
+    }
+    const query = req.query.t;
+    return typeof query === 'string' ? query : null;
+  }
+
+  function requireDashboardToken(
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ): void {
+    if (!authToken && !runtimeAuthToken) {
+      next();
+      return;
+    }
+    if (!tokenMatches(authTokenFrom(req))) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+    next();
+  }
+
+  type SentimentSsePayload = {
+    type: 'sentiment.update';
+    symbol: string;
+    snapshot: SentimentSnapshot | null;
+    id: string;
+    at: string;
+  };
+  type RecommendationSsePayload = {
+    type: 'recommendation.update';
+    symbol: string;
+    recommendation: RecommendationValue;
+    persisted: boolean;
+    id: string;
+    at: string;
+  };
+  const sseClients = new Set<express.Response>();
+  let calendarRefreshFlight: Promise<CalendarRefreshResponse> | null = null;
+
+  function emitSentimentUpdate(symbol: string, snapshot: SentimentSnapshot | null): void {
+    const payload: SentimentSsePayload = {
+      type: 'sentiment.update',
+      symbol,
+      snapshot,
+      id: randomUUID(),
+      at: new Date().toISOString(),
+    };
+    const frame = `event: sentiment.update\ndata: ${JSON.stringify(payload)}\n\n`;
+    for (const client of sseClients) client.write(frame);
+  }
+
+  function emitCalendarUpdate(update: {
+    refresh?: CalendarRefreshResponse;
+    status: CalendarStatus;
+    reason: 'manual-refresh' | 'read-refresh';
+  }): void {
+    const payload = {
+      type: 'calendar.update' as const,
+      id: randomUUID(),
+      at: new Date().toISOString(),
+      reason: update.reason,
+      refresh: update.refresh,
+      status: update.status,
+    };
+    const frame = `event: calendar.update\ndata: ${JSON.stringify(payload)}\n\n`;
+    for (const client of sseClients) client.write(frame);
+  }
+
+  function emitRecommendationUpdate(
+    symbol: string,
+    recommendation: RecommendationValue,
+    persisted = true,
+  ): void {
+    const payload: RecommendationSsePayload = {
+      type: 'recommendation.update',
+      symbol,
+      recommendation,
+      persisted,
+      id: randomUUID(),
+      at: new Date().toISOString(),
+    };
+    const frame = `event: recommendation.update\ndata: ${JSON.stringify(payload)}\n\n`;
+    for (const client of sseClients) client.write(frame);
+  }
 
   function makeValidator(): TickerValidator | null {
     const llm = deps.llmFromConfig(cfg);
     if (!llm) return null;
     return new TickerValidator({ webSearch: deps.webSearch, llm });
+  }
+  const calendar =
+    deps.calendar ??
+    new CalendarService({
+      now: deps.now ? () => new Date(deps.now!()) : undefined,
+    });
+
+  async function tapePointForSymbol(symbol: string) {
+    const [quote, history, news] = await Promise.all([
+      registry.client.quote(symbol),
+      registry.client.history(symbol, 60),
+      registry.client.news(symbol),
+    ]);
+    const indicators = computeIndicators(history as OHLCV[]);
+    const top = [...news].sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt))[0];
+    return {
+      symbol,
+      last: quote.price,
+      change: quote.change,
+      changePercent: quote.changePercent,
+      rsi: indicators.rsi14 ?? null,
+      lastHeadline: top?.title ?? null,
+      asOf: quote.asOf,
+    };
   }
 
   // Process start timestamp for `GET /version` (issue #179). Captured once
@@ -134,6 +569,73 @@ export function createApp(deps: AppDeps): AppHandle {
 
   const app = express();
   app.use(express.json({ limit: '1mb' }));
+
+  // Runtime auth gate for dashboard-launched sessions (#18). All endpoints
+  // except GET /health require the launch token.
+  if (deps.auth?.mode === 'required') {
+    const token = Buffer.from(deps.auth.token, 'utf8');
+    const failWindowMs = 60_000;
+    const maxFailsPerWindow = 20;
+    const authFails = new Map<string, { count: number; resetAt: number }>();
+    const now = deps.now ?? Date.now;
+
+    function safeTokenEquals(candidate: string): boolean {
+      const c = Buffer.from(candidate, 'utf8');
+      return c.length === token.length && timingSafeEqual(c, token);
+    }
+
+    function isRateLimited(ip: string): boolean {
+      const t = now();
+      const cur = authFails.get(ip);
+      if (!cur || t > cur.resetAt) {
+        authFails.set(ip, { count: 0, resetAt: t + failWindowMs });
+        return false;
+      }
+      return cur.count >= maxFailsPerWindow;
+    }
+
+    function markFailed(ip: string): void {
+      const t = now();
+      const cur = authFails.get(ip);
+      if (!cur || t > cur.resetAt) {
+        authFails.set(ip, { count: 1, resetAt: t + failWindowMs });
+        return;
+      }
+      cur.count += 1;
+      authFails.set(ip, cur);
+    }
+
+    app.use((req, res, next) => {
+      if (req.method === 'GET' && req.path === '/health') {
+        next();
+        return;
+      }
+
+      const ip = req.socket.remoteAddress ?? req.ip ?? 'unknown';
+      if (isRateLimited(ip)) {
+        logger.warn(`[auth] rate-limited failed auth attempts from ${ip}`);
+        res.status(429).json({ error: 'Too many failed auth attempts. Try again shortly.' });
+        return;
+      }
+
+      const authHeader = req.headers.authorization;
+      const bearer =
+        typeof authHeader === 'string' && authHeader.startsWith('Bearer ')
+          ? authHeader.slice('Bearer '.length).trim()
+          : '';
+      const queryToken = typeof req.query.t === 'string' ? req.query.t : '';
+      const candidate = bearer || queryToken;
+      if (candidate && safeTokenEquals(candidate)) {
+        next();
+        return;
+      }
+
+      markFailed(ip);
+      logger.warn(`[auth] unauthorized request from ${ip} to ${req.method} ${req.path}`);
+      res.status(401).json({ error: 'Unauthorized dashboard session token.' });
+    });
+  }
+
   // Defence-in-depth Origin guard (AGENTS.md rule #1, issue #128):
   // hard-reject any cross-origin request whose `Origin` header is not a
   // loopback URL. Runs BEFORE the `cors` middleware so a non-loopback caller
@@ -151,7 +653,17 @@ export function createApp(deps: AppDeps): AppHandle {
     next();
   });
   app.use(
-    cors({ origin: [/^http:\/\/127\.0\.0\.1:\d+$/, /^http:\/\/localhost:\d+$/, /^http:\/\/\[::1\]:\d+$/] }),
+    cors(
+      deps.auth?.mode === 'required'
+        ? { origin: [deps.auth.dashboardOrigin] }
+        : {
+            origin: [
+              /^http:\/\/127\.0\.0\.1:\d+$/,
+              /^http:\/\/localhost:\d+$/,
+              /^http:\/\/\[::1\]:\d+$/,
+            ],
+          },
+    ),
   );
 
   // Dedicated version endpoint (issue #179). Deliberately separate from
@@ -172,6 +684,12 @@ export function createApp(deps: AppDeps): AppHandle {
   });
 
   app.get('/health', (_req, res) => {
+    const recommendationBySymbol = Object.fromEntries(
+      Array.from(recommendationHealth.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([symbol, health]) => [symbol, health]),
+    );
+    const calendarStatus = calendar.status();
     res.json({
       ok: true,
       name: 'regardedtrader-server',
@@ -181,6 +699,15 @@ export function createApp(deps: AppDeps): AppHandle {
       version: SERVER_VERSION,
       aiConfigured: orchestrator !== null,
       activeProvider: cfg.activeProvider,
+      sentimentSources: sentimentHealth,
+      recommendationBySymbol,
+      calendar: {
+        stale: calendarStatus.stale,
+        holidaysStale: calendarStatus.holidaysStale,
+        earningsStale: calendarStatus.earningsStale,
+        marketState: calendarStatus.marketState,
+        sources: calendarStatus.sources,
+      },
     });
   });
 
@@ -188,7 +715,7 @@ export function createApp(deps: AppDeps): AppHandle {
 
   app.get('/quote/:symbol', async (req, res, next) => {
     try {
-      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
       res.json(await registry.client.quote(symbol));
     } catch (e) {
       next(e);
@@ -215,7 +742,7 @@ export function createApp(deps: AppDeps): AppHandle {
 
     app.get('/tickers/:symbol/quote', async (req, res, next) => {
       try {
-        const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+        const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
         const source = resolveLiveQuoteSource();
         if (!source) {
           res.status(503).json({
@@ -239,12 +766,14 @@ export function createApp(deps: AppDeps): AppHandle {
           inflight.set(symbol, pending);
           // Always clear the in-flight slot so a future failure doesn't
           // permanently poison the symbol.
-          pending.finally(() => {
-            if (inflight.get(symbol) === pending) inflight.delete(symbol);
-          }).catch(() => {
-            // The actual rejection is observed below via `await pending`;
-            // swallow it on this side-chain to avoid an unhandled rejection.
-          });
+          pending
+            .finally(() => {
+              if (inflight.get(symbol) === pending) inflight.delete(symbol);
+            })
+            .catch(() => {
+              // The actual rejection is observed below via `await pending`;
+              // swallow it on this side-chain to avoid an unhandled rejection.
+            });
         }
         try {
           const parsed = await pending;
@@ -269,7 +798,7 @@ export function createApp(deps: AppDeps): AppHandle {
 
   app.get('/history/:symbol', async (req, res, next) => {
     try {
-      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
       const days = Math.min(Number(req.query.days ?? 180), 365 * 5);
       res.json(await registry.client.history(symbol, days));
     } catch (e) {
@@ -279,9 +808,23 @@ export function createApp(deps: AppDeps): AppHandle {
 
   app.get('/options/:symbol', async (req, res, next) => {
     try {
-      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
       const expiry = typeof req.query.expiry === 'string' ? req.query.expiry : undefined;
-      res.json(await registry.client.optionsChain(symbol, expiry));
+      const contracts = await registry.client.optionsChain(symbol, expiry);
+      let spot = 0;
+      try {
+        const quote = await registry.client.quote(symbol);
+        spot = quote.price;
+      } catch {
+        spot = 0;
+      }
+      const impliedMoves = computeImpliedMoves(contracts, spot);
+      res.json(
+        OptionsChainResponse.parse({
+          contracts,
+          impliedMoves,
+        }),
+      );
     } catch (e) {
       next(e);
     }
@@ -399,9 +942,101 @@ export function createApp(deps: AppDeps): AppHandle {
           return;
         }
         const r = await validator.validate(raw.trim());
-        if (r.ok) await deps.watchlist.upsert(r.profile);
+        if (r.ok) {
+          await deps.watchlist.upsert(r.profile);
+          polling.registerSymbol(r.profile.symbol);
+        }
         results.push(r);
       }
+      res.json({ results });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // Fast ticker add: shape-check + yahoo-finance2 (crumb-aware), no LLM or web search.
+  // Returns the same ValidationResult wire shape as /tickers/validate so the
+  // web TickerIntake can use it as a drop-in.
+  app.post('/tickers/quick-add', async (req, res, next) => {
+    try {
+      const body = ValidateBody.parse(req.body);
+      const results: ValidationResult[] = [];
+
+      for (const raw of body.symbols) {
+        const symbol = raw.trim().toUpperCase();
+
+        // 1. Check cache first (same TTL as full validate)
+        const cached = await getFreshCachedProfile(symbol, body.refresh);
+        if (cached) {
+          results.push({ ok: true, profile: cached, cached: true });
+          continue;
+        }
+
+        // 2. Shape check
+        if (!/^[A-Z.\-]{1,10}$/.test(symbol)) {
+          results.push({
+            ok: false,
+            symbol,
+            error: `"${raw}" is not a valid ticker shape (1-10 chars, A-Z . - only).`,
+            suggestions: [],
+          });
+          continue;
+        }
+
+        // 3. yahoo-finance2 quote — crumb-aware, lightweight, no LLM
+        let name = symbol;
+        let exchange = 'Unknown';
+        let sector = 'Unknown';
+        let industry = 'Unknown';
+        let description = '';
+
+        try {
+          const yf = await import('yahoo-finance2');
+          const q = await yf.default.quote(symbol);
+
+          if (!q || q.quoteType !== 'EQUITY') {
+            results.push({
+              ok: false,
+              symbol,
+              error: q
+                ? `"${symbol}" is not a US equity (type: ${q.quoteType ?? 'unknown'}).`
+                : `"${symbol}" was not found on Yahoo Finance. Check the ticker and try again.`,
+              suggestions: [],
+            });
+            continue;
+          }
+
+          name = q.longName ?? q.shortName ?? symbol;
+          exchange = q.fullExchangeName ?? q.exchangeName ?? 'Unknown';
+          // sector/industry not available from quote endpoint; filled in on briefing
+          description = `${name} — see briefing for full profile.`;
+        } catch {
+          results.push({
+            ok: false,
+            symbol,
+            error: `"${symbol}" was not found on Yahoo Finance. Check the ticker and try again.`,
+            suggestions: [],
+          });
+          continue;
+        }
+
+        const now = new Date().toISOString();
+        const fullProfile = {
+          symbol,
+          name: name || symbol,
+          exchange: exchange || 'Unknown',
+          sector: sector || 'Unknown',
+          industry: industry || 'Unknown',
+          description: (description as string) || `${name} (${symbol})`,
+          sources: [`https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}`],
+          validatedAt: now,
+        };
+
+        await deps.watchlist.upsert(fullProfile);
+        polling.registerSymbol(fullProfile.symbol);
+        results.push({ ok: true, profile: fullProfile, cached: false });
+      }
+
       res.json({ results });
     } catch (e) {
       next(e);
@@ -469,6 +1104,7 @@ export function createApp(deps: AppDeps): AppHandle {
         return;
       }
       await deps.watchlist.upsert(result.profile);
+      polling.registerSymbol(result.profile.symbol);
       res.json(result);
     } catch (e) {
       next(e);
@@ -488,7 +1124,630 @@ export function createApp(deps: AppDeps): AppHandle {
     try {
       const sym = Ticker.parse(req.params.sym.toUpperCase());
       const removed = await deps.watchlist.remove(sym);
+      if (removed) polling.unregisterSymbol(sym);
       res.json({ ok: true, removed });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // --- Polling subsystem (issue #27 parity) ---
+  app.get('/polling/status', (_req, res) => {
+    res.json({
+      paused: polling.status().every((j) => j.state === 'paused'),
+      jobs: polling.status(),
+    });
+  });
+
+  app.post('/polling/pause', (_req, res) => {
+    polling.pause();
+    res.json({ ok: true, paused: true, jobs: polling.status() });
+  });
+
+  app.post('/polling/resume', (_req, res) => {
+    polling.resume();
+    res.json({ ok: true, paused: false, jobs: polling.status() });
+  });
+
+  app.get('/polling/watch', async (req, res, next) => {
+    try {
+      const rawSymbols =
+        typeof req.query.symbols === 'string' && req.query.symbols.trim().length > 0
+          ? req.query.symbols
+              .split(',')
+              .map((s) => s.trim().toUpperCase())
+              .filter(Boolean)
+          : (await deps.watchlist.list()).map((e) => e.profile.symbol.toUpperCase());
+
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders?.();
+
+      const send = (event: string, data: unknown) => {
+        res.write(`event: ${event}\n`);
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+      };
+
+      send('ready', { symbols: rawSymbols });
+      const sendCurrent = async () => {
+        if (polling.isPaused) return;
+        await Promise.all(
+          rawSymbols.map(async (symbol) => {
+            const point = await tapePointForSymbol(symbol);
+            send('tape', point);
+          }),
+        );
+      };
+      await sendCurrent();
+
+      const unsubscribe = polling.subscribe((evt) => {
+        if (evt.type !== 'tape') return;
+        if (!rawSymbols.includes(evt.data.symbol)) return;
+        send('tape', evt.data);
+      });
+      const directRefresh = setInterval(() => {
+        void sendCurrent();
+      }, 15_000);
+      const keepAlive = setInterval(() => {
+        res.write(': ping\n\n');
+      }, 20_000);
+      req.on('close', () => {
+        clearInterval(directRefresh);
+        clearInterval(keepAlive);
+        unsubscribe();
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/polling/tail/:symbol', async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
+      const includeQuotes = String(req.query.quotes ?? 'false').toLowerCase() === 'true';
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders?.();
+
+      const send = (event: string, data: unknown) => {
+        res.write(`event: ${event}\n`);
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+      };
+
+      send('ready', { symbol, includeQuotes });
+      const seen = new Set<string>();
+      const pollTail = async () => {
+        if (polling.isPaused) return;
+        const [news, quote, history] = await Promise.all([
+          registry.client.news(symbol),
+          includeQuotes ? registry.client.quote(symbol) : Promise.resolve(null),
+          includeQuotes ? registry.client.history(symbol, 60) : Promise.resolve([]),
+        ]);
+        for (const item of [...news]
+          .sort((a, b) => Date.parse(a.publishedAt) - Date.parse(b.publishedAt))
+          .slice(-10)) {
+          const key = `${item.url}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          send('news', {
+            symbol,
+            title: item.title,
+            url: item.url,
+            source: item.source,
+            publishedAt: item.publishedAt,
+          });
+        }
+        if (quote) {
+          const indicators = computeIndicators(history as OHLCV[]);
+          send('quote', {
+            symbol,
+            price: quote.price,
+            change: quote.change,
+            changePercent: quote.changePercent,
+            rsi: indicators.rsi14 ?? null,
+            asOf: quote.asOf,
+          });
+        }
+      };
+      await pollTail();
+
+      const latest = polling.getTape([symbol])[0];
+      if (latest) send('tape', latest);
+
+      const unsubscribe = polling.subscribe((evt) => {
+        if (evt.type === 'news' && evt.data.symbol === symbol) {
+          send('news', evt.data);
+        }
+        if (includeQuotes && evt.type === 'quote' && evt.data.symbol === symbol) {
+          send('quote', evt.data);
+        }
+      });
+      const keepAlive = setInterval(() => {
+        res.write(': ping\n\n');
+      }, 20_000);
+      const directRefresh = setInterval(
+        () => {
+          void pollTail();
+        },
+        includeQuotes ? 15_000 : 30_000,
+      );
+      req.on('close', () => {
+        clearInterval(directRefresh);
+        clearInterval(keepAlive);
+        unsubscribe();
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // --- Sentiment / mentions (#39) ---
+  const DateParam = z
+    .string()
+    .min(1)
+    .refine((v) => !Number.isNaN(Date.parse(v)), { message: 'Expected an ISO-8601 datetime.' });
+  const SentimentRangeQuery = z.object({
+    since: DateParam.optional(),
+    until: DateParam.optional(),
+  });
+  const RecommendationRangeQuery = z.object({
+    since: DateParam.optional(),
+    until: DateParam.optional(),
+  });
+  const MentionsQuery = z.object({
+    source: SentimentSource.optional(),
+    limit: z.coerce.number().int().min(1).max(500).optional().default(100),
+    since: DateParam.optional(),
+  });
+  const recommendationRecomputeAtBySymbol = new Map<string, number>();
+  const RECOMMENDATION_RECOMPUTE_COOLDOWN_MS = 60_000;
+
+  app.get('/events', requireDashboardToken, (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+    res.write(`event: ready\ndata: ${JSON.stringify({ ok: true })}\n\n`);
+
+    sseClients.add(res);
+    const keepAlive = setInterval(() => {
+      res.write(`: keepalive ${Date.now()}\n\n`);
+    }, 20_000);
+
+    req.on('close', () => {
+      clearInterval(keepAlive);
+      sseClients.delete(res);
+    });
+  });
+
+  app.get('/sentiment/:symbol/latest', requireDashboardToken, async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
+      const latest = await mentionStore.readLatest(symbol);
+      const snapshot = latest.sentiment ?? null;
+      if (!snapshot) {
+        res.status(404).json({ error: `No sentiment snapshot found for ${symbol}.` });
+        return;
+      }
+      res.json(snapshot);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/sentiment/:symbol', requireDashboardToken, async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
+      const q = SentimentRangeQuery.parse(req.query);
+      const since = q.since ? new Date(q.since) : undefined;
+      const until = q.until ? new Date(q.until) : undefined;
+      const items: SentimentSnapshot[] = [];
+      for await (const snap of mentionStore.readSentiment(symbol, since, until)) {
+        items.push(snap);
+      }
+      items.sort((a, b) => Date.parse(a.asOf) - Date.parse(b.asOf));
+      res.json({ symbol, items });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/recommendations/:symbol/latest', requireDashboardToken, async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
+      const known = await requireKnownSymbol(res, symbol);
+      if (!known) return;
+      const latest = await recommendationStore.readLatest(symbol);
+      if (!latest) {
+        res.status(404).json({ error: `No recommendation found for ${symbol}.` });
+        return;
+      }
+      res.json(Recommendation.parse(latest));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/recommendations/:symbol', requireDashboardToken, async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
+      const known = await requireKnownSymbol(res, symbol);
+      if (!known) return;
+      const q = RecommendationRangeQuery.parse(req.query);
+      const since = q.since ? new Date(q.since) : undefined;
+      const until = q.until ? new Date(q.until) : undefined;
+      const items: RecommendationValue[] = [];
+      for await (const rec of recommendationStore.readRange(symbol, since, until)) {
+        items.push(Recommendation.parse(rec));
+      }
+      items.sort((a, b) => Date.parse(a.generatedAt) - Date.parse(b.generatedAt));
+      res.json({ symbol, items });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.post('/recommendations/:symbol/recompute', requireDashboardToken, async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
+      const known = await requireKnownSymbol(res, symbol);
+      if (!known) return;
+
+      const nowMs = Date.now();
+      const last = recommendationRecomputeAtBySymbol.get(symbol) ?? 0;
+      const elapsed = nowMs - last;
+      if (elapsed < RECOMMENDATION_RECOMPUTE_COOLDOWN_MS) {
+        const retryAfterSec = Math.ceil((RECOMMENDATION_RECOMPUTE_COOLDOWN_MS - elapsed) / 1000);
+        res.setHeader('Retry-After', String(retryAfterSec));
+        res.status(429).json({
+          error: `Recommendation recompute for ${symbol} is rate-limited to once per minute.`,
+          retryAfterSec,
+        });
+        return;
+      }
+
+      const custom = deps.recomputeRecommendation;
+      if (custom) {
+        const recommendation = Recommendation.parse(await custom(symbol));
+        emitRecommendationUpdate(symbol, recommendation, true);
+        setRecommendationSuccess(symbol);
+        res.json({ symbol, persisted: true, recommendation });
+        return;
+      }
+
+      const runner = recommendationOrchestrator;
+      if (!runner) {
+        res.status(503).json({
+          error: 'AI provider not configured',
+          hint: 'Run `regard config` (CLI) or open Settings in the dashboard.',
+        });
+        return;
+      }
+
+      recommendationRecomputeAtBySymbol.set(symbol, nowMs);
+      const result = await runner.runOnce(symbol);
+      if (result.status === 'skipped') {
+        res.status(409).json({
+          error: `Recommendation recompute for ${symbol} is already in flight.`,
+        });
+        return;
+      }
+      setRecommendationSuccess(symbol);
+      res.json({
+        symbol,
+        persisted: result.persisted,
+        recommendation: result.recommendation,
+      });
+    } catch (e) {
+      if (e instanceof StaleInputError) {
+        setRecommendationError(e.symbol, e);
+        res.status(409).json({
+          error: `Cannot recompute recommendation for ${e.symbol}: ${e.reason}.`,
+          code: e.code,
+          reason: e.reason,
+        });
+        return;
+      }
+      setRecommendationError(String(req.params.symbol).toUpperCase(), e);
+      next(e);
+    }
+  });
+
+  app.get('/mentions/:symbol', requireDashboardToken, async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
+      const q = MentionsQuery.parse(req.query);
+      const since = q.since ? new Date(q.since) : undefined;
+      const items: Array<MentionItem | ScoredMention> = [];
+      for await (const item of mentionStore.readMentions(symbol, since, undefined)) {
+        if (q.source && item.source !== q.source) continue;
+        items.push(item);
+      }
+      items.sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt));
+      const limited = items.slice(0, q.limit);
+      for (const source of SentimentSource.options) {
+        try {
+          const latest = limited
+            .filter((row) => row.source === source)
+            .reduce<string | null>((acc, row) => {
+              const ts = row.fetchedAt || row.publishedAt;
+              if (!acc) return ts;
+              return Date.parse(ts) > Date.parse(acc) ? ts : acc;
+            }, null);
+          if (latest) setSentimentSuccess(source, latest);
+        } catch (e) {
+          setSentimentError(source, e);
+        }
+      }
+      res.json({ symbol, items: limited });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // --- Calendar ---
+  const DateEt = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+  const CalendarHolidaysQuery = z.object({
+    from: DateEt.optional(),
+    to: DateEt.optional(),
+  });
+  const CalendarEarningsRangeQuery = z.object({
+    symbol: Ticker,
+    from: DateEt.optional(),
+    to: DateEt.optional(),
+  });
+  const CalendarNextQuery = z.object({
+    symbol: Ticker.optional(),
+    kind: EventKind.optional(),
+    from: DateEt.optional(),
+  });
+  const CalendarWindowQuery = z.object({
+    from: z.string().optional(),
+    days: z.coerce.number().int().min(1).max(90).optional().default(14),
+  });
+  const CalendarEarningsQuery = z.object({
+    past: z.coerce.boolean().optional().default(false),
+    upcoming: z.coerce.boolean().optional().default(true),
+  });
+  const CalendarRefreshBody = z.object({
+    holidays: z.boolean().optional().default(false),
+    earnings: z.boolean().optional().default(false),
+  });
+
+  function validateDateRange(from: string, to: string): { fromEt: string; days: number } {
+    const start = new Date(`${from}T00:00:00.000Z`);
+    const end = new Date(`${to}T00:00:00.000Z`);
+    const diffDays = Math.ceil((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000));
+    if (diffDays <= 0) {
+      throw new Error(`Invalid calendar range: "to" (${to}) must be after "from" (${from}).`);
+    }
+    return { fromEt: from, days: diffDays };
+  }
+
+  function requireCalendarAdmin(
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ): void {
+    if (!authToken) {
+      next();
+      return;
+    }
+    const adminHeader = req.header('x-regardedtrader-admin');
+    if (adminHeader === '1' || adminHeader?.toLowerCase() === 'true') {
+      next();
+      return;
+    }
+    res.status(403).json({
+      error: 'Calendar refresh is admin-only.',
+      hint: 'Retry with header `x-regardedtrader-admin: true`.',
+    });
+  }
+
+  app.get('/calendar/holidays', requireDashboardToken, async (req, res, next) => {
+    try {
+      const q = CalendarHolidaysQuery.parse(req.query);
+      const fromEt = q.from ?? todayEt();
+      const toEt = q.to ?? addDaysEt(fromEt, 14);
+      const range = validateDateRange(fromEt, toEt);
+      await calendar.maybeRefreshForRead([]);
+      const window = await calendar.getWindow({
+        fromEt: range.fromEt,
+        days: range.days,
+        symbols: [],
+      });
+      const events = window.events.filter(
+        (ev) => ev.kind === 'market_holiday' || ev.kind === 'market_early_close',
+      );
+      emitCalendarUpdate({ reason: 'read-refresh', status: calendar.status() });
+      res.json({
+        fromEt,
+        toEtExclusive: toEt,
+        events,
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/calendar/earnings', requireDashboardToken, async (req, res, next) => {
+    try {
+      const q = CalendarEarningsRangeQuery.parse({
+        ...req.query,
+        symbol: String(req.query.symbol ?? '').toUpperCase(),
+      });
+      const known = await deps.watchlist.get(q.symbol);
+      if (!known) {
+        res.status(422).json({
+          error: `Unknown ticker "${q.symbol}". Add it first with \`regard add ${q.symbol}\`.`,
+          hint: 'POST /tickers/validate or `regard add <SYM>`',
+        });
+        return;
+      }
+      const fromEt = q.from ?? todayEt();
+      const toEt = q.to ?? addDaysEt(fromEt, 30);
+      validateDateRange(fromEt, toEt);
+      await calendar.maybeRefreshForRead([q.symbol]);
+      const events = (
+        await calendar.getSymbolEarnings({
+          symbol: q.symbol,
+          includePast: true,
+          includeUpcoming: true,
+        })
+      ).filter((ev) => {
+        const dateEt = toEtDateKey(ev.startUtc);
+        return dateEt >= fromEt && dateEt < toEt;
+      });
+      emitCalendarUpdate({ reason: 'read-refresh', status: calendar.status() });
+      res.json({
+        symbol: q.symbol,
+        fromEt,
+        toEtExclusive: toEt,
+        events,
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/calendar/next', requireDashboardToken, async (req, res, next) => {
+    try {
+      const q = CalendarNextQuery.parse({
+        ...req.query,
+        symbol: req.query.symbol ? String(req.query.symbol).toUpperCase() : undefined,
+      });
+      const event = await calendar.getNextEvent({
+        symbol: q.symbol ?? undefined,
+        kind: q.kind,
+        fromEt: q.from,
+      });
+      res.json({ event });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/calendar/events', requireDashboardToken, async (req, res, next) => {
+    try {
+      const q = CalendarWindowQuery.parse(req.query);
+      const fromEt =
+        q.from && q.from !== 'today'
+          ? z
+              .string()
+              .regex(/^\d{4}-\d{2}-\d{2}$/)
+              .parse(q.from)
+          : todayEt();
+      const watch = await deps.watchlist.list();
+      const symbols = watch.map((w) => w.profile.symbol);
+      await calendar.maybeRefreshForRead(symbols);
+      const window = await calendar.getWindow({
+        fromEt,
+        days: q.days,
+        symbols,
+      });
+      emitCalendarUpdate({ reason: 'read-refresh', status: calendar.status() });
+      res.json(window);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/calendar/earnings/:symbol', requireDashboardToken, async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
+      const known = await deps.watchlist.get(symbol);
+      if (!known) {
+        res.status(422).json({
+          error: `Unknown ticker "${symbol}". Add it first with \`regard add ${symbol}\`.`,
+          hint: 'POST /tickers/validate or `regard add <SYM>`',
+        });
+        return;
+      }
+      const q = CalendarEarningsQuery.parse(req.query);
+      const includePast = q.past;
+      const includeUpcoming = q.upcoming || !q.past;
+      await calendar.maybeRefreshForRead([symbol]);
+      const events = await calendar.getSymbolEarnings({
+        symbol,
+        includePast,
+        includeUpcoming,
+      });
+      emitCalendarUpdate({ reason: 'read-refresh', status: calendar.status() });
+      res.json({ symbol, events });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.post(
+    '/calendar/refresh',
+    requireDashboardToken,
+    requireCalendarAdmin,
+    async (req, res, next) => {
+      try {
+        const body = CalendarRefreshBody.parse(req.body ?? {});
+        if (calendarRefreshFlight) {
+          const coalesced = await calendarRefreshFlight;
+          res.setHeader('X-Calendar-Refresh-Coalesced', '1');
+          res.json(coalesced);
+          return;
+        }
+        const watch = await deps.watchlist.list();
+        calendarRefreshFlight = calendar.refreshManually({
+          holidays: body.holidays,
+          earnings: body.earnings,
+          symbols: watch.map((w) => w.profile.symbol),
+        });
+        const out = await calendarRefreshFlight;
+        if (out.skipped && out.skipped.length > 0 && !out.holidays && !out.earnings) {
+          const retryAfterMs = Math.max(...out.skipped.map((s) => s.retryAfterMs));
+          res.setHeader('Retry-After', Math.max(1, Math.ceil(retryAfterMs / 1000)).toString());
+          res.status(429).json(out);
+          return;
+        }
+        emitCalendarUpdate({ reason: 'manual-refresh', refresh: out, status: calendar.status() });
+        res.json(out);
+      } catch (e) {
+        next(e);
+      } finally {
+        calendarRefreshFlight = null;
+      }
+    },
+  );
+
+  app.get('/calendar/status', requireDashboardToken, (_req, res) => {
+    res.json(calendar.status());
+  });
+
+  // Compatibility endpoint used by the web CalendarStrip. Market-only list.
+  app.get('/calendar/upcoming', requireDashboardToken, async (req, res, next) => {
+    try {
+      const q = CalendarWindowQuery.parse(req.query);
+      const fromEt = todayEt();
+      await calendar.maybeRefreshForRead([]);
+      const window = await calendar.getWindow({ fromEt, days: q.days, symbols: [] });
+      const events = window.events
+        .filter((ev) => ev.kind === 'market_holiday' || ev.kind === 'market_early_close')
+        .map((ev) => ({
+          dateOffset: Math.max(
+            0,
+            Math.floor(
+              (new Date(`${toEtDateKey(ev.startUtc)}T00:00:00.000Z`).getTime() -
+                new Date(`${fromEt}T00:00:00.000Z`).getTime()) /
+                (24 * 60 * 60 * 1000),
+            ),
+          ),
+          kind: ev.kind,
+          title: ev.title,
+          startUtc: ev.startUtc,
+          endUtc: ev.endUtc,
+          details: ev.details ?? null,
+          sources: ev.sources,
+        }));
+      emitCalendarUpdate({ reason: 'read-refresh', status: calendar.status() });
+      res.json({ today: fromEt, events });
     } catch (e) {
       next(e);
     }
@@ -522,6 +1781,7 @@ export function createApp(deps: AppDeps): AppHandle {
     return entry;
   }
 
+
   // Technician agent surface (issue #74). Standalone endpoint so the CLI
   // `regard tech <SYM>` and the web `Chart` tab can render TA commentary
   // without rerunning the full briefing pipeline.
@@ -541,11 +1801,61 @@ export function createApp(deps: AppDeps): AppHandle {
     }
   });
 
+  const BriefingHistoryQuery = z.object({
+    limit: z.coerce.number().int().positive().max(200).optional().default(20),
+  });
+  const BriefingReqWithRecommendation = BriefingRequest.extend({
+    latestRecommendation: Recommendation.optional(),
+  });
+
+  app.get('/briefing/:symbol/history', async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+      const { limit } = BriefingHistoryQuery.parse(req.query);
+      res.json({
+        symbol,
+        items: await briefings.listBriefings(symbol, limit),
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // NewsScout endpoint (issue #75). Returns ranked traditional headlines with
+  // model-assigned relevance/materiality scores, shared by CLI + web.
+  app.get('/news/:symbol', async (req, res, next) => {
+    try {
+      const llm = deps.llmFromConfig(cfg);
+      if (!llm) {
+        res.status(503).json({ error: 'AI provider not configured' });
+        return;
+      }
+      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+      const known = await requireKnownSymbol(res, symbol);
+      if (!known) return;
+      const news = await registry.client.news(symbol).catch(() => []);
+      const scout = new NewsScout(llm);
+      res.json(await scout.bundle({ symbol, news }));
+    } catch (e) {
+      next(e);
+    }
+  });
+
   app.get('/briefing/:symbol', async (req, res, next) => {
     try {
+      const candidate = req.params.symbol;
+      if (looksLikeBriefingId(candidate)) {
+        const stored = await briefings.getBriefing(candidate);
+        if (!stored) {
+          res.status(404).json({ error: `briefing "${candidate}" not found` });
+          return;
+        }
+        res.json(stored.briefing);
+        return;
+      }
       const o = requireOrchestrator(res);
       if (!o) return;
-      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+      const symbol = Ticker.parse(candidate.toUpperCase());
       const known = await requireKnownSymbol(res, symbol);
       if (!known) return;
       res.json(await o.briefing(symbol));
@@ -565,7 +1875,7 @@ export function createApp(deps: AppDeps): AppHandle {
       const symbol = Ticker.parse(req.params.symbol.toUpperCase());
       const known = await requireKnownSymbol(res, symbol);
       if (!known) return;
-      const body = BriefingRequest.parse(req.body ?? {});
+      const body = BriefingReqWithRecommendation.parse(req.body ?? {});
       res.json(await o.briefing(symbol, body));
     } catch (e) {
       next(e);
@@ -577,6 +1887,7 @@ export function createApp(deps: AppDeps): AppHandle {
     thesis: z.string().min(3),
     maxLossUsd: z.number().positive().max(100_000),
     expiry: z.string().optional(),
+    latestRecommendation: Recommendation.optional(),
   });
 
   app.post('/plans', async (req, res, next) => {
@@ -587,10 +1898,78 @@ export function createApp(deps: AppDeps): AppHandle {
       const known = await requireKnownSymbol(res, body.symbol);
       if (!known) return;
       const out = await o.proposePlans(body);
+      const stamped = out.plans.map((candidate, i) => ({
+        ...candidate,
+        id: makePlanId(body.symbol, i),
+      }));
+      await paperStore.cachePlans(
+        body.symbol,
+        stamped.map((c) => ({ id: c.id!, plan: c.plan })),
+      );
       // Validate the wire payload before emitting (issue #77). Each plan's
       // `notes` carries the canonical disclaimer via `attachRiskGraph`; this
       // .parse() defends against future refactors that might drop it.
-      res.json(PlansResponse.parse(out));
+      res.json(PlansResponse.parse({ ...out, plans: stamped }));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  // --- Paper trading (simulated only) ---
+  const PaperSubmitBody = z.object({
+    paper: z.boolean(),
+    planId: z.string().min(1),
+    plan: TradePlan.optional(),
+  });
+
+  app.post('/paper/orders', async (req, res, next) => {
+    try {
+      const body = PaperSubmitBody.parse(req.body ?? {});
+      if (body.paper !== true) {
+        res.status(400).json({ error: 'Paper mode must be explicitly enabled (paper=true).' });
+        return;
+      }
+      const plan = body.plan ?? (await paperStore.findPlan(body.planId));
+      if (!plan) {
+        res.status(404).json({
+          error: `Unknown planId "${body.planId}".`,
+          hint: 'Generate plans first via `regard plan <SYM>` or POST /plans.',
+        });
+        return;
+      }
+      const fill = await makePaperBroker().submit({
+        mode: 'paper',
+        planId: body.planId,
+        plan,
+      });
+      res.json(fill);
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/paper/orders', async (_req, res, next) => {
+    try {
+      const orders = await paperStore.listOrders();
+      res.json({ orders });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/paper/positions', async (_req, res, next) => {
+    try {
+      const positions = await paperStore.listPositions();
+      res.json({ positions });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/paper/plans', async (_req, res, next) => {
+    try {
+      const plans = await paperStore.listPlans();
+      res.json({ plans });
     } catch (e) {
       next(e);
     }
@@ -607,8 +1986,10 @@ export function createApp(deps: AppDeps): AppHandle {
       const next = AppConfig.parse(req.body);
       await saveConfig(next);
       cfg = next;
-      orchestrator = makeOrchestrator();
+      marketCache.setEnabled(cfg.cache.enabled);
+      refreshOrchestrators();
       rebuildRegistry();
+      applyPollingRuntimeConfig();
       res.json({ ok: true, aiConfigured: orchestrator !== null, config: redactConfig(cfg) });
     } catch (e) {
       next(e);
@@ -624,8 +2005,30 @@ export function createApp(deps: AppDeps): AppHandle {
       const risk = RiskConfig.parse(req.body);
       cfg.risk = risk;
       await saveConfig(cfg);
-      orchestrator = makeOrchestrator();
+      refreshOrchestrators();
       res.json({ ok: true, aiConfigured: orchestrator !== null, config: redactConfig(cfg) });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.post('/config/cache', async (req, res, next) => {
+    try {
+      const body = z.object({ enabled: z.boolean() }).parse(req.body);
+      cfg.cache.enabled = body.enabled;
+      marketCache.setEnabled(body.enabled);
+      await saveConfig(cfg);
+      res.json({ ok: true, aiConfigured: orchestrator !== null, config: redactConfig(cfg) });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.post('/cache/clear', async (req, res, next) => {
+    try {
+      const body = z.object({ namespace: z.string().min(1).optional() }).parse(req.body ?? {});
+      const cleared = await marketCache.clear(body.namespace);
+      res.json({ ok: true, namespace: body.namespace ?? null, deleted: cleared.deleted });
     } catch (e) {
       next(e);
     }
@@ -642,7 +2045,7 @@ export function createApp(deps: AppDeps): AppHandle {
     try {
       const { id, provider } = MarketProviderUpsert.parse(req.body);
       cfg.marketData.providers[id] = provider;
-      if (!cfg.marketData.activeProvider) cfg.marketData.activeProvider = id;
+      cfg.marketData.activeProvider = id; // always activate the newly configured provider
       await saveConfig(cfg);
       rebuildRegistry();
       res.json({
@@ -702,22 +2105,64 @@ export function createApp(deps: AppDeps): AppHandle {
    * feedback that their key works.
    */
   app.post('/config/market-data/test', async (req, res) => {
-    const probeSymbol = typeof req.body?.symbol === 'string' ? req.body.symbol.toUpperCase() : 'AAPL';
-    const source = resolveLiveQuoteSource();
+    const bodyParsed = z
+      .object({
+        symbol: z.string().optional(),
+        providerId: z.string().optional(),
+      })
+      .safeParse(req.body);
+    const probeSymbol =
+      bodyParsed.success && bodyParsed.data.symbol ? bodyParsed.data.symbol.toUpperCase() : 'AAPL';
+    const testProviderId = bodyParsed.success ? bodyParsed.data.providerId : undefined;
+
+    let source: LiveQuoteSource | null;
+    let resolvedId: string | null;
+
+    if (testProviderId) {
+      const testProvCfg = cfg.marketData.providers[testProviderId];
+      if (!testProvCfg) {
+        res.json({ ok: false, error: `Market-data provider "${testProviderId}" not found` });
+        return;
+      }
+      const testReg = createMarketDataRegistry(
+        { providers: { [testProviderId]: testProvCfg }, activeProvider: testProviderId },
+        { fallback: deps.market },
+      );
+      source =
+        testReg.liveQuoteSource != null
+          ? (testReg.liveQuoteSource as unknown as LiveQuoteSource)
+          : (deps.liveQuoteSource ?? null);
+      resolvedId = testProviderId;
+    } else {
+      source = resolveLiveQuoteSource();
+      resolvedId = registry.activeId;
+    }
+
     if (!source) {
-      res.status(503).json({ ok: false, error: 'No market-data provider configured' });
+      res.json({
+        ok: false,
+        error: 'No market-data provider configured. Add one in Settings → Market Data.',
+      });
       return;
     }
     try {
       const raw = (await source(probeSymbol)) as YahooQuoteLike;
       res.json({
         ok: true,
-        provider: registry.activeId,
+        provider: resolvedId,
         symbol: probeSymbol,
         price: raw.regularMarketPrice ?? null,
       });
     } catch (e) {
-      res.status(502).json({ ok: false, error: (e as Error).message });
+      const rawMsg = (e as Error).message;
+      let friendly = rawMsg;
+      if (/too many requests|429|rate[\s-]?limit/i.test(rawMsg)) {
+        friendly =
+          'Yahoo Finance is rate-limited (HTTP 429). This unofficial API throttles heavy usage. ' +
+          'Switch to Finnhub for reliable real-time data.';
+      }
+      // Always return 200 — success/failure is in the `ok` field, not the HTTP status.
+      res.json({ ok: false, error: friendly });
     }
   });
 
@@ -727,9 +2172,9 @@ export function createApp(deps: AppDeps): AppHandle {
     try {
       const { id, provider } = ProviderUpsert.parse(req.body);
       cfg.providers[id] = provider;
-      if (!cfg.activeProvider) cfg.activeProvider = id;
+      cfg.activeProvider = id;
       await saveConfig(cfg);
-      orchestrator = makeOrchestrator();
+      refreshOrchestrators();
       res.json({ ok: true, aiConfigured: orchestrator !== null, config: redactConfig(cfg) });
     } catch (e) {
       next(e);
@@ -746,7 +2191,7 @@ export function createApp(deps: AppDeps): AppHandle {
       delete cfg.providers[id];
       if (cfg.activeProvider === id) cfg.activeProvider = null;
       await saveConfig(cfg);
-      orchestrator = makeOrchestrator();
+      refreshOrchestrators();
       res.json({ ok: true, aiConfigured: orchestrator !== null, config: redactConfig(cfg) });
     } catch (e) {
       next(e);
@@ -764,7 +2209,7 @@ export function createApp(deps: AppDeps): AppHandle {
       }
       cfg.activeProvider = id;
       await saveConfig(cfg);
-      orchestrator = makeOrchestrator();
+      refreshOrchestrators();
       res.json({ ok: true, aiConfigured: orchestrator !== null, config: redactConfig(cfg) });
     } catch (e) {
       next(e);
@@ -786,9 +2231,7 @@ export function createApp(deps: AppDeps): AppHandle {
    *    can hang on auth flows; the timeout keeps the UI snappy.
    */
   app.post('/config/test', async (req, res) => {
-    const body = z
-      .object({ providerId: z.string().min(1).optional() })
-      .safeParse(req.body ?? {});
+    const body = z.object({ providerId: z.string().min(1).optional() }).safeParse(req.body ?? {});
     if (!body.success) {
       const result: ConfigTestResultT = {
         ok: false,
@@ -832,7 +2275,7 @@ export function createApp(deps: AppDeps): AppHandle {
     }
 
     const model = provider.kind === 'openai-compatible' ? provider.model : provider.model;
-    const TIMEOUT_MS = 10_000;
+    const TIMEOUT_MS = provider.kind === 'cli' ? 90_000 : 10_000;
     const started = Date.now();
     try {
       const llm = (deps.buildLLMForProvider ?? buildLLM)(provider);
@@ -899,15 +2342,44 @@ export function createApp(deps: AppDeps): AppHandle {
     },
   );
 
-  return { app, getConfig: () => cfg };
+  return {
+    app,
+    getConfig: () => cfg,
+    emitSentimentUpdate,
+    emitRecommendationUpdate,
+    shutdown: (timeoutMs = 5_000) => polling.stopGracefully(timeoutMs),
+    stream: {
+      subscribe: (listener) => polling.subscribe(listener),
+      loadChain: (symbol) => registry.client.optionsChain(symbol),
+      auth: {
+        required: Boolean(runtimeAuthToken),
+        validate: (candidate) => tokenMatches(candidate),
+      },
+    },
+  };
+}
+
+function makePlanId(symbol: string, index: number): string {
+  return `${symbol.toUpperCase()}-${Date.now().toString(36)}-${index + 1}`;
 }
 
 /** Default factory used by the entrypoint. */
-export function createDefaultApp(cfg: AppConfigT): AppHandle {
+export function createDefaultApp(cfg: AppConfigT, auth?: AppDeps['auth']): AppHandle {
+  const cache = new SQLiteCache({
+    enabled: cfg.cache.enabled,
+    namespaceTtls: {
+      quotes: 30_000,
+      history: 5 * 60_000,
+      chain: 60_000,
+      news: 5 * 60_000,
+    },
+  });
   return createApp({
-    market: new YahooClient(),
+    market: new YahooClient(cache),
+    cache,
     webSearch: new DuckDuckGoSearch(),
     watchlist: new WatchlistStore(),
+    briefings: new BriefingStore(),
     initialConfig: cfg,
     liveQuoteSource: async (symbol) => {
       // yahoo-finance2 is a direct server dep; import dynamically so test
@@ -922,9 +2394,7 @@ export function createDefaultApp(cfg: AppConfigT): AppHandle {
       // `https://query2.finance.yahoo.com/v7/finance/quote?symbols=<SYM>`
       // request, and Yahoo throttles aggressively per client.
       const mod = await import('yahoo-finance2');
-      return (await mod.default.quoteCombine(symbol)) as Awaited<
-        ReturnType<LiveQuoteSource>
-      >;
+      return (await mod.default.quoteCombine(symbol)) as Awaited<ReturnType<LiveQuoteSource>>;
     },
     llmFromConfig: (c) => {
       try {
@@ -934,5 +2404,6 @@ export function createDefaultApp(cfg: AppConfigT): AppHandle {
         return null;
       }
     },
+    auth,
   });
 }

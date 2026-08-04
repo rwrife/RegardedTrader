@@ -28,6 +28,7 @@ function makeConfig(extra: Partial<AppConfig> = {}): AppConfig {
     },
     server: { host: '127.0.0.1', port: 4317 },
     marketData: { providers: {}, activeProvider: null },
+    cache: { enabled: true },
     ...extra,
   } as AppConfig;
 }
@@ -77,6 +78,12 @@ function makeApi(overrides: Partial<ApiClient> = {}): ApiClient {
       aiConfigured: true,
       config: makeConfig({ risk }),
     })),
+    updateCacheEnabled: vi.fn(async (enabled) => ({
+      ok: true,
+      aiConfigured: true,
+      config: makeConfig({ cache: { enabled } }),
+    })),
+    clearCache: vi.fn(async () => ({ ok: true, namespace: null, deleted: 2 })),
     ...overrides,
   };
 }
@@ -274,6 +281,35 @@ describe('<Settings>', () => {
       });
       expect(api.updateRiskCaps).not.toHaveBeenCalled();
       expect(harness.container.textContent).toMatch(/Max loss must be a positive number/);
+    } finally {
+      unmount(harness);
+    }
+  });
+
+  it('toggles cache enabled and clears cache entries', async () => {
+    const api = makeApi();
+    const harness = await mount(api);
+    try {
+      const toggle = harness.container.querySelector(
+        'input[aria-label="Enable market-data cache"]',
+      ) as HTMLInputElement | null;
+      expect(toggle?.checked).toBe(true);
+      await act(async () => {
+        toggle!.click();
+        await Promise.resolve();
+      });
+      expect(api.updateCacheEnabled).toHaveBeenCalledWith(false);
+
+      const clearBtn = harness.container.querySelector(
+        'button[aria-label="Clear market-data cache"]',
+      ) as HTMLButtonElement | null;
+      expect(clearBtn).not.toBeNull();
+      await act(async () => {
+        clearBtn!.click();
+        await Promise.resolve();
+      });
+      expect(api.clearCache).toHaveBeenCalled();
+      expect(harness.container.textContent).toContain('Cleared 2 cached entries');
     } finally {
       unmount(harness);
     }

@@ -8,9 +8,11 @@
   "exports": {
     ".": "./dist/index.js",
     "./schemas": "./dist/schemas/index.js",
+    "./schemas/recommendation": "./dist/schemas/recommendation.js",
     "./agents": "./dist/agents/index.js",
     "./marketHours": "./dist/marketHours.js",
     "./rating": "./dist/rating.js",
+    "./indicators": "./dist/indicators/index.js",
     "./options": "./dist/options/index.js",
     "./constants": "./dist/constants.js"
   },
@@ -18,15 +20,20 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch",
     "test": "vitest run",
+    "eval:recommender": "node ./eval/recommender/run.mjs",
     "test:live:tickers": "vitest run src/tickers/live.test.ts",
+    "test:live:polling": "vitest run src/polling/live.test.ts",
+    "test:live:calendar": "vitest run src/calendar/live.test.ts",
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "better-sqlite3": "^11.8.1",
     "openai": "^4.67.3",
     "yahoo-finance2": "2.11.3",
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.7.5",
     "typescript": "^5.6.3",
     "vitest": "^2.1.2"

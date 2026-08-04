@@ -177,6 +177,8 @@ export function Settings(props: SettingsProps): JSX.Element {
 
         {config && <MarketDataSection api={api} config={config} onConfigChange={refresh} />}
 
+        {config && <CacheSection api={api} config={config} onConfigChange={refresh} />}
+
         {config && <RiskCapsSection api={api} config={config} onConfigChange={refresh} />}
 
         <div className="pt-4">
@@ -636,6 +638,92 @@ function FormFooter({
 }
 
 // -----------------------------------------------------------------------------
+// Shared cache controls (#78)
+// -----------------------------------------------------------------------------
+
+interface CacheSectionProps {
+  api: ApiClient;
+  config: AppConfig;
+  onConfigChange: (next: AppConfig) => void;
+}
+
+function CacheSection({ api, config, onConfigChange }: CacheSectionProps): JSX.Element {
+  const [status, setStatus] = useState<Status>({ kind: 'idle' });
+  const [clearing, setClearing] = useState(false);
+
+  const onToggle = async (enabled: boolean): Promise<void> => {
+    setStatus({ kind: 'loading' });
+    try {
+      const r = await api.updateCacheEnabled(enabled);
+      onConfigChange(r.config);
+      setStatus({
+        kind: 'info',
+        message: enabled ? 'Market-data cache enabled' : 'Market-data cache disabled',
+      });
+    } catch (e) {
+      setStatus({ kind: 'error', message: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
+  const onClear = async (): Promise<void> => {
+    setClearing(true);
+    try {
+      const r = await api.clearCache();
+      setStatus({ kind: 'info', message: `Cleared ${r.deleted} cached entr${r.deleted === 1 ? 'y' : 'ies'}` });
+    } catch (e) {
+      setStatus({ kind: 'error', message: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setClearing(false);
+    }
+  };
+
+  return (
+    <div className="pt-6 mt-6 border-t border-border-subtle space-y-3">
+      <div>
+        <h2 className="text-lg font-semibold tracking-tight">Market-data cache</h2>
+        <p className="text-xs text-fg-muted mt-1">
+          Shared SQLite cache for quotes, history, options chains, and news.
+        </p>
+      </div>
+
+      <label className="inline-flex items-center gap-2 text-sm">
+        <input
+          aria-label="Enable market-data cache"
+          type="checkbox"
+          checked={config.cache.enabled}
+          onChange={(e) => {
+            void onToggle(e.target.checked);
+          }}
+        />
+        Enable cache
+      </label>
+
+      <div>
+        <button
+          aria-label="Clear market-data cache"
+          onClick={() => void onClear()}
+          disabled={clearing}
+          className="text-xs px-2.5 py-1.5 rounded border border-border-subtle hover:border-ai disabled:opacity-50"
+        >
+          {clearing ? 'Clearing…' : 'Clear cache'}
+        </button>
+      </div>
+
+      {status.kind === 'error' && (
+        <div role="alert" className="border border-down rounded p-2 text-xs bg-down/10 text-down">
+          {status.message}
+        </div>
+      )}
+      {status.kind === 'info' && (
+        <div className="border border-border-subtle rounded p-2 text-xs text-fg-secondary bg-surface">
+          {status.message}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
 // Market Data (#91)
 // -----------------------------------------------------------------------------
 
@@ -648,7 +736,7 @@ interface MarketDataSectionProps {
 function MarketDataSection({ api, config, onConfigChange }: MarketDataSectionProps): JSX.Element {
   const [addOpen, setAddOpen] = useState(false);
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
-  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [testResults, setTestResults] = useState<TestState>({});
 
   const md = config.marketData;
   const active = md.activeProvider;
@@ -659,7 +747,6 @@ function MarketDataSection({ api, config, onConfigChange }: MarketDataSectionPro
       const r = await api.activateMarketProvider(id);
       onConfigChange(r.config);
       setStatus({ kind: 'info', message: id ? `Activated "${id}"` : 'Cleared active provider' });
-      setTestResult(null);
     } catch (e) {
       setStatus({ kind: 'error', message: e instanceof Error ? e.message : String(e) });
     }
@@ -687,17 +774,20 @@ function MarketDataSection({ api, config, onConfigChange }: MarketDataSectionPro
     }
   };
 
-  const handleTest = async (): Promise<void> => {
-    setTestResult(null);
+  const handleTest = async (providerId: string): Promise<void> => {
+    setTestResults((prev) => ({ ...prev, [providerId]: undefined }));
     setStatus({ kind: 'loading' });
-    const r = await api.testMarketProvider();
+    const r = await api.testMarketProvider(undefined, providerId);
     setStatus({ kind: 'idle' });
-    setTestResult({
-      ok: !!r.ok,
-      message: r.ok
-        ? `OK — ${r.symbol} @ ${typeof r.price === 'number' ? r.price.toFixed(2) : '—'}`
-        : r.error ?? 'Test failed',
-    });
+    setTestResults((prev) => ({
+      ...prev,
+      [providerId]: {
+        ok: !!r.ok,
+        message: r.ok
+          ? `OK — ${r.symbol} @ ${typeof r.price === 'number' ? r.price.toFixed(2) : '—'}`
+          : r.error ?? 'Test failed',
+      },
+    }));
   };
 
   return (
@@ -762,37 +852,29 @@ function MarketDataSection({ api, config, onConfigChange }: MarketDataSectionPro
                 <td className="px-3 py-2 text-xs font-mono">
                   {p.kind === 'finnhub' ? maskApiKey(p.apiKey) || '—' : 'n/a'}
                 </td>
-                <td className="px-3 py-2 text-right">
+                <td className="px-3 py-2 text-right whitespace-nowrap space-x-2">
+                  <button
+                    onClick={() => void handleTest(id)}
+                    className="text-xs px-2 py-1 rounded border border-border-subtle hover:border-ai"
+                  >
+                    Test
+                  </button>
                   <button
                     onClick={() => void handleDelete(id)}
                     className="text-xs text-fg-muted hover:text-down"
                   >
                     Remove
                   </button>
+                  {testResults[id] && (
+                    <div className={`mt-1 text-[10px] ${testResults[id]!.ok ? 'text-up' : 'text-down'}`}>
+                      {testResults[id]!.ok ? '✓' : '✗'} {testResults[id]!.message}
+                    </div>
+                  )}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
-      )}
-
-      {active && (
-        <div className="flex items-center gap-3 pt-1">
-          <button
-            onClick={() => void handleTest()}
-            className="px-3 py-1.5 text-xs rounded border border-border-subtle bg-surface-2 hover:border-ai"
-          >
-            Test active provider
-          </button>
-          {testResult && (
-            <span
-              role="status"
-              className={`text-xs ${testResult.ok ? 'text-up' : 'text-down'}`}
-            >
-              {testResult.message}
-            </span>
-          )}
-        </div>
       )}
 
       {addOpen && (

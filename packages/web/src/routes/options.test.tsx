@@ -64,9 +64,24 @@ const sampleQuote: Quote = {
 
 describe('<Options />', () => {
   it('renders a chain table with the disclaimer when seeded with data', () => {
-    render(<Options symbol="NVDA" initialChain={sampleChain} initialQuote={sampleQuote} />);
+    render(
+      <Options
+        symbol="NVDA"
+        initialChain={sampleChain}
+        initialQuote={sampleQuote}
+        initialImpliedMoves={[
+          {
+            expiry: '2026-12-18',
+            straddleMid: 10.5,
+            impliedMoveAbs: 10.5,
+            impliedMovePct: 0.069,
+          },
+        ]}
+      />,
+    );
     expect(screen.getByLabelText('Options chain')).toBeDefined();
     expect(screen.getByText(/Not financial advice/i)).toBeDefined();
+    expect(screen.getByText(/2026-12-18: ±\$10\.50 \(6\.9%\)/i)).toBeDefined();
     // Strikes render as monospace numbers.
     expect(screen.getByText('140.00')).toBeDefined();
     expect(screen.getByText('150.00')).toBeDefined();
@@ -94,5 +109,33 @@ describe('<Options />', () => {
   it('shows an empty-state message when the seeded chain is empty', () => {
     render(<Options symbol="ZZZZ" initialChain={[]} initialQuote={null} />);
     expect(screen.getByText(/No options data for ZZZZ/i)).toBeDefined();
+  });
+
+  it('accepts the server response shape with contracts + impliedMoves', async () => {
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (url.includes('/options/')) {
+        return new Response(
+          JSON.stringify({
+            contracts: sampleChain,
+            impliedMoves: [
+              {
+                expiry: '2026-12-18',
+                straddleMid: 10.5,
+                impliedMoveAbs: 10.5,
+                impliedMovePct: 0.069,
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify(sampleQuote), { status: 200 });
+    };
+    render(<Options symbol="NVDA" fetchImpl={fetchImpl} />);
+    await waitFor(() => {
+      expect(screen.getByLabelText('Options chain')).toBeDefined();
+    });
+    expect(screen.getByText(/2026-12-18: ±\$10\.50 \(6\.9%\)/i)).toBeDefined();
   });
 });

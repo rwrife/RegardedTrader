@@ -1,5 +1,6 @@
 import type { MarketDataClient } from './clients/index.js';
 import { computeIndicators } from './indicators/index.js';
+import type { Recommendation } from './schemas/recommendation.js';
 import {
   Analyst,
   OptionsStrategist,
@@ -17,11 +18,14 @@ import {
   Briefing,
   type Briefing as BriefingT,
   type BriefingStrategist,
+  type NewsItem,
   type PlansResponse,
   type ReviewedTradePlan,
   type RiskReview,
   type TradePlan,
 } from './schemas/index.js';
+import type { SentimentSnapshot } from './schemas/sentiment.js';
+import type { BriefingStorePort } from './storage/briefings.js';
 
 /**
  * Optional inputs to `Orchestrator.briefing` (issue #126). Supplying a
@@ -32,11 +36,24 @@ export interface BriefingOptions {
   thesis?: string;
   maxLossUsd?: number;
   expiry?: string;
+  /** Optional pre-fetched sentiment snapshot injected by the server route. */
+  sentimentSnapshot?: SentimentSnapshot;
+  nextEarnings?: {
+    date: string;
+    daysUntil: number;
+    title: string;
+    startUtc: string;
+  };
+  latestRecommendation?: Recommendation;
 }
 
 export interface OrchestratorAgents {
   technician?: TechnicianAgent;
   newsScout?: NewsScoutAgent;
+}
+
+export interface OrchestratorStores {
+  briefings?: BriefingStorePort;
 }
 
 export class Orchestrator {
@@ -45,18 +62,21 @@ export class Orchestrator {
   private readonly risk: RiskOfficer;
   private readonly technician?: TechnicianAgent;
   private readonly newsScout?: NewsScoutAgent;
+  private readonly briefings?: BriefingStorePort;
 
   constructor(
     private readonly market: MarketDataClient,
     llm: LLM,
     caps: RiskCaps = { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true },
     agents: OrchestratorAgents = {},
+    stores: OrchestratorStores = {},
   ) {
     this.analyst = new Analyst(llm);
     this.strategist = new OptionsStrategist(llm);
     this.risk = new RiskOfficer(caps);
     this.technician = agents.technician;
     this.newsScout = agents.newsScout;
+    this.briefings = stores.briefings;
   }
 
   /**
@@ -77,9 +97,9 @@ export class Orchestrator {
     ]);
     const indicators = computeIndicators(history);
 
-    // Fan out the analyst + optional Technician/NewsScout in parallel.
-    // The strategist runs only when a thesis + budget are supplied; the
-    // `RiskOfficer` reviews its candidates after they come back.
+    // Fan out optional Technician/NewsScout in parallel.
+    // NewsScout resolves before Analyst so the analyst always gets
+    // ID-labeled headlines it can cite in catalysts/risks.
     const technicalPromise = this.technician
       ? this.technician
           .analyze({ symbol, quote, indicators })
@@ -97,12 +117,23 @@ export class Orchestrator {
 
     const strategistPromise = this.runStrategistSection(symbol, opts);
 
-    const [base, ta, scout, strategist] = await Promise.all([
-      this.analyst.brief({ symbol, quote, indicators, news }),
+    const [ta, scout, strategist] = await Promise.all([
       technicalPromise,
       newsPromise,
       strategistPromise,
     ]);
+    const analystNews = scout?.headlines.length
+      ? scout.headlines
+      : withHeadlineIds(news);
+    const base = await this.analyst.brief({
+      symbol,
+      quote,
+      indicators,
+      news: analystNews,
+      sentiment: opts.sentimentSnapshot,
+      latestRecommendation: opts.latestRecommendation,
+      ...(opts.nextEarnings ? { nextEarnings: opts.nextEarnings } : {}),
+    });
 
     // Aggregate risk verdict for the briefing. Briefing-only calls do not
     // get a verdict; strategist calls always do.
@@ -123,7 +154,20 @@ export class Orchestrator {
     };
 
     // Validate at the seam — every emitted briefing must conform.
-    return Briefing.parse(candidate);
+    const out = Briefing.parse(candidate);
+    // Best-effort persistence (#141): callers still get the live response if
+    // the local history write fails (disk full, permissions, etc.).
+    if (this.briefings) {
+      try {
+        await this.briefings.saveBriefing(out);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[Orchestrator.briefing] persisted-history write failed for ${symbol.toUpperCase()}: ${msg}`,
+        );
+      }
+    }
+    return out;
   }
 
   async proposePlans(input: {
@@ -131,6 +175,7 @@ export class Orchestrator {
     thesis: string;
     maxLossUsd: number;
     expiry?: string;
+    latestRecommendation?: Recommendation;
   }): Promise<PlansResponse> {
     const chain = await this.market.optionsChain(input.symbol, input.expiry);
     const plans = await this.strategist.propose({ ...input, chain });
@@ -169,6 +214,7 @@ export class Orchestrator {
         thesis: opts.thesis,
         maxLossUsd: opts.maxLossUsd,
         chain,
+        latestRecommendation: opts.latestRecommendation,
       });
     } catch (err) {
       if (err instanceof AgentParseError) {
@@ -217,4 +263,8 @@ function collectSources(parts: {
   for (const s of parts.ta?.sourcesUsed ?? []) out.add(s);
   for (const s of parts.scout?.sourcesUsed ?? []) out.add(s);
   return Array.from(out);
+}
+
+function withHeadlineIds(news: NewsItem[]): NewsItem[] {
+  return news.map((h, i) => ({ ...h, id: h.id ?? `h${i + 1}` }));
 }

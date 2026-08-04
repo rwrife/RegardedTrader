@@ -212,6 +212,69 @@ describe('Orchestrator.briefing (#126)', () => {
     expect(optionsChain).not.toHaveBeenCalled();
   });
 
+  it('passes recent sentiment context into the analyst prompt when provided', async () => {
+    const complete = vi.fn(async () => analystReply);
+    const llm: LLM = { complete };
+    const o = new Orchestrator(fakeMarket(), llm);
+    await o.briefing('NVDA', {
+      sentimentSnapshot: {
+        symbol: 'NVDA',
+        asOf: '2026-07-01T12:00:00.000Z',
+        score: 0.42,
+        confidence: 0.78,
+        volume: 18,
+        bySource: {},
+      },
+    });
+    expect(complete).toHaveBeenCalledTimes(1);
+    const firstCall = complete.mock.calls[0] as [{ user?: string }] | undefined;
+    const userPrompt = String(firstCall?.[0]?.user ?? '');
+    expect(userPrompt).toContain('Sentiment context');
+    expect(userPrompt).toContain('0.42');
+    expect(userPrompt).toMatch(/one input among many/i);
+  });
+
+  it('passes latestRecommendation into analyst and strategist contexts when provided', async () => {
+    const complete = vi.fn(async ({ system, user }: { system: string; user: string }) => {
+      if (/equity research analyst/i.test(system)) {
+        return JSON.stringify({
+          bullCase: 'bull',
+          bearCase: 'bear',
+          catalysts: [],
+          risks: [],
+        });
+      }
+      return JSON.stringify({ plans: [compliantPlan] });
+    });
+    const llm: LLM = { complete };
+    const o = new Orchestrator(fakeMarket(), llm);
+    const latestRecommendation = {
+      symbol: 'NVDA' as const,
+      generatedAt: '2026-01-01T00:00:00.000Z',
+      asOf: { quote: '2026-01-01T00:00:00.000Z', options: null, sentiment: null, news: null },
+      equity: {
+        action: 'SELL' as const,
+        conviction: 0.8,
+        rationale: 'trend down',
+        signals: [],
+        contraSignals: [],
+      },
+      options: { coveredCall: null, coveredPut: null, nakedCall: null, nakedPut: null },
+      riskFlags: [],
+      sources: [],
+      modelInfo: { provider: 'test', model: 'test', ruleVersion: '1.0.0' },
+      disclaimer: DISCLAIMER,
+    };
+    await o.briefing('NVDA', {
+      thesis: 'bullish continuation',
+      maxLossUsd: 500,
+      latestRecommendation,
+    });
+    const users = complete.mock.calls.map((c) => String(c[0]?.user ?? ''));
+    expect(users.some((u) => /latestRecommendation/.test(u))).toBe(true);
+    expect(users.some((u) => /latestRecommendation/.test(u))).toBe(true);
+  });
+
   it('continues without technical output when Technician throws, and logs once', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
@@ -362,12 +425,9 @@ describe('Orchestrator.briefing (#126)', () => {
    * candidates” and keeps the analyst/technician sections intact.
    */
   it('surfaces a strategist parseError on the briefing when the LLM reply is unparseable', async () => {
-    let call = 0;
     const llm: LLM = {
-      async complete() {
-        call += 1;
-        // First call = Analyst (valid), second call = Strategist (junk).
-        if (call === 1) {
+      async complete({ system }) {
+        if (/equity research analyst/i.test(system)) {
           return JSON.stringify({
             bullCase: 'bull',
             bearCase: 'bear',
