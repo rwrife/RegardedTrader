@@ -35,7 +35,7 @@ const cli = meow(
     plan <SYMBOL>              Interactive options trade-plan wizard
     options <SYMBOL>           Options-chain explorer (calls/puts/greeks)
     chart <SYMBOL>             ASCII sparkline + RSI/MACD indicator readout
-    config [show|test [id]]    Configure AI providers, risk caps, server
+    config [show|test [id]|risk] Configure AI providers, risk caps, server
     dashboard                  Open the local web dashboard
 
   Options
@@ -67,6 +67,7 @@ const cli = meow(
     $ regard ls
     $ regard rm NVDA
     $ regard config
+    $ regard config risk
     $ regard briefing NVDA
     $ regard chart NVDA
     $ regard sentiment NVDA --window=30m

@@ -6,6 +6,7 @@ import {
   saveConfig,
   redactConfig,
   configPath,
+  RiskConfig,
   type AppConfig,
   type AiProvider,
   type ConfigTestResult,
@@ -17,6 +18,7 @@ type Mode =
   | 'pick-kind'
   | 'http-form'
   | 'cli-form'
+  | 'risk-form'
   | 'pick-active'
   | 'remove'
   | 'show'
@@ -40,7 +42,7 @@ export function ConfigScreen({
   const leave = onDone ?? exit;
   const [cfg, setCfg] = useState<AppConfig | null>(null);
   const [mode, setMode] = useState<Mode>(
-    sub === 'show' ? 'show' : sub === 'test' ? 'test' : 'menu',
+    sub === 'show' ? 'show' : sub === 'test' ? 'test' : sub === 'risk' ? 'risk-form' : 'menu',
   );
   const [msg, setMsg] = useState<string>('');
 
@@ -54,27 +56,33 @@ export function ConfigScreen({
     const r = redactConfig(cfg);
     return (
       <Box flexDirection="column">
-        <Text bold color="cyan">Config: <Text color="white">{configPath()}</Text></Text>
-        <Text>Active provider: <Text color="green">{r.activeProvider ?? '(none)'}</Text></Text>
+        <Text bold color="cyan">
+          Config: <Text color="white">{configPath()}</Text>
+        </Text>
+        <Text>
+          Active provider: <Text color="green">{r.activeProvider ?? '(none)'}</Text>
+        </Text>
         <Text bold>Providers:</Text>
-        {Object.entries(r.providers).length === 0 && <Text color="yellow">  (none)</Text>}
+        {Object.entries(r.providers).length === 0 && <Text color="yellow"> (none)</Text>}
         {Object.entries(r.providers).map(([id, p]) => (
           <Text key={id}>
-            {'  '}• <Text bold>{id}</Text> — {p.kind === 'openai-compatible'
+            {'  '}• <Text bold>{id}</Text> —{' '}
+            {p.kind === 'openai-compatible'
               ? `${p.label} (${p.baseUrl}, model=${p.model}${p.apiKey ? `, key=${p.apiKey}` : ''})`
               : `${p.label} CLI ${p.backend}${p.model ? ` model=${p.model}` : ''}`}
           </Text>
         ))}
         <Text>
-          Risk: maxLoss=${cfg.risk.maxLossUsd} maxLegs={cfg.risk.maxLegs}{' '}
-          forbidNakedShorts={String(cfg.risk.forbidNakedShorts)}
+          Risk: maxLoss=${cfg.risk.maxLossUsd} maxLegs={cfg.risk.maxLegs} forbidNakedShorts=
+          {String(cfg.risk.forbidNakedShorts)}
         </Text>
         <Text>
-          Risk (#181): maxDte={cfg.risk.maxDte === 0 ? 'off' : `${cfg.risk.maxDte}d`}{' '}
-          accountSize=${cfg.risk.accountSizeUsd}{' '}
-          maxPctOfAccount={(cfg.risk.maxPctOfAccount * 100).toFixed(2)}%
+          Risk (#181): maxDte={cfg.risk.maxDte === 0 ? 'off' : `${cfg.risk.maxDte}d`} accountSize=$
+          {cfg.risk.accountSizeUsd} maxPctOfAccount={(cfg.risk.maxPctOfAccount * 100).toFixed(2)}%
         </Text>
-        <Text>Server: {cfg.server.host}:{cfg.server.port}</Text>
+        <Text>
+          Server: {cfg.server.host}:{cfg.server.port}
+        </Text>
         <Text dimColor>(use `regard config` for the interactive editor)</Text>
         <Exit exit={leave} interactive={!!onDone} />
       </Box>
@@ -108,6 +116,7 @@ export function ConfigScreen({
         cfg={cfg}
         onPick={(choice) => {
           if (choice === 'add') setMode('pick-kind');
+          else if (choice === 'risk') setMode('risk-form');
           else if (choice === 'active') setMode('pick-active');
           else if (choice === 'remove') setMode('remove');
           else if (choice === 'show') setMode('show');
@@ -167,6 +176,25 @@ export function ConfigScreen({
     );
   }
 
+  if (mode === 'risk-form') {
+    return (
+      <RiskForm
+        current={cfg.risk}
+        onCancel={() => setMode('menu')}
+        onSave={async (risk) => {
+          const server = serverUrl ?? 'http://127.0.0.1:4317';
+          const res = await api<{ ok: boolean; config: AppConfig }>(server, '/config/risk', {
+            method: 'POST',
+            body: JSON.stringify(risk),
+          });
+          setCfg(res.config);
+          setMsg('Risk caps saved.');
+          setMode('done');
+        }}
+      />
+    );
+  }
+
   if (mode === 'pick-active') {
     return (
       <PickActive
@@ -215,12 +243,13 @@ function Exit({ exit, interactive }: { exit: () => void; interactive?: boolean }
   return null;
 }
 
-type MenuChoice = 'add' | 'active' | 'remove' | 'show' | 'test' | 'quit';
+type MenuChoice = 'add' | 'risk' | 'active' | 'remove' | 'show' | 'test' | 'quit';
 
 function Menu({ cfg, onPick }: { cfg: AppConfig; onPick: (c: MenuChoice) => void }) {
   const [i, setI] = useState(0);
   const items: { label: string; value: MenuChoice }[] = [
     { label: 'Add a new AI provider', value: 'add' },
+    { label: 'Edit risk caps', value: 'risk' },
     { label: 'Choose active provider', value: 'active' },
     { label: 'Remove a provider', value: 'remove' },
     { label: 'Show current config', value: 'show' },
@@ -234,12 +263,18 @@ function Menu({ cfg, onPick }: { cfg: AppConfig; onPick: (c: MenuChoice) => void
   });
   return (
     <Box flexDirection="column">
-      <Text bold color="cyan">━━ RegardedTrader config ━━</Text>
-      <Text dimColor>Active: <Text color="green">{cfg.activeProvider ?? '(none)'}</Text> · Providers: {Object.keys(cfg.providers).length}</Text>
+      <Text bold color="cyan">
+        ━━ RegardedTrader config ━━
+      </Text>
+      <Text dimColor>
+        Active: <Text color="green">{cfg.activeProvider ?? '(none)'}</Text> · Providers:{' '}
+        {Object.keys(cfg.providers).length}
+      </Text>
       <Text> </Text>
       {items.map((it, idx) => (
         <Text key={it.value} color={idx === i ? 'cyan' : undefined}>
-          {idx === i ? '› ' : '  '}{it.label}
+          {idx === i ? '› ' : '  '}
+          {it.label}
         </Text>
       ))}
       <Text> </Text>
@@ -251,7 +286,11 @@ function Menu({ cfg, onPick }: { cfg: AppConfig; onPick: (c: MenuChoice) => void
 function PickKind({ onPick }: { onPick: (k: 'http' | 'cli') => void }) {
   const [i, setI] = useState(0);
   const items = [
-    { label: 'OpenAI-compatible HTTP endpoint (OpenAI, Azure, OpenRouter, Ollama, vLLM, Groq, etc.)', value: 'http' as const },
+    {
+      label:
+        'OpenAI-compatible HTTP endpoint (OpenAI, Azure, OpenRouter, Ollama, vLLM, Groq, etc.)',
+      value: 'http' as const,
+    },
     { label: 'Local CLI backend (Copilot, Claude Code, Codex CLI)', value: 'cli' as const },
   ];
   useInput((_input, key) => {
@@ -264,7 +303,8 @@ function PickKind({ onPick }: { onPick: (k: 'http' | 'cli') => void }) {
       <Text bold>Pick provider kind:</Text>
       {items.map((it, idx) => (
         <Text key={it.value} color={idx === i ? 'cyan' : undefined}>
-          {idx === i ? '› ' : '  '}{it.label}
+          {idx === i ? '› ' : '  '}
+          {it.label}
         </Text>
       ))}
     </Box>
@@ -273,7 +313,11 @@ function PickKind({ onPick }: { onPick: (k: 'http' | 'cli') => void }) {
 
 const PRESETS: Record<string, { baseUrl: string; model: string; needsKey: boolean }> = {
   openai: { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', needsKey: true },
-  groq: { baseUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.1-70b-versatile', needsKey: true },
+  groq: {
+    baseUrl: 'https://api.groq.com/openai/v1',
+    model: 'llama-3.1-70b-versatile',
+    needsKey: true,
+  },
   openrouter: { baseUrl: 'https://openrouter.ai/api/v1', model: 'openrouter/auto', needsKey: true },
   ollama: { baseUrl: 'http://127.0.0.1:11434/v1', model: 'llama3.1:latest', needsKey: false },
   custom: { baseUrl: '', model: '', needsKey: false },
@@ -317,7 +361,8 @@ function HttpForm({
         <Text bold>Pick a preset (or custom):</Text>
         {presetKeys.map((k, idx) => (
           <Text key={k} color={idx === presetIdx ? 'cyan' : undefined}>
-            {idx === presetIdx ? '› ' : '  '}{k} {PRESETS[k]!.baseUrl && <Text dimColor>· {PRESETS[k]!.baseUrl}</Text>}
+            {idx === presetIdx ? '› ' : '  '}
+            {k} {PRESETS[k]!.baseUrl && <Text dimColor>· {PRESETS[k]!.baseUrl}</Text>}
           </Text>
         ))}
         <Text dimColor>Esc cancels</Text>
@@ -392,7 +437,11 @@ function CliForm({
   const backends: { backend: CliBackend; defaultCmd: string; hint: string }[] = [
     { backend: 'codex-cli', defaultCmd: 'codex', hint: 'OpenAI Codex CLI (`codex exec`)' },
     { backend: 'claude-cli', defaultCmd: 'claude', hint: 'Claude Code (`claude -p`)' },
-    { backend: 'copilot-cli', defaultCmd: 'copilot', hint: 'GitHub Copilot CLI (standalone `@github/copilot`)' },
+    {
+      backend: 'copilot-cli',
+      defaultCmd: 'copilot',
+      hint: 'GitHub Copilot CLI (standalone `@github/copilot`)',
+    },
   ];
   const [bIdx, setBIdx] = useState(0);
   const [id, setId] = useState('codex');
@@ -418,7 +467,8 @@ function CliForm({
         <Text bold>Pick CLI backend:</Text>
         {backends.map((b, idx) => (
           <Text key={b.backend} color={idx === bIdx ? 'cyan' : undefined}>
-            {idx === bIdx ? '› ' : '  '}{b.backend} <Text dimColor>· {b.hint}</Text>
+            {idx === bIdx ? '› ' : '  '}
+            {b.backend} <Text dimColor>· {b.hint}</Text>
           </Text>
         ))}
         <Text dimColor>(make sure the CLI is installed and authenticated separately)</Text>
@@ -466,6 +516,175 @@ function CliForm({
   );
 }
 
+function RiskForm({
+  current,
+  onSave,
+  onCancel,
+}: {
+  current: AppConfig['risk'];
+  onSave: (risk: AppConfig['risk']) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [step, setStep] = useState<
+    'maxLossUsd' | 'maxLegs' | 'maxDte' | 'accountSizeUsd' | 'maxPctOfAccount' | 'forbidNakedShorts'
+  >('maxLossUsd');
+  const [maxLossUsd, setMaxLossUsd] = useState(String(current.maxLossUsd));
+  const [maxLegs, setMaxLegs] = useState(String(current.maxLegs));
+  const [maxDte, setMaxDte] = useState(String(current.maxDte));
+  const [accountSizeUsd, setAccountSizeUsd] = useState(String(current.accountSizeUsd));
+  const [maxPctOfAccount, setMaxPctOfAccount] = useState(
+    String(Number((current.maxPctOfAccount * 100).toFixed(2))),
+  );
+  const [forbidNakedShorts, setForbidNakedShorts] = useState(
+    current.forbidNakedShorts ? 'yes' : 'no',
+  );
+  const [err, setErr] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useInput((input) => {
+    if (saving) return;
+    if (input === '\u001b') onCancel();
+  });
+
+  const submit = async () => {
+    setErr(null);
+    const boolText = forbidNakedShorts.trim().toLowerCase();
+    const forbid =
+      boolText === 'y' || boolText === 'yes' || boolText === 'true'
+        ? true
+        : boolText === 'n' || boolText === 'no' || boolText === 'false'
+          ? false
+          : null;
+
+    if (forbid === null) {
+      setErr('Forbid naked shorts must be yes/no (or true/false).');
+      return;
+    }
+
+    const parsed = RiskConfig.safeParse({
+      maxLossUsd: Number(maxLossUsd),
+      maxLegs: Number(maxLegs),
+      maxDte: Number(maxDte),
+      accountSizeUsd: Number(accountSizeUsd),
+      // CLI input is human percent (0-100); schema expects fraction (0-1).
+      maxPctOfAccount: Number(maxPctOfAccount) / 100,
+      forbidNakedShorts: forbid,
+    });
+
+    if (!parsed.success) {
+      const first = parsed.error.issues[0];
+      const where = first?.path?.join('.') || '<risk>';
+      setErr(`${where}: ${first?.message ?? 'Invalid risk caps'}`);
+      return;
+    }
+
+    try {
+      setSaving(true);
+      await onSave(parsed.data);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (step === 'maxLossUsd') {
+    return (
+      <Box flexDirection="column">
+        <Text bold>Edit risk caps</Text>
+        <Text>Max loss (USD, &gt; 0):</Text>
+        <TextInput
+          value={maxLossUsd}
+          onChange={setMaxLossUsd}
+          onSubmit={() => {
+            setErr(null);
+            setStep('maxLegs');
+          }}
+        />
+        {err && <Text color="red">{err}</Text>}
+        <Text dimColor>Esc cancels · Enter to continue</Text>
+      </Box>
+    );
+  }
+
+  if (step === 'maxLegs') {
+    return (
+      <Box flexDirection="column">
+        <Text>Max legs per structure (integer &gt; 0):</Text>
+        <TextInput
+          value={maxLegs}
+          onChange={setMaxLegs}
+          onSubmit={() => {
+            setErr(null);
+            setStep('maxDte');
+          }}
+        />
+        {err && <Text color="red">{err}</Text>}
+      </Box>
+    );
+  }
+
+  if (step === 'maxDte') {
+    return (
+      <Box flexDirection="column">
+        <Text>Max DTE (days, integer ≥ 0, 0 disables):</Text>
+        <TextInput
+          value={maxDte}
+          onChange={setMaxDte}
+          onSubmit={() => {
+            setErr(null);
+            setStep('accountSizeUsd');
+          }}
+        />
+        {err && <Text color="red">{err}</Text>}
+      </Box>
+    );
+  }
+
+  if (step === 'accountSizeUsd') {
+    return (
+      <Box flexDirection="column">
+        <Text>Account size (USD, ≥ 0, 0 = unknown):</Text>
+        <TextInput
+          value={accountSizeUsd}
+          onChange={setAccountSizeUsd}
+          onSubmit={() => {
+            setErr(null);
+            setStep('maxPctOfAccount');
+          }}
+        />
+        {err && <Text color="red">{err}</Text>}
+      </Box>
+    );
+  }
+
+  if (step === 'maxPctOfAccount') {
+    return (
+      <Box flexDirection="column">
+        <Text>Max % of account per trade (0-100):</Text>
+        <TextInput
+          value={maxPctOfAccount}
+          onChange={setMaxPctOfAccount}
+          onSubmit={() => {
+            setErr(null);
+            setStep('forbidNakedShorts');
+          }}
+        />
+        {err && <Text color="red">{err}</Text>}
+      </Box>
+    );
+  }
+
+  return (
+    <Box flexDirection="column">
+      <Text>Forbid naked short options? (yes/no):</Text>
+      <TextInput value={forbidNakedShorts} onChange={setForbidNakedShorts} onSubmit={submit} />
+      {saving && <Text dimColor>Saving risk caps…</Text>}
+      {err && <Text color="red">{err}</Text>}
+    </Box>
+  );
+}
+
 function PickActive({ cfg, onPick }: { cfg: AppConfig; onPick: (id: string) => void }) {
   const ids = Object.keys(cfg.providers);
   const [i, setI] = useState(0);
@@ -481,7 +700,8 @@ function PickActive({ cfg, onPick }: { cfg: AppConfig; onPick: (id: string) => v
       <Text bold>Active provider:</Text>
       {ids.map((id, idx) => (
         <Text key={id} color={idx === i ? 'cyan' : undefined}>
-          {idx === i ? '› ' : '  '}{id} {cfg.activeProvider === id && <Text dimColor>(current)</Text>}
+          {idx === i ? '› ' : '  '}
+          {id} {cfg.activeProvider === id && <Text dimColor>(current)</Text>}
         </Text>
       ))}
     </Box>
@@ -500,10 +720,13 @@ function Remove({ cfg, onPick }: { cfg: AppConfig; onPick: (id: string) => void 
   if (ids.length === 0) return <Text color="yellow">Nothing to remove.</Text>;
   return (
     <Box flexDirection="column">
-      <Text bold color="red">Remove which provider?</Text>
+      <Text bold color="red">
+        Remove which provider?
+      </Text>
       {ids.map((id, idx) => (
         <Text key={id} color={idx === i ? 'red' : undefined}>
-          {idx === i ? '› ' : '  '}{id}
+          {idx === i ? '› ' : '  '}
+          {id}
         </Text>
       ))}
     </Box>
@@ -574,7 +797,9 @@ function TestConnection({
   if (r.ok) {
     return (
       <Box flexDirection="column">
-        <Text color="green">✓ {r.providerId} responded in {r.latencyMs}ms</Text>
+        <Text color="green">
+          ✓ {r.providerId} responded in {r.latencyMs}ms
+        </Text>
         {r.model && <Text dimColor>model: {r.model}</Text>}
         <Exit exit={exit} interactive={interactive} />
       </Box>
@@ -582,7 +807,9 @@ function TestConnection({
   }
   return (
     <Box flexDirection="column">
-      <Text color="red">✗ {r.error.code}: {r.error.message}</Text>
+      <Text color="red">
+        ✗ {r.error.code}: {r.error.message}
+      </Text>
       {r.error.hint && <Text dimColor>hint: {r.error.hint}</Text>}
       {r.providerId && <Text dimColor>provider: {r.providerId}</Text>}
       <Exit exit={exit} interactive={interactive} />

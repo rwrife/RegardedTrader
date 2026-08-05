@@ -36,7 +36,8 @@ vi.mock('node:child_process', () => ({
 }));
 
 vi.mock('@regardedtrader/core', async () => {
-  const actual = await vi.importActual<typeof import('@regardedtrader/core')>('@regardedtrader/core');
+  const actual =
+    await vi.importActual<typeof import('@regardedtrader/core')>('@regardedtrader/core');
   return {
     ...actual,
     loadConfig: vi.fn(async () => ({ ...actual.DEFAULT_CONFIG })),
@@ -178,10 +179,7 @@ function tick(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-async function typeText(
-  stdin: { write: (input: string) => void },
-  text: string,
-): Promise<void> {
+async function typeText(stdin: { write: (input: string) => void }, text: string): Promise<void> {
   for (const ch of text) {
     stdin.write(ch);
     await tick();
@@ -195,7 +193,7 @@ describe('CLI screens smoke + interactions (#157)', () => {
     loadConfigMock.mockResolvedValue(cfg);
     saveConfigMock.mockResolvedValue('/tmp/regardedtrader-config.json');
 
-    apiMock.mockImplementation(async (_serverUrl, path) => {
+    apiMock.mockImplementation(async (_serverUrl, path, init) => {
       if (path === '/tickers/validate') {
         const result: ValidationResult = { ok: true, profile, cached: false };
         return { results: [result] };
@@ -217,6 +215,10 @@ describe('CLI screens smoke + interactions (#157)', () => {
       }
       if (path === '/tickers') {
         return { entries: watchlistEntries };
+      }
+      if (path === '/config/risk') {
+        const body = JSON.parse(String(init?.body ?? '{}')) as AppConfig['risk'];
+        return { ok: true, config: { ...cfg, risk: body } };
       }
       throw new Error(`Unexpected API path in test: ${String(path)}`);
     });
@@ -277,6 +279,42 @@ describe('CLI screens smoke + interactions (#157)', () => {
     const saved = saveConfigMock.mock.calls[0]?.[0];
     expect(saved?.providers.openai?.kind).toBe('openai-compatible');
     expect(saved?.activeProvider).toBe('openai');
+
+    app.unmount();
+  });
+
+  it('interaction: config risk subcommand posts validated risk caps to /config/risk', async () => {
+    const app = render(<ConfigScreen sub="risk" serverUrl={SERVER_URL} onDone={() => {}} />);
+
+    await vi.waitFor(() => {
+      expect(app.lastFrame()).toContain('Edit risk caps');
+      expect(app.lastFrame()).toContain('Max loss');
+    });
+
+    // Accept defaults for all fields and submit.
+    for (let i = 0; i < 6; i += 1) {
+      app.stdin.write('\r');
+      await tick();
+    }
+
+    await vi.waitFor(() => {
+      expect(apiMock).toHaveBeenCalledWith(
+        SERVER_URL,
+        '/config/risk',
+        expect.objectContaining({ method: 'POST' }),
+      );
+      expect(app.lastFrame()).toContain('Risk caps saved.');
+    });
+
+    const riskCall = apiMock.mock.calls.find((c) => c[1] === '/config/risk');
+    expect(riskCall).toBeTruthy();
+    const body = JSON.parse(String(riskCall?.[2]?.body ?? '{}')) as AppConfig['risk'];
+    expect(body.maxLossUsd).toBe(500);
+    expect(body.maxLegs).toBe(4);
+    expect(body.maxDte).toBe(45);
+    expect(body.accountSizeUsd).toBe(0);
+    expect(body.maxPctOfAccount).toBe(0.02);
+    expect(body.forbidNakedShorts).toBe(true);
 
     app.unmount();
   });
