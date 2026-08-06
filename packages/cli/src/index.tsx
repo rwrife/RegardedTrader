@@ -32,6 +32,10 @@ const cli = meow(
     news <SYMBOL>              Ranked traditional headlines via NewsScout
     sentiment <SYMBOL>         Sentiment snapshot summary (score/confidence/volume/by-source)
     mentions <SYMBOL>          Recent source mentions for a symbol (no usernames)
+    rec <SYMBOL>               Recommender verdict for a symbol
+    rec <SYMBOL> history       Recommender history table (default 30 days)
+    rec watch [SYMBOL...]      Live recommender verdict updates over SSE
+    recommend <SYMBOL>         Alias for rec <SYMBOL>
     plan <SYMBOL>              Interactive options trade-plan wizard
     options <SYMBOL>           Options-chain explorer (calls/puts/greeks)
     chart <SYMBOL>             ASCII sparkline + RSI/MACD indicator readout
@@ -58,6 +62,7 @@ const cli = meow(
     --force                    (dashboard) Replace running dashboard session
     --window <duration>        (sentiment) Sentiment history window (e.g. 30m, 4h, 1d)
     --watch                    (sentiment) Watch sentiment updates over SSE
+    --recompute                (rec) Force a fresh recommendation run before printing
     --source <name>            (mentions) Filter source (reddit|stocktwits|hn|cnn|google-news|googleNewsOpinion)
     --limit <n>                (mentions) Max mentions to return (default 100)
 
@@ -72,6 +77,9 @@ const cli = meow(
     $ regard chart NVDA
     $ regard sentiment NVDA --window=30m
     $ regard mentions NVDA --source=reddit --limit=50
+    $ regard rec NVDA --recompute
+    $ regard rec NVDA history --days=30
+    $ regard rec watch NVDA TSLA
 `,
   {
     importMeta: import.meta,
@@ -83,7 +91,7 @@ const cli = meow(
       expiry: { type: 'string' },
       paper: { type: 'boolean', default: false },
       from: { type: 'string', default: 'today' },
-      days: { type: 'number', default: 14 },
+      days: { type: 'number' },
       past: { type: 'boolean', default: false },
       upcoming: { type: 'boolean', default: false },
       holidays: { type: 'boolean', default: false },
@@ -95,6 +103,7 @@ const cli = meow(
       force: { type: 'boolean', default: false },
       window: { type: 'string' },
       watch: { type: 'boolean', default: false },
+      recompute: { type: 'boolean', default: false },
       source: { type: 'string' },
       limit: { type: 'number' },
       help: { type: 'boolean', shortFlag: 'h' },
@@ -144,6 +153,7 @@ if (command === 'dashboard') {
         quotes: cli.flags.quotes,
         window: cli.flags.window,
         watch: cli.flags.watch,
+        recompute: cli.flags.recompute,
         source: cli.flags.source,
         limit: cli.flags.limit,
       }}

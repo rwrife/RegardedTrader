@@ -30,6 +30,7 @@ const SURFACES: AiSurface[] = [
   { file: 'plan.tsx' },
   { file: 'tech.tsx' },
   { file: 'options.tsx' },
+  { file: 'recommendation.tsx' },
 ];
 
 function read(name: string): string {

@@ -16,6 +16,7 @@ import { ChartScreen } from './screens/chart.js';
 import { TailScreen, PollingStatusScreen, PollingToggleScreen } from './screens/polling.js';
 import { MentionsScreen, SentimentScreen } from './screens/sentiment.js';
 import { CacheClearScreen } from './screens/cache.js';
+import { RecommendationScreen } from './screens/recommendation.js';
 
 /**
  * Fancy modal-style shell inspired by Copilot CLI / Claude Code. Everything is
@@ -34,6 +35,7 @@ type SlashId =
   | 'news'
   | 'sentiment'
   | 'mentions'
+  | 'rec'
   | 'plan'
   | 'chart'
   | 'add'
@@ -65,6 +67,7 @@ const COMMANDS: SlashCommand[] = [
   { id: 'news',     name: '/news',     usage: '/news <SYM>',     blurb: 'Ranked traditional headlines (NewsScout)', needsArgs: true },
   { id: 'sentiment',name: '/sentiment',usage: '/sentiment <SYM> [--window=30m] [--watch]', blurb: 'Sentiment score + source breakdown', needsArgs: true },
   { id: 'mentions', name: '/mentions', usage: '/mentions <SYM> [--source=reddit] [--limit=50]', blurb: 'Recent mentions list (no usernames)', needsArgs: true },
+  { id: 'rec',      name: '/rec',      usage: '/rec <SYM> [--recompute] | /rec <SYM> history [--days=30] | /rec watch [SYM...]', blurb: 'Recommender verdict / history / live updates', needsArgs: true },
   { id: 'plan',     name: '/plan',     usage: '/plan <SYM>',     blurb: 'Interactive options trade-plan wizard',   needsArgs: true },
   { id: 'chart',    name: '/chart',    usage: '/chart <SYM>',    blurb: 'ASCII sparkline + RSI/MACD readout',      needsArgs: true },
   { id: 'add',      name: '/add',      usage: '/add <SYM>...',   blurb: 'Validate ticker(s) and add to watchlist', needsArgs: true },
@@ -331,6 +334,8 @@ function RunningBody({
         />
       );
     }
+    case 'rec':
+      return <RecommendationScreen args={args} serverUrl={serverUrl} onDone={onDone} />;
     case 'plan':
       return <PlanScreen symbol={(args[0] ?? '').toUpperCase()} serverUrl={serverUrl} onDone={onDone} />;
     case 'chart':
