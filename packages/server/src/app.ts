@@ -36,6 +36,8 @@ import {
   computeIndicators,
   MentionStore,
   SnapshotStore,
+  SnapshotKind,
+  PollingEventBus,
   RecommendationStore,
   SQLiteCache,
   AIRecommender,
@@ -65,6 +67,7 @@ import {
   StaleInputError,
   type RecommendationSource,
   type SnapshotReader,
+  type PollingEvent,
   OptionsChainResponse,
 } from '@regardedtrader/core';
 import { liveQuote, type LiveQuoteSource, type YahooQuoteLike } from './liveQuote.js';
@@ -132,6 +135,10 @@ export interface AppDeps {
     newsEveryMs?: number;
     maintenanceEveryMs?: number;
   };
+  /** Optional polling event bus (issue #25 SSE bridge). */
+  pollingBus?: PollingEventBus;
+  /** Optional heartbeat override for GET /stream SSE. */
+  streamHeartbeatMs?: number;
   /** Optional injectable snapshot store (tests). */
   snapshots?: SnapshotStore;
   /** Optional injectable recommendation store (tests). */
@@ -358,6 +365,51 @@ export function createApp(deps: AppDeps): AppHandle {
     polling.stop();
   }
   applyPollingRuntimeConfig();
+  const pollingBus = deps.pollingBus ?? new PollingEventBus();
+
+  function asPollingNewsSource(raw: string): 'yahoo' | 'nasdaq' | 'google-news' | null {
+    const v = raw.trim().toLowerCase();
+    if (v.includes('yahoo')) return 'yahoo';
+    if (v.includes('nasdaq')) return 'nasdaq';
+    if (v.includes('google')) return 'google-news';
+    return null;
+  }
+
+  const unsubscribePollingBridge = polling.subscribe((evt) => {
+    if (evt.type === 'quote') {
+      pollingBus.emit({
+        type: 'quote.update',
+        symbol: evt.data.symbol,
+        quote: {
+          symbol: evt.data.symbol,
+          price: evt.data.price,
+          change: evt.data.change,
+          changePercent: evt.data.changePercent,
+          volume: 0,
+          asOf: evt.data.asOf,
+        },
+        indicators: null,
+        source: 'polling.coordinator',
+      });
+      return;
+    }
+    if (evt.type === 'news') {
+      const source = asPollingNewsSource(evt.data.source);
+      if (!source) return;
+      pollingBus.emit({
+        type: 'news.new',
+        symbol: evt.data.symbol,
+        item: {
+          title: evt.data.title,
+          url: evt.data.url,
+          source,
+          publishedAt: evt.data.publishedAt,
+          tickers: [evt.data.symbol],
+        },
+      });
+    }
+  });
+
   let recommendationOrchestrator = makeRecommendationOrchestrator();
   function refreshOrchestrators(): void {
     orchestrator = makeOrchestrator();
@@ -467,6 +519,33 @@ export function createApp(deps: AppDeps): AppHandle {
       return;
     }
     next();
+  }
+
+  function parseStreamSymbols(raw: string): string[] {
+    const values = raw
+      .split(',')
+      .map((s) => s.trim().toUpperCase())
+      .filter((s) => s.length > 0);
+    const deduped = [...new Set(values)];
+    if (deduped.length === 0) {
+      throw new Error('Expected at least one symbol in `symbols=...`.');
+    }
+    for (const symbol of deduped) {
+      Ticker.parse(symbol);
+    }
+    return deduped;
+  }
+
+  function eventMatchesSymbols(event: PollingEvent, symbols: Set<string>): boolean {
+    switch (event.type) {
+      case 'quote.update':
+      case 'options.update':
+      case 'news.new':
+        return symbols.has(event.symbol.toUpperCase());
+      case 'job.state':
+        if (!event.symbols || event.symbols.length === 0) return true;
+        return event.symbols.some((symbol) => symbols.has(symbol.toUpperCase()));
+    }
   }
 
   type SentimentSsePayload = {
@@ -1283,6 +1362,81 @@ export function createApp(deps: AppDeps): AppHandle {
     }
   });
 
+  // Polling SSE bridge + snapshot store read APIs (issue #25).
+  app.get('/stream', async (req, res, next) => {
+    try {
+      const symbolsRaw = z
+        .object({ symbols: z.string().min(1) })
+        .parse(req.query).symbols;
+      const symbols = parseStreamSymbols(symbolsRaw);
+      const symbolSet = new Set(symbols);
+
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders?.();
+
+      const send = (event: string, data: unknown) => {
+        res.write(`event: ${event}\n`);
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+      };
+
+      for (const symbol of symbols) {
+        const latest = await snapshotStore.readLatest(symbol);
+        send('latest', { symbol, latest });
+      }
+
+      const unsubscribe = pollingBus.onAny((event) => {
+        if (!eventMatchesSymbols(event, symbolSet)) return;
+        send(event.type, event);
+      });
+      const keepAlive = setInterval(() => {
+        res.write(': heartbeat\n\n');
+      }, deps.streamHeartbeatMs ?? 15_000);
+
+      req.on('close', () => {
+        clearInterval(keepAlive);
+        unsubscribe();
+      });
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/snapshots/:symbol/latest', async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
+      res.json(await snapshotStore.readLatest(symbol));
+    } catch (e) {
+      next(e);
+    }
+  });
+
+  app.get('/snapshots/:symbol/:kind', async (req, res, next) => {
+    try {
+      const symbol = Ticker.parse(String(req.params.symbol).toUpperCase());
+      const kind = SnapshotKind.parse(String(req.params.kind));
+      const query = z
+        .object({
+          since: z.string().optional(),
+          until: z.string().optional(),
+        })
+        .parse(req.query);
+      const since = query.since ? new Date(query.since) : undefined;
+      const until = query.until ? new Date(query.until) : undefined;
+      if ((since && Number.isNaN(since.getTime())) || (until && Number.isNaN(until.getTime()))) {
+        throw new Error('Expected valid ISO datetimes for since/until query params.');
+      }
+      const entries: Array<{ ts: string; data?: unknown }> = [];
+      for await (const entry of snapshotStore.readRange(symbol, kind, since, until)) {
+        entries.push(entry);
+      }
+      res.json({ symbol, kind, entries });
+    } catch (e) {
+      next(e);
+    }
+  });
+
   // --- Sentiment / mentions (#39) ---
   const DateParam = z
     .string()
@@ -1823,16 +1977,44 @@ export function createApp(deps: AppDeps): AppHandle {
 
   // NewsScout endpoint (issue #75). Returns ranked traditional headlines with
   // model-assigned relevance/materiality scores, shared by CLI + web.
+  //
+  // Compatibility: issue #25 also needs a store-backed snapshot view from the
+  // same path; when `?limit=` is present we bypass LLM scoring and return raw
+  // persisted news snapshots.
   app.get('/news/:symbol', async (req, res, next) => {
     try {
+      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
+      const known = await requireKnownSymbol(res, symbol);
+      if (!known) return;
+
+      if (req.query.limit !== undefined) {
+        const q = z
+          .object({
+            limit: z.coerce.number().int().positive().max(500).optional().default(50),
+            since: z.string().optional(),
+            until: z.string().optional(),
+          })
+          .parse(req.query);
+        const since = q.since ? new Date(q.since) : undefined;
+        const until = q.until ? new Date(q.until) : undefined;
+        if ((since && Number.isNaN(since.getTime())) || (until && Number.isNaN(until.getTime()))) {
+          throw new Error('Expected valid ISO datetimes for since/until query params.');
+        }
+
+        const items: Array<{ ts: string; data?: unknown }> = [];
+        for await (const entry of snapshotStore.readRange(symbol, 'news', since, until)) {
+          items.push(entry);
+        }
+        items.sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts));
+        res.json({ symbol, items: items.slice(0, q.limit) });
+        return;
+      }
+
       const llm = deps.llmFromConfig(cfg);
       if (!llm) {
         res.status(503).json({ error: 'AI provider not configured' });
         return;
       }
-      const symbol = Ticker.parse(req.params.symbol.toUpperCase());
-      const known = await requireKnownSymbol(res, symbol);
-      if (!known) return;
       const news = await registry.client.news(symbol).catch(() => []);
       const scout = new NewsScout(llm);
       res.json(await scout.bundle({ symbol, news }));
@@ -2347,7 +2529,10 @@ export function createApp(deps: AppDeps): AppHandle {
     getConfig: () => cfg,
     emitSentimentUpdate,
     emitRecommendationUpdate,
-    shutdown: (timeoutMs = 5_000) => polling.stopGracefully(timeoutMs),
+    shutdown: async (timeoutMs = 5_000) => {
+      unsubscribePollingBridge();
+      await polling.stopGracefully(timeoutMs);
+    },
     stream: {
       subscribe: (listener) => polling.subscribe(listener),
       loadChain: (symbol) => registry.client.optionsChain(symbol),

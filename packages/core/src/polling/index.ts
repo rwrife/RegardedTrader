@@ -15,6 +15,13 @@ export {
   type SchedulerOptions,
 } from './scheduler.js';
 export {
+  PollingEventBus,
+  type PollingChannel,
+  type PollingEvent,
+  type PollingEventBusOptions,
+  type PollingJobStateEvent,
+} from './bus.js';
+export {
   SnapshotStore,
   SnapshotKind,
   SnapshotEntry,

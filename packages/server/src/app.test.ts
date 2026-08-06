@@ -10,6 +10,7 @@ import {
   CalendarStore,
   MentionStore,
   SnapshotStore,
+  PollingEventBus,
   RecommendationStore,
   WatchlistStore,
   PaperStore,
@@ -527,6 +528,181 @@ describe('GET /news/:symbol', () => {
     expect(j.headlines[0]?.id).toBe('h1');
     expect(j.headlines[0]?.relevance).toBe(5);
     expect(j.disclaimer).toMatch(/Not financial advice/i);
+  });
+});
+
+describe('Polling snapshot bridge routes (#25)', () => {
+  async function makeBridgeApp(opts: {
+    auth?: { mode: 'required'; token: string; dashboardOrigin: string } | { mode: 'allow-no-auth' };
+  } = {}) {
+    const watchlist = new WatchlistStore({ path: join(dir, 'watchlist.json') });
+    await watchlist.upsert({
+      symbol: 'NVDA',
+      name: 'NVIDIA Corporation',
+      exchange: 'NASDAQ',
+      sector: 'Technology',
+      industry: 'Semiconductors',
+      description: 'Designs GPUs and AI chips.',
+      sources: ['https://example.com/nvda'],
+      validatedAt: '2026-08-03T00:00:00.000Z',
+    });
+    const snapshots = new SnapshotStore({ root: join(dir, 'snapshots') });
+    const bus = new PollingEventBus();
+    const { app } = createApp({
+      market: {
+        quote: async () => ({ symbol: 'NVDA', price: 100, change: 1, changePercent: 1, volume: 1_000, asOf: '2026-08-03T12:00:00.000Z' }),
+        history: async () => [],
+        news: async () => [],
+        optionsChain: async () => [],
+      },
+      webSearch: fakeWebSearch(),
+      watchlist,
+      snapshots,
+      pollingBus: bus,
+      streamHeartbeatMs: 60_000,
+      auth: opts.auth,
+      initialConfig: {
+        version: 1,
+        providers: {},
+        activeProvider: null,
+        risk: { maxLossUsd: 500, maxLegs: 4, forbidNakedShorts: true, maxDte: 45, accountSizeUsd: 0, maxPctOfAccount: 0.02 },
+        server: { host: '127.0.0.1', port: 4317 },
+        marketData: { providers: {}, activeProvider: null },
+        polling: { sentimentSources: { reddit: { enabled: true, weight: 1 }, stocktwits: { enabled: true, weight: 0.7 }, hn: { enabled: true, weight: 0.4 }, cnn: { enabled: true, weight: 1.2 }, 'google-news': { enabled: true, weight: 1.1 }, googleNewsOpinion: { enabled: true, weight: 0.9 } } },
+      },
+      llmFromConfig: () => null,
+    });
+
+    await snapshots.appendSnapshot('NVDA', 'quote', {
+      ts: '2026-08-03T12:00:00.000Z',
+      data: { price: 100, asOf: '2026-08-03T12:00:00.000Z' },
+    });
+    await snapshots.appendSnapshot(
+      'NVDA',
+      'news',
+      {
+        ts: '2026-08-03T12:01:00.000Z',
+        data: { title: 'Older headline', url: 'https://example.com/old', source: 'Reuters' },
+      },
+      { url: 'https://example.com/old' },
+    );
+    await snapshots.appendSnapshot(
+      'NVDA',
+      'news',
+      {
+        ts: '2026-08-03T12:02:00.000Z',
+        data: { title: 'Newest headline', url: 'https://example.com/new', source: 'Reuters' },
+      },
+      { url: 'https://example.com/new' },
+    );
+
+    return { app, bus };
+  }
+
+  async function readChunk(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    timeoutMs = 1_500,
+  ): Promise<string> {
+    const next = reader.read();
+    const timeout = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('timeout waiting for SSE chunk')), timeoutMs);
+    });
+    const value = await Promise.race([next, timeout]);
+    if (!value || value.done || !value.value) return '';
+    return new TextDecoder().decode(value.value);
+  }
+
+  it('serves snapshot latest/range and store-backed news mode', async () => {
+    const { app } = await makeBridgeApp();
+    baseUrl = await listen(app);
+
+    const latest = await fetch(`${baseUrl}/snapshots/NVDA/latest`);
+    expect(latest.status).toBe(200);
+    const latestJson = (await latest.json()) as { symbol: string; entries: Record<string, unknown> };
+    expect(latestJson.symbol).toBe('NVDA');
+    expect(Object.keys(latestJson.entries)).toContain('quote');
+
+    const range = await fetch(
+      `${baseUrl}/snapshots/NVDA/news?since=2026-08-03T12:01:30.000Z&until=2026-08-03T12:05:00.000Z`,
+    );
+    expect(range.status).toBe(200);
+    const rangeJson = (await range.json()) as { entries: Array<{ ts: string }> };
+    expect(rangeJson.entries).toHaveLength(1);
+    expect(rangeJson.entries[0]?.ts).toBe('2026-08-03T12:02:00.000Z');
+
+    const newsStore = await fetch(`${baseUrl}/news/NVDA?limit=1`);
+    expect(newsStore.status).toBe(200);
+    const newsJson = (await newsStore.json()) as { items: Array<{ data: { title: string } }> };
+    expect(newsJson.items).toHaveLength(1);
+    expect(newsJson.items[0]?.data.title).toBe('Newest headline');
+  });
+
+  it('streams latest snapshots then filtered polling events', async () => {
+    const { app, bus } = await makeBridgeApp();
+    baseUrl = await listen(app);
+
+    const response = await fetch(`${baseUrl}/stream?symbols=NVDA`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/event-stream');
+    const reader = response.body?.getReader();
+    expect(reader).toBeTruthy();
+    if (!reader) return;
+
+    const latestChunk = await readChunk(reader);
+    expect(latestChunk).toContain('event: latest');
+    expect(latestChunk).toContain('"symbol":"NVDA"');
+
+    bus.emit({
+      type: 'quote.update',
+      symbol: 'AAPL',
+      quote: {
+        symbol: 'AAPL',
+        price: 1,
+        change: 0,
+        changePercent: 0,
+        volume: 0,
+        asOf: '2026-08-03T12:03:00.000Z',
+      },
+      indicators: null,
+      source: 'test',
+    });
+    bus.emit({
+      type: 'quote.update',
+      symbol: 'NVDA',
+      quote: {
+        symbol: 'NVDA',
+        price: 101,
+        change: 1,
+        changePercent: 1,
+        volume: 0,
+        asOf: '2026-08-03T12:03:00.000Z',
+      },
+      indicators: null,
+      source: 'test',
+    });
+
+    const eventChunk = await readChunk(reader);
+    expect(eventChunk).toContain('event: quote.update');
+    expect(eventChunk).toContain('"symbol":"NVDA"');
+    expect(eventChunk).not.toContain('"symbol":"AAPL"');
+
+    await reader.cancel();
+  });
+
+  it('enforces dashboard auth token on /stream when runtime auth is required', async () => {
+    const { app } = await makeBridgeApp({
+      auth: { mode: 'required', token: 'issue-25-token', dashboardOrigin: 'http://127.0.0.1:5173' },
+    });
+    baseUrl = await listen(app);
+
+    const denied = await fetch(`${baseUrl}/stream?symbols=NVDA`);
+    expect(denied.status).toBe(401);
+
+    const allowed = await fetch(`${baseUrl}/stream?symbols=NVDA&t=issue-25-token`);
+    expect(allowed.status).toBe(200);
+    const reader = allowed.body?.getReader();
+    expect(reader).toBeTruthy();
+    await reader?.cancel();
   });
 });
 
