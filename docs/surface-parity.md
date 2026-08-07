@@ -8,7 +8,7 @@ This file is the source of truth for that mapping. **Update it in the same PR
 that adds or changes a feature on either surface.** A PR that breaks parity
 without filing a tracking issue should be rejected in review.
 
-_Last audited: 2026-08-04 (feature merges through 2026-08-04)_
+_Last audited: 2026-08-06 (feature merges through 2026-08-06)_
 
 ## Pairing table
 
@@ -25,7 +25,7 @@ _Last audited: 2026-08-04 (feature merges through 2026-08-04)_
 | Technician (TA) commentary | `regard tech <SYM>` | `Tech` tab on `/` | ✅ |
 | NewsScout ranked headlines | `regard news <SYM>` | `News` tab on `/` (live: `GET /news/:symbol`) | ✅ |
 | Sentiment aggregate + mentions feed | `regard sentiment <SYM> [--window=30m] [--watch]` / `regard mentions <SYM> [--source=reddit] [--limit=50]` | `Sentiment` tab on `/` (live: `GET /sentiment/:symbol/latest`, `GET /mentions/:symbol`) | ✅ |
-| Recommender verdict card + 30d history + recompute | `regard recommend <SYM>` *(tracked in #52)* | `Recommendation` tab on `/` (live: `GET /recommendations/:symbol/latest`, SSE `recommendation.update`, `POST /recommendations/:symbol/recompute`) | 🚧 |
+| Recommender verdict card + 30d history + recompute | `regard rec <SYM> [--recompute]` / `regard rec <SYM> history [--days=30]` / `regard rec watch [SYM...]` *(alias: `regard recommend <SYM>`)* | `Recommendation` tab on `/` (live: `GET /recommendations/:symbol/latest`, SSE `recommendation.update`, `POST /recommendations/:symbol/recompute`) | ✅ |
 | Options trade-plan wizard | `regard plan <SYM>` | `#/plan/:sym` | ✅ |
 | Paper trading (simulated only) | `regard paper submit <planId> --paper` / `regard paper positions` / `regard paper orders` | `#/paper` | ✅ |
 | Trade-plan risk graph + risk violations panel | `regard plan <SYM>` (textual break-even + violations) | `#/plan/:sym` (SVG risk graph + violations chip panel) | ✅ |
@@ -46,7 +46,7 @@ Recent feature-bearing work is represented in the table above:
 - #126 full briefing pipeline → **Full briefing pipeline** row.
 - #131 computeRiskGraph → **Trade-plan risk graph + risk violations panel** row.
 - #133 sentiment aggregator → **Sentiment aggregate + mentions feed** row.
-- #135 recommender orchestrator → **Recommender verdict card + 30d history + recompute** row (CLI gap tracked in #52).
+- #135 recommender orchestrator + #52 CLI parity → **Recommender verdict card + 30d history + recompute** row.
 
 ## Rules
 

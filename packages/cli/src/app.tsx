@@ -18,6 +18,7 @@ import { CalendarScreen } from './screens/calendar.js';
 import { TailScreen, PollingStatusScreen, PollingToggleScreen } from './screens/polling.js';
 import { MentionsScreen, SentimentScreen } from './screens/sentiment.js';
 import { CacheClearScreen } from './screens/cache.js';
+import { RecommendationScreen } from './screens/recommendation.js';
 
 export interface AppProps {
   command: string;
@@ -38,6 +39,7 @@ export interface AppProps {
     quotes?: boolean;
     window?: string;
     watch?: boolean;
+    recompute?: boolean;
     source?: string;
     limit?: number;
   };
@@ -89,6 +91,16 @@ export function App({ command, args, serverUrl, flags }: AppProps) {
           serverUrl={serverUrl}
           source={flags?.source}
           limit={flags?.limit}
+        />
+      );
+    case 'rec':
+    case 'recommend':
+      return (
+        <RecommendationScreen
+          args={args}
+          serverUrl={serverUrl}
+          daysFlag={flags?.days}
+          recomputeFlag={flags?.recompute}
         />
       );
     case 'plan':
