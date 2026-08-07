@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SAMPLE_TICKERS, findSample, type SampleTicker } from './sample-data.js';
 import { Settings } from './routes/settings.js';
 import { Brief } from './routes/brief.js';
@@ -8,6 +8,7 @@ import { TickerRoute } from './routes/ticker.js';
 import { Watchlist as WatchlistRoute } from './routes/watchlist.js';
 import { Paper as PaperRoute } from './routes/paper.js';
 import { TopBar } from './components/TopBar.js';
+import { CommandPalette, type CommandPaletteItem } from './components/CommandPalette.js';
 import { Watchlist } from './components/Watchlist.js';
 import { CalendarStrip } from './components/CalendarStrip.js';
 import { QuoteHeader } from './components/QuoteHeader.js';
@@ -106,6 +107,12 @@ export function useHashRoute(): [Route, (r: NavTarget) => void] {
   return [route, navigate];
 }
 
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName.toLowerCase();
+  return tag === 'input' || tag === 'textarea' || target.isContentEditable;
+}
+
 export function App(): JSX.Element {
   const [route, navigate] = useHashRoute();
   // Demo mode is on whenever the backend is unreachable or ?demo=1 is set.
@@ -117,6 +124,10 @@ export function App(): JSX.Element {
   const [active, setActive] = useState<string>('');
   const [tab, setTab] = useState<Tab>('briefing');
   const [query, setQuery] = useState('');
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [watchlistEntries, setWatchlistEntries] = useState<WatchlistEntry[]>([]);
+  const [tickerPrefill, setTickerPrefill] = useState<string>('');
+  const tickerInputRef = useRef<HTMLInputElement | null>(null);
 
   // Probe the API once to decide if we should drop demo mode.
   // On success, also fetch the watchlist and activate the first entry.
@@ -129,9 +140,11 @@ export function App(): JSX.Element {
         // Pick the first watchlist entry as the default active ticker.
         return fetch('/api/tickers')
           .then((wr) => wr.json())
-          .then((data: { entries: Array<{ profile: { symbol: string } }> }) => {
-            const first = data?.entries?.[0]?.profile?.symbol;
+          .then((data: { entries: WatchlistEntry[] }) => {
+            const entries = Array.isArray(data?.entries) ? data.entries : [];
+            const first = entries[0]?.profile?.symbol;
             if (first) setActive(first);
+            setWatchlistEntries(entries);
           });
       })
       .catch(() => {
@@ -164,26 +177,195 @@ export function App(): JSX.Element {
     return findSample(effectiveActive);
   }, [active, demo]);
 
+  const paletteSymbols = useMemo(() => {
+    const base = demo
+      ? SAMPLE_TICKERS.map((sample) => ({ symbol: sample.symbol, name: sample.name }))
+      : watchlistEntries.map((entry) => ({ symbol: entry.profile.symbol, name: entry.profile.name }));
+
+    const deduped = new Map<string, { symbol: string; name: string }>();
+    for (const row of base) {
+      deduped.set(row.symbol.toUpperCase(), {
+        symbol: row.symbol.toUpperCase(),
+        name: row.name,
+      });
+    }
+    return Array.from(deduped.values()).sort((left, right) => left.symbol.localeCompare(right.symbol));
+  }, [demo, watchlistEntries]);
+
+  const focusTickerInput = useCallback(() => {
+    tickerInputRef.current?.focus();
+    tickerInputRef.current?.select();
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setPaletteOpen(true);
+        return;
+      }
+      if (
+        event.key === '/' &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        !event.shiftKey &&
+        !isEditableTarget(event.target)
+      ) {
+        event.preventDefault();
+        if (route.kind !== 'home') navigate('home');
+        focusTickerInput();
+        setTimeout(focusTickerInput, 0);
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [focusTickerInput, navigate, route.kind]);
+
+  const paletteItems = useMemo<CommandPaletteItem[]>(() => {
+    const viewItems: CommandPaletteItem[] = [
+      {
+        id: 'view-home',
+        label: 'view home',
+        group: 'Views',
+        keywords: ['dashboard', 'overview'],
+        onSelect: () => navigate('home'),
+      },
+      {
+        id: 'view-watchlist',
+        label: 'view watchlist',
+        group: 'Views',
+        keywords: ['tickers', 'symbols'],
+        onSelect: () => navigate('watchlist'),
+      },
+      {
+        id: 'view-paper',
+        label: 'view paper',
+        group: 'Views',
+        keywords: ['paper', 'positions', 'orders'],
+        onSelect: () => navigate('paper'),
+      },
+      {
+        id: 'view-settings',
+        label: 'view settings',
+        group: 'Views',
+        keywords: ['provider', 'risk caps'],
+        onSelect: () => navigate('settings'),
+      },
+      {
+        id: 'ticker-focus',
+        label: 'focus ticker bar',
+        group: 'Views',
+        keywords: ['/', 'add ticker'],
+        onSelect: () => {
+          navigate('home');
+          setTimeout(focusTickerInput, 0);
+        },
+      },
+    ];
+
+    const watchlistItems: CommandPaletteItem[] = paletteSymbols.map((row) => ({
+      id: `watch-${row.symbol}`,
+      label: `watch ${row.symbol}`,
+      group: 'Watchlist',
+      keywords: [row.name, 'ticker', 'quote'],
+      onSelect: () => {
+        setActive(row.symbol);
+        navigate('home');
+      },
+    }));
+
+    const aiItems: CommandPaletteItem[] = paletteSymbols.flatMap((row) => [
+      {
+        id: `brief-${row.symbol}`,
+        label: `briefing ${row.symbol}`,
+        group: 'AI',
+        keywords: [row.name, 'analysis', 'brief'],
+        onSelect: () => navigate({ kind: 'brief', symbol: row.symbol }),
+      },
+      {
+        id: `plan-${row.symbol}`,
+        label: `plan ${row.symbol}`,
+        group: 'AI',
+        keywords: [row.name, 'options', 'strategy'],
+        onSelect: () => navigate({ kind: 'plan', symbol: row.symbol }),
+      },
+      {
+        id: `add-${row.symbol}`,
+        label: `add ${row.symbol}`,
+        group: 'AI',
+        keywords: [row.name, 'ticker', 'validate'],
+        onSelect: () => {
+          navigate('home');
+          setTickerPrefill(row.symbol);
+          setTimeout(focusTickerInput, 0);
+        },
+      },
+    ]);
+
+    return [...viewItems, ...watchlistItems, ...aiItems];
+  }, [focusTickerInput, navigate, paletteSymbols]);
+
+  const commandPalette = (
+    <CommandPalette open={paletteOpen} items={paletteItems} onClose={() => setPaletteOpen(false)} />
+  );
+
   if (route.kind === 'settings') {
-    return <Settings onClose={() => navigate('home')} />;
+    return (
+      <>
+        <Settings onClose={() => navigate('home')} />
+        {commandPalette}
+      </>
+    );
   }
   if (route.kind === 'watchlist') {
-    return <WatchlistRoute onClose={() => navigate('home')} />;
+    return (
+      <>
+        <WatchlistRoute onClose={() => navigate('home')} />
+        {commandPalette}
+      </>
+    );
   }
   if (route.kind === 'paper') {
-    return <PaperRoute onClose={() => navigate('home')} />;
+    return (
+      <>
+        <PaperRoute onClose={() => navigate('home')} />
+        {commandPalette}
+      </>
+    );
   }
   if (route.kind === 'brief') {
-    return <Brief symbol={route.symbol} onClose={() => navigate('home')} />;
+    return (
+      <>
+        <Brief symbol={route.symbol} onClose={() => navigate('home')} />
+        {commandPalette}
+      </>
+    );
   }
   if (route.kind === 'plan') {
-    return <Plan symbol={route.symbol} onClose={() => navigate('home')} />;
+    return (
+      <>
+        <Plan symbol={route.symbol} onClose={() => navigate('home')} />
+        {commandPalette}
+      </>
+    );
   }
   if (route.kind === 'options') {
-    return <Options symbol={route.symbol} onClose={() => navigate('home')} />;
+    return (
+      <>
+        <Options symbol={route.symbol} onClose={() => navigate('home')} />
+        {commandPalette}
+      </>
+    );
   }
   if (route.kind === 'ticker') {
-    return <TickerRoute symbol={route.symbol} demo={demo} onClose={() => navigate('home')} />;
+    return (
+      <>
+        <TickerRoute symbol={route.symbol} demo={demo} onClose={() => navigate('home')} />
+        {commandPalette}
+      </>
+    );
   }
 
   return (
@@ -193,12 +375,19 @@ export function App(): JSX.Element {
         onOpenSettings={() => navigate('settings')}
         onOpenWatchlist={() => navigate('watchlist')}
         onOpenPaper={() => navigate('paper')}
+        onOpenPalette={() => setPaletteOpen(true)}
       />
 
       <div className="max-w-7xl mx-auto px-6 py-4 grid grid-cols-12 gap-6">
         {/* Sidebar: validated watchlist + filter + calendar strip */}
         <aside className="col-span-12 md:col-span-3 space-y-4">
-          <TickerIntake demo={demo} />
+          <TickerIntake
+            demo={demo}
+            onPick={setActive}
+            inputRef={tickerInputRef}
+            prefill={tickerPrefill}
+            onEntriesChange={setWatchlistEntries}
+          />
           <Watchlist
             active={active}
             onPick={setActive}
@@ -228,6 +417,7 @@ export function App(): JSX.Element {
           )}
         </main>
       </div>
+      {commandPalette}
     </div>
   );
 }

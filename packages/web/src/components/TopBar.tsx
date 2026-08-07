@@ -185,6 +185,7 @@ export function TopBar({
   onOpenSettings,
   onOpenWatchlist,
   onOpenPaper,
+  onOpenPalette,
 }: {
   demo: boolean;
   onOpenSettings: () => void;
@@ -192,6 +193,8 @@ export function TopBar({
   onOpenWatchlist?: () => void;
   /** Optional: navigate to the dedicated paper-trading surface (#103). */
   onOpenPaper?: () => void;
+  /** Optional: open the global ⌘K / Ctrl-K command palette. */
+  onOpenPalette?: () => void;
 }): JSX.Element {
   const version = useServerVersion();
   const market = useMarketPill();
@@ -264,7 +267,19 @@ export function TopBar({
           >
             ⚙
           </button>
-          <kbd className="px-1.5 py-0.5 rounded border border-border-subtle text-[10px]">⌘K</kbd>
+          {onOpenPalette ? (
+            <button
+              type="button"
+              onClick={onOpenPalette}
+              title="Open command palette"
+              aria-label="Open command palette"
+              className="px-1.5 py-0.5 rounded border border-border-subtle text-[10px] hover:text-ai hover:border-ai focus:outline-none focus-visible:ring-1 focus-visible:ring-ai"
+            >
+              ⌘K
+            </button>
+          ) : (
+            <kbd className="px-1.5 py-0.5 rounded border border-border-subtle text-[10px]">⌘K</kbd>
+          )}
         </div>
       </div>
     </header>

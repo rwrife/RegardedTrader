@@ -8,7 +8,7 @@ This file is the source of truth for that mapping. **Update it in the same PR
 that adds or changes a feature on either surface.** A PR that breaks parity
 without filing a tracking issue should be rejected in review.
 
-_Last audited: 2026-08-06 (feature merges through 2026-08-06)_
+_Last audited: 2026-08-07 (feature merges through 2026-08-07)_
 
 ## Pairing table
 
@@ -32,6 +32,7 @@ _Last audited: 2026-08-06 (feature merges through 2026-08-06)_
 | Options chain explorer + ATM implied-move strip | `regard options <SYM>` | `#/options/:sym` | ✅ |
 | Full ticker chart (candles + overlays + RSI/MACD) | `regard chart <SYM>` (ASCII sparkline + indicator readout) | `#/ticker/:sym` | ✅ |
 | Watchlist | `regard add <SYM>...` / `regard ls` / `regard rm <SYM>` | `/watchlist` | ✅ |
+| Global command palette + ticker-bar focus | CLI direct verbs (`regard add`, `regard plan`, `regard briefing`) and slash-command equivalents | `⌘K`/`Ctrl-K` palette with fuzzy actions + `/` focuses ticker bar | ✅ |
 | Polling tape + tail + controls | `regard watch [SYM...]` / `regard tail <SYM> [--quotes]` / `regard polling <status\|pause\|resume>` | watchlist live polling rows + polling controls | ✅ |
 | Market calendar (holidays + earnings) | `regard cal` / `regard cal earnings` / `regard cal refresh` / `regard cal status` | calendar strip + calendar tab (partial; top-bar pill/per-ticker badge tracked in #63) | 🚧 |
 | Open the other surface | `regard dashboard` | "Open CLI help" link | ✅ / 🚧 |
