@@ -4,3 +4,4 @@ export * from './iv-regime.js';
 export * from './risk-graph.js';
 export * from './chain.js';
 export * from './impliedMove.js';
+export * from './skew.js';

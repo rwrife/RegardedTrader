@@ -8,7 +8,7 @@ This file is the source of truth for that mapping. **Update it in the same PR
 that adds or changes a feature on either surface.** A PR that breaks parity
 without filing a tracking issue should be rejected in review.
 
-_Last audited: 2026-08-07 (feature merges through 2026-08-07)_
+_Last audited: 2026-08-08 (feature merges through 2026-08-08)_
 
 ## Pairing table
 
@@ -29,7 +29,7 @@ _Last audited: 2026-08-07 (feature merges through 2026-08-07)_
 | Options trade-plan wizard | `regard plan <SYM>` | `#/plan/:sym` | ✅ |
 | Paper trading (simulated only) | `regard paper submit <planId> --paper` / `regard paper positions` / `regard paper orders` | `#/paper` | ✅ |
 | Trade-plan risk graph + risk violations panel | `regard plan <SYM>` (textual break-even + violations) | `#/plan/:sym` (SVG risk graph + violations chip panel) | ✅ |
-| Options chain explorer + ATM implied-move strip | `regard options <SYM>` | `#/options/:sym` | ✅ |
+| Options chain explorer + ATM implied-move strip + IV skew per expiry | `regard options <SYM>` | `#/options/:sym` | ✅ |
 | Full ticker chart (candles + overlays + RSI/MACD) | `regard chart <SYM>` (ASCII sparkline + indicator readout) | `#/ticker/:sym` | ✅ |
 | Watchlist | `regard add <SYM>...` / `regard ls` / `regard rm <SYM>` | `/watchlist` | ✅ |
 | Global command palette + ticker-bar focus | CLI direct verbs (`regard add`, `regard plan`, `regard briefing`) and slash-command equivalents | `⌘K`/`Ctrl-K` palette with fuzzy actions + `/` focuses ticker bar | ✅ |

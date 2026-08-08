@@ -142,9 +142,27 @@ export const ImpliedMoveRow = z.object({
 });
 export type ImpliedMoveRow = z.infer<typeof ImpliedMoveRow>;
 
+export const SkewPoint = z.object({
+  strike: z.number(),
+  moneyness: z.number(),
+  iv: z.number(),
+});
+export type SkewPoint = z.infer<typeof SkewPoint>;
+
+export const SkewSeries = z.object({
+  expiry: z.string(),
+  callIv: z.array(SkewPoint),
+  putIv: z.array(SkewPoint),
+  atmIv: z.number().nullable(),
+  /** True when one or more contracts for this expiry were missing IV. */
+  gappy: z.boolean().default(false),
+});
+export type SkewSeries = z.infer<typeof SkewSeries>;
+
 export const OptionsChainResponse = z.object({
   contracts: z.array(OptionContract),
   impliedMoves: z.array(ImpliedMoveRow),
+  skew: z.array(SkewSeries).default([]),
 });
 export type OptionsChainResponse = z.infer<typeof OptionsChainResponse>;
 
