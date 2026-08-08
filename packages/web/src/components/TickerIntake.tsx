@@ -11,9 +11,15 @@ import { ResultRow } from './ResultRow.js';
 export function TickerIntake({
   demo,
   onPick,
+  inputRef,
+  prefill,
+  onEntriesChange,
 }: {
   demo: boolean;
   onPick?: (symbol: string) => void;
+  inputRef?: React.Ref<HTMLInputElement>;
+  prefill?: string;
+  onEntriesChange?: (entries: WatchlistEntry[]) => void;
 }): JSX.Element {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -27,15 +33,22 @@ export function TickerIntake({
       const r = await fetch('/api/tickers');
       if (!r.ok) throw new Error(`${r.status}`);
       const j = (await r.json()) as { entries: WatchlistEntry[] };
-      setEntries(j.entries);
+      const next = Array.isArray(j.entries) ? j.entries : [];
+      setEntries(next);
+      onEntriesChange?.(next);
     } catch (e) {
       setErr(`Could not load watchlist: ${(e as Error).message}`);
     }
-  }, [demo]);
+  }, [demo, onEntriesChange]);
 
   useEffect(() => {
     refreshList();
   }, [refreshList]);
+
+  useEffect(() => {
+    if (!prefill) return;
+    setInput(prefill.toUpperCase());
+  }, [prefill]);
 
   async function validate(refresh: boolean): Promise<void> {
     const symbols = input
@@ -57,7 +70,12 @@ export function TickerIntake({
         throw new Error(`${r.status}: ${t}`);
       }
       const j = (await r.json()) as { results: ValidationResult[] };
-      setResults(j.results);
+      const nextResults = Array.isArray(j.results) ? j.results : [];
+      setResults(nextResults);
+      const firstOk = nextResults.find(
+        (result): result is Extract<ValidationResult, { ok: true }> => result.ok,
+      );
+      if (firstOk) onPick?.(firstOk.profile.symbol);
       setInput('');
       await refreshList();
     } catch (e) {
@@ -81,13 +99,16 @@ export function TickerIntake({
         </div>
         <div className="flex gap-1">
           <input
+            id="ticker-input-bar"
+            ref={inputRef}
+            aria-label="Ticker input"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !busy) void validate(false);
             }}
             placeholder="NVDA AAPL META"
-            disabled={busy || demo}
+            disabled={busy}
             className="flex-1 bg-surface-2 border border-border-subtle rounded px-2 py-1 text-xs focus:outline-none focus:border-ai disabled:opacity-50"
           />
           <button
