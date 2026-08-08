@@ -3,7 +3,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import React from 'react';
 import { Options, buildOptionsRequest } from './options.js';
-import type { OptionContract, Quote } from '@regardedtrader/core';
+import type { OptionContract, Quote, SkewSeries } from '@regardedtrader/core';
 
 afterEach(() => {
   cleanup();
@@ -62,6 +62,24 @@ const sampleQuote: Quote = {
   asOf: '2026-06-23T00:00:00Z',
 };
 
+const sampleSkew: SkewSeries[] = [
+  {
+    expiry: '2026-12-18',
+    callIv: [
+      { strike: 140, moneyness: 140 / 152, iv: 0.44 },
+      { strike: 150, moneyness: 150 / 152, iv: 0.36 },
+      { strike: 160, moneyness: 160 / 152, iv: 0.43 },
+    ],
+    putIv: [
+      { strike: 140, moneyness: 140 / 152, iv: 0.46 },
+      { strike: 150, moneyness: 150 / 152, iv: 0.37 },
+      { strike: 160, moneyness: 160 / 152, iv: 0.45 },
+    ],
+    atmIv: 0.365,
+    gappy: false,
+  },
+];
+
 describe('<Options />', () => {
   it('renders a chain table with the disclaimer when seeded with data', () => {
     render(
@@ -69,6 +87,7 @@ describe('<Options />', () => {
         symbol="NVDA"
         initialChain={sampleChain}
         initialQuote={sampleQuote}
+        initialSkew={sampleSkew}
         initialImpliedMoves={[
           {
             expiry: '2026-12-18',
@@ -82,6 +101,7 @@ describe('<Options />', () => {
     expect(screen.getByLabelText('Options chain')).toBeDefined();
     expect(screen.getByText(/Not financial advice/i)).toBeDefined();
     expect(screen.getByText(/2026-12-18: ±\$10\.50 \(6\.9%\)/i)).toBeDefined();
+    expect(screen.getByLabelText('IV skew chart 2026-12-18')).toBeDefined();
     // Strikes render as monospace numbers.
     expect(screen.getByText('140.00')).toBeDefined();
     expect(screen.getByText('150.00')).toBeDefined();
@@ -111,7 +131,7 @@ describe('<Options />', () => {
     expect(screen.getByText(/No options data for ZZZZ/i)).toBeDefined();
   });
 
-  it('accepts the server response shape with contracts + impliedMoves', async () => {
+  it('accepts the server response shape with contracts + impliedMoves + skew', async () => {
     const fetchImpl: typeof fetch = async (input) => {
       const url = String(input);
       if (url.includes('/options/')) {
@@ -126,6 +146,7 @@ describe('<Options />', () => {
                 impliedMovePct: 0.069,
               },
             ],
+            skew: sampleSkew,
           }),
           { status: 200 },
         );
@@ -137,5 +158,6 @@ describe('<Options />', () => {
       expect(screen.getByLabelText('Options chain')).toBeDefined();
     });
     expect(screen.getByText(/2026-12-18: ±\$10\.50 \(6\.9%\)/i)).toBeDefined();
+    expect(screen.getByLabelText('IV skew chart 2026-12-18')).toBeDefined();
   });
 });

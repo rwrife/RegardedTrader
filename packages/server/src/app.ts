@@ -45,6 +45,7 @@ import {
   buildRecommendationContext,
   hardGatesRule,
   computeImpliedMoves,
+  computeSkew,
   SentimentSource,
   SentimentSnapshot,
   EventKind,
@@ -898,10 +899,12 @@ export function createApp(deps: AppDeps): AppHandle {
         spot = 0;
       }
       const impliedMoves = computeImpliedMoves(contracts, spot);
+      const skew = computeSkew(contracts, { spot });
       res.json(
         OptionsChainResponse.parse({
           contracts,
           impliedMoves,
+          skew,
         }),
       );
     } catch (e) {
