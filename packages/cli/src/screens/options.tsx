@@ -14,6 +14,7 @@ import type {
   OptionContract,
   OptionsChainResponse,
   Quote,
+  SkewSeries,
 } from '@regardedtrader/core';
 import { fillGreeks, groupChainByStrike, type ChainRow } from '@regardedtrader/core';
 import { api } from '../api.js';
@@ -30,6 +31,7 @@ export interface OptionsScreenProps {
   initialChain?: OptionContract[];
   initialQuote?: Quote | null;
   initialImpliedMoves?: ImpliedMoveRow[];
+  initialSkew?: SkewSeries[];
   onDone?: () => void;
 }
 
@@ -69,6 +71,7 @@ export function OptionsScreen({
   initialChain,
   initialQuote,
   initialImpliedMoves,
+  initialSkew,
   onDone,
 }: OptionsScreenProps): JSX.Element {
   const { exit } = useApp();
@@ -77,6 +80,7 @@ export function OptionsScreen({
   const [impliedMoves, setImpliedMoves] = useState<ImpliedMoveRow[]>(
     initialImpliedMoves ?? [],
   );
+  const [skew, setSkew] = useState<SkewSeries[]>(initialSkew ?? []);
   const [err, setErr] = useState<string | null>(symbol ? null : 'Missing symbol. Usage: regard options NVDA');
   const [finished, setFinished] = useState(false);
 
@@ -102,9 +106,11 @@ export function OptionsScreen({
           if (Array.isArray(payload)) {
             setChain(payload);
             setImpliedMoves([]);
+            setSkew([]);
           } else {
             setChain(payload.contracts);
             setImpliedMoves(payload.impliedMoves);
+            setSkew(payload.skew ?? []);
           }
         }
         else setErr(String(chainRes.reason));
@@ -127,6 +133,10 @@ export function OptionsScreen({
   const displayImpliedMoves = useMemo(() => {
     return impliedMoves;
   }, [impliedMoves]);
+  const displaySkew = useMemo(() => {
+    const rows = expiry ? skew.filter((row) => row.expiry === expiry) : skew;
+    return rows;
+  }, [skew, expiry]);
 
   if (err) {
     return (
@@ -180,6 +190,15 @@ export function OptionsScreen({
           })}
         </Text>
       )}
+      {displaySkew.map((series) => {
+        const summary = summarizeSkew(series);
+        return (
+          <Text key={`skew-${series.expiry}`} color={series.gappy ? 'yellow' : 'cyan'}>
+            {series.expiry} skew {summary.spark}  iv {summary.minPct}..{summary.medianPct}..{summary.maxPct}  slope {summary.slope}
+            {series.gappy ? '  (gappy)' : ''}
+          </Text>
+        );
+      })}
       <Box>
         <Text dimColor>
           {'   call Δ    bid    ask     iv  |  strike  |     iv    bid    ask    put Δ'}
@@ -220,6 +239,59 @@ function ChainRowView({ row, spot }: { row: ChainRow; spot: number | null }): JS
       </Text>
     </Text>
   );
+}
+
+function summarizeSkew(series: SkewSeries): {
+  minPct: string;
+  medianPct: string;
+  maxPct: string;
+  slope: string;
+  spark: string;
+} {
+  const points = [...series.callIv, ...series.putIv].sort((a, b) => a.moneyness - b.moneyness);
+  const ivs = points.map((p) => p.iv);
+  if (ivs.length === 0) {
+    return {
+      minPct: '—',
+      medianPct: '—',
+      maxPct: '—',
+      slope: '—',
+      spark: '—',
+    };
+  }
+  const sorted = [...ivs].sort((a, b) => a - b);
+  const min = sorted[0]!;
+  const max = sorted[sorted.length - 1]!;
+  const median = sorted[Math.floor(sorted.length / 2)]!;
+  const slope =
+    points.length >= 2 && points[0]!.moneyness !== points[points.length - 1]!.moneyness
+      ? (points[points.length - 1]!.iv - points[0]!.iv) /
+        (points[points.length - 1]!.moneyness - points[0]!.moneyness)
+      : null;
+
+  return {
+    minPct: `${(min * 100).toFixed(1)}%`,
+    medianPct: `${(median * 100).toFixed(1)}%`,
+    maxPct: `${(max * 100).toFixed(1)}%`,
+    slope: slope == null || !Number.isFinite(slope) ? '—' : slope.toFixed(2),
+    spark: sparkline(ivs),
+  };
+}
+
+function sparkline(values: ReadonlyArray<number>): string {
+  if (values.length === 0) return '—';
+  const blocks = '▁▂▃▄▅▆▇█';
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  if (min === max) return blocks[0]!.repeat(Math.min(values.length, 12));
+  return values
+    .slice(0, 12)
+    .map((v) => {
+      const n = (v - min) / (max - min);
+      const idx = Math.min(blocks.length - 1, Math.max(0, Math.round(n * (blocks.length - 1))));
+      return blocks[idx]!;
+    })
+    .join('');
 }
 
 function pad(s: string, w: number): string {
