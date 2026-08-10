@@ -1,8 +1,26 @@
-import { TickerProfile, type PartialTickerProfile } from '../schemas/ticker.js';
+import {
+  TickerProfile,
+  type PartialTickerProfile,
+  type TickerSourceAttribution,
+} from '../schemas/ticker.js';
 import type { TickerSource } from './source.js';
 
 const REQUIRED_SCALAR_FIELDS = ['symbol', 'name', 'exchange'] as const;
-const OPTIONAL_SCALAR_FIELDS = ['sector', 'industry', 'description'] as const;
+const CORE_OPTIONAL_SCALAR_FIELDS = ['sector', 'industry', 'description'] as const;
+const EXTENDED_OPTIONAL_SCALAR_FIELDS = [
+  'type',
+  'currency',
+  'country',
+  'cik',
+  'isin',
+  'cusip',
+  'website',
+  'logoUrl',
+] as const;
+const OPTIONAL_SCALAR_FIELDS = [
+  ...CORE_OPTIONAL_SCALAR_FIELDS,
+  ...EXTENDED_OPTIONAL_SCALAR_FIELDS,
+] as const;
 const ALL_SCALAR_FIELDS = [...REQUIRED_SCALAR_FIELDS, ...OPTIONAL_SCALAR_FIELDS] as const;
 
 type RequiredScalarField = (typeof REQUIRED_SCALAR_FIELDS)[number];
@@ -128,6 +146,26 @@ function dedupeStrings(items: ReadonlyArray<string>): string[] {
   return out;
 }
 
+function dedupeSourceAttributions(
+  items: ReadonlyArray<TickerSourceAttribution>,
+): TickerSourceAttribution[] {
+  const byKey = new Map<string, TickerSourceAttribution>();
+
+  for (const item of items) {
+    const key = `${item.name}\u0000${item.url}`;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, item);
+      continue;
+    }
+    if (item.confidence > existing.confidence) {
+      byKey.set(key, item);
+    }
+  }
+
+  return [...byKey.values()];
+}
+
 function aggregateField(
   field: ReconcileScalarField,
   entries: FieldVoteEntry[],
@@ -225,13 +263,21 @@ export function reconcile(inputs: ReadonlyArray<ReconcileInput>, options: Reconc
   const notes: string[] = [];
   const conflicts: ReconcileConflict[] = [];
 
-  const selected = {
-    symbol: null as string | null,
-    name: null as string | null,
-    exchange: null as string | null,
-    sector: null as string | null,
-    industry: null as string | null,
-    description: null as string | null,
+  const selected: Record<ReconcileScalarField, string | null> = {
+    symbol: null,
+    name: null,
+    exchange: null,
+    sector: null,
+    industry: null,
+    description: null,
+    type: null,
+    currency: null,
+    country: null,
+    cik: null,
+    isin: null,
+    cusip: null,
+    website: null,
+    logoUrl: null,
   };
 
   for (const field of ALL_SCALAR_FIELDS) {
@@ -287,22 +333,37 @@ export function reconcile(inputs: ReadonlyArray<ReconcileInput>, options: Reconc
 
   const sourceUrls = dedupeStrings(inputs.flatMap((input) => input.partial.sourceUrls ?? []));
 
-  const sources = dedupeStrings(
+  const contributingWeight = inputs.reduce((sum, input) => sum + input.source.weight, 0);
+  const denominator = options.totalWeight > 0 ? options.totalWeight : contributingWeight;
+
+  const sources = dedupeSourceAttributions(
     inputs.flatMap((input) => {
       const urls = dedupeStrings(input.partial.sourceUrls ?? []);
+      const sourceConfidence = denominator > 0 ? clamp(input.source.weight / denominator, 0, 1) : 0;
       if (urls.length === 0) {
-        return [input.source.name];
+        return [
+          {
+            name: input.source.name,
+            url: input.source.name,
+            confidence: sourceConfidence,
+          },
+        ];
       }
-      return urls.map((url) => `${input.source.name}:${url}`);
+      return urls.map((url) => ({
+        name: input.source.name,
+        url,
+        confidence: sourceConfidence,
+      }));
     }),
   );
 
-  const contributingWeight = inputs.reduce((sum, input) => sum + input.source.weight, 0);
-  const denominator = options.totalWeight > 0 ? options.totalWeight : contributingWeight;
   const baseConfidence = denominator > 0 ? contributingWeight / denominator : 0;
 
-  const optionalFilled = OPTIONAL_SCALAR_FIELDS.filter((field) => selected[field] !== null).length;
-  const optionalCoverage = OPTIONAL_SCALAR_FIELDS.length > 0 ? optionalFilled / OPTIONAL_SCALAR_FIELDS.length : 1;
+  const optionalFilled = CORE_OPTIONAL_SCALAR_FIELDS.filter((field) => selected[field] !== null).length;
+  const optionalCoverage =
+    CORE_OPTIONAL_SCALAR_FIELDS.length > 0
+      ? optionalFilled / CORE_OPTIONAL_SCALAR_FIELDS.length
+      : 1;
   const coverageScale = 0.7 + 0.3 * optionalCoverage;
 
   const confidence = clamp(baseConfidence * coverageScale, 0, 1);
@@ -311,11 +372,20 @@ export function reconcile(inputs: ReadonlyArray<ReconcileInput>, options: Reconc
     symbol: selected.symbol,
     name: selected.name,
     exchange: selected.exchange,
+    type: selected.type,
+    currency: selected.currency,
+    country: selected.country,
     sector: selected.sector,
     industry: selected.industry,
+    cik: selected.cik,
+    isin: selected.isin,
+    cusip: selected.cusip,
+    website: selected.website,
     description: selected.description,
+    logoUrl: selected.logoUrl,
     sourceUrls,
     validatedAt: options.validatedAt,
+    resolvedAt: options.validatedAt,
     confidence,
     sources,
     notes,

@@ -10,9 +10,9 @@
  *  - cache the parsed table for 24h on disk under ~/.regardedtrader/cache/symbols,
  *  - support exact fetch() and prefix search() by symbol/company name.
  *
- * Note on "type": current `TickerProfile`/`PartialTickerProfile` does not have a
- * dedicated `type` field. We preserve listing type in `description` as
- * "Common Stock" vs "ETF" until schema expansion lands.
+ * Note on "type": `TickerProfile`/`PartialTickerProfile` now expose an
+ * optional `type` field. This source still emits listing type via description
+ * text until explicit type mapping is added.
  */
 
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';

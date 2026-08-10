@@ -39,6 +39,7 @@ describe('tickers/reconcile', () => {
     expect(profile.symbol).toBe('AAPL');
     expect(profile.name).toBe('Apple Inc.');
     expect(profile.exchange).toBe('NASDAQ');
+    expect(profile.resolvedAt).toBe('2026-07-27T00:00:00.000Z');
     expect(profile.notes).toEqual([]);
     expect(profile.confidence).toBeCloseTo(1);
   });
@@ -66,6 +67,14 @@ describe('tickers/reconcile', () => {
     expect(profile.sector).toBeNull();
     expect(profile.industry).toBeNull();
     expect(profile.description).toBeNull();
+    expect(profile.type).toBeNull();
+    expect(profile.currency).toBeNull();
+    expect(profile.country).toBeNull();
+    expect(profile.cik).toBeNull();
+    expect(profile.isin).toBeNull();
+    expect(profile.cusip).toBeNull();
+    expect(profile.website).toBeNull();
+    expect(profile.logoUrl).toBeNull();
     // contributingWeight(0.9) / totalWeight(1.8) = 0.5, coverageScale=0.7
     expect(profile.confidence).toBeCloseTo(0.35);
   });
@@ -122,8 +131,16 @@ describe('tickers/reconcile', () => {
     expect(profile.name).toBe('NVIDIA Corp.');
     expect(profile.notes.some((note) => note.startsWith('name disagreement'))).toBe(false);
     expect(profile.sources).toEqual([
-      'sec:https://www.sec.gov/example/nvda',
-      'yahoo:https://finance.yahoo.com/quote/NVDA',
+      {
+        name: 'sec',
+        url: 'https://www.sec.gov/example/nvda',
+        confidence: 0.5714285714285715,
+      },
+      {
+        name: 'yahoo',
+        url: 'https://finance.yahoo.com/quote/NVDA',
+        confidence: 0.4285714285714286,
+      },
     ]);
   });
 

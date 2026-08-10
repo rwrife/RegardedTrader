@@ -21,12 +21,10 @@
  * US equity metadata; SEC EDGAR (#12) will outrank it for name normalisation
  * once it lands.
  *
- * Note: the resolver's `PartialTickerProfile` schema only accepts symbol,
- * name, exchange, sector, industry, description, and sourceUrls. Fields
- * mentioned in the original acceptance (currency, country, website,
- * `type` enum) are not part of the current profile schema; extending the
- * schema is intentionally out of scope for this issue to avoid churning the
- * resolver contract on unrelated fields.
+ * The resolver schema now includes richer optional metadata fields
+ * (`type`, `currency`, `country`, `website`, etc.). This source currently
+ * emits the canonical core fields plus source URLs; metadata backfill can be
+ * added incrementally without changing the source contract.
  *
  * Endpoints last verified: 2026-07-05.
  */
