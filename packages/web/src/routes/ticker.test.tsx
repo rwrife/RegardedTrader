@@ -8,11 +8,15 @@ vi.mock('../components/TickerChart.js', () => ({
 }));
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
 describe('TickerRoute earnings chip', () => {
   it('renders upcoming earnings chip with source tooltip', async () => {
+    const eventStart = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
+    const eventFetchedAt = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/api/history/NVDA')) {
@@ -33,13 +37,13 @@ describe('TickerRoute earnings chip', () => {
                 id: 'e1',
                 kind: 'earnings',
                 symbol: 'NVDA',
-                startUtc: '2026-08-09T12:30:00.000Z',
-                endUtc: '2026-08-09T12:30:00.000Z',
+                startUtc: eventStart,
+                endUtc: eventStart,
                 allDay: false,
                 title: 'NVIDIA earnings',
                 details: { when: 'bmo', epsEstimate: 1.42 },
                 sources: [{ name: 'Yahoo', url: 'https://finance.yahoo.com/quote/NVDA' }],
-                fetchedAt: '2026-08-01T00:00:00.000Z',
+                fetchedAt: eventFetchedAt,
               },
             ],
           }),
