@@ -8,9 +8,9 @@
  *     - https://data.sec.gov/submissions/CIK{10-digit}.json
  *
  * Notes:
- *  - The current `PartialTickerProfile` schema does not include dedicated
- *    `cik`, `country`, or `website` fields. We preserve that metadata in the
- *    profile `description` while keeping sector/industry mapped explicitly.
+ *  - `PartialTickerProfile` now supports richer metadata (`cik`, `country`,
+ *    `website`, etc.). This source still guarantees the core identity fields
+ *    and may augment metadata over time without changing its external contract.
  *  - SEC asks clients to send a descriptive User-Agent with contact info. This
  *    source sends a SEC-specific User-Agent per request and also sets `From`.
  */

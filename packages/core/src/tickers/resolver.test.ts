@@ -58,9 +58,16 @@ describe('TickerResolver', () => {
     expect(profile.symbol).toBe('AAPL');
     expect(profile.name).toBe('Apple Inc.');
     expect(profile.exchange).toBe('NASDAQ');
-    expect(profile.sources).toEqual(['yahoo:https://finance.yahoo.com/quote/AAPL']);
+    expect(profile.sources).toEqual([
+      {
+        name: 'yahoo',
+        url: 'https://finance.yahoo.com/quote/AAPL',
+        confidence: 1,
+      },
+    ]);
     expect(profile.confidence).toBeCloseTo(1);
     expect(profile.validatedAt).toBe('2026-05-12T09:00:00.000Z');
+    expect(profile.resolvedAt).toBe('2026-05-12T09:00:00.000Z');
   });
 
   it('reconciles partials from multiple sources, preferring highest weight for fields', async () => {
@@ -91,12 +98,18 @@ describe('TickerResolver', () => {
     // Industry only came from sec.
     expect(profile.industry).toBe('Software');
     // Sources are listed in contribution order.
-    expect(new Set(profile.sources)).toEqual(
-      new Set([
-        'yahoo:https://finance.yahoo.com/quote/MSFT',
-        'sec:https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000789019',
-      ]),
-    );
+    expect(profile.sources).toEqual([
+      {
+        name: 'yahoo',
+        url: 'https://finance.yahoo.com/quote/MSFT',
+        confidence: 0.39999999999999997,
+      },
+      {
+        name: 'sec',
+        url: 'https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000789019',
+        confidence: 0.6,
+      },
+    ]);
     // sourceUrls are de-duped union.
     expect(profile.sourceUrls).toHaveLength(2);
     // Full source participation, scaled down slightly for incomplete optional coverage.
@@ -117,7 +130,13 @@ describe('TickerResolver', () => {
     const resolver = new TickerResolver([yahoo, sec, nasdaq], { now: FIXED_NOW });
     const profile = await resolver.resolve('TSLA');
     expect(profile.symbol).toBe('TSLA');
-    expect(profile.sources).toEqual(['yahoo:https://finance.yahoo.com/quote/TSLA']);
+    expect(profile.sources).toEqual([
+      {
+        name: 'yahoo',
+        url: 'https://finance.yahoo.com/quote/TSLA',
+        confidence: 0.3,
+      },
+    ]);
     // base confidence = 0.6 / (0.6 + 0.9 + 0.5) = 0.3
     // optional coverage = 0/3 => scale 0.7 => 0.21
     expect(profile.confidence).toBeCloseTo(0.21, 5);
