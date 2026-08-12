@@ -27,6 +27,20 @@ function parseLegacySourceTag(raw: string): TickerSourceAttribution {
   if (splitAt > 0) {
     const name = trimmed.slice(0, splitAt).trim();
     const maybeUrl = trimmed.slice(splitAt + 1).trim();
+
+    // Bare URLs like `https://...` are legacy url-only tags, not
+    // `<source-name>:<source-url>` tuples.
+    const looksLikeUrlScheme = /^[a-z][a-z0-9+.-]*$/i.test(name);
+    const looksLikeBareUrl = looksLikeUrlScheme && maybeUrl.startsWith('//');
+
+    if (looksLikeBareUrl) {
+      return {
+        name: 'legacy',
+        url: trimmed,
+        confidence: 0.5,
+      };
+    }
+
     if (maybeUrl.length > 0) {
       return {
         name: name.length > 0 ? name : 'legacy',
