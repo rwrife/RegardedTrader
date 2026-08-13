@@ -137,7 +137,7 @@ describe('HardGates', () => {
     expect(out.riskFlags).toContain(HARD_GATE_FLAGS.noOptionsChain);
   });
 
-  it('clamps conviction and flags on stale quotes', () => {
+  it('downgrades actions, clamps conviction, and flags on stale quotes', () => {
     const out = new HardGates().apply(
       ctx({ quote: { stale: true } }),
       rec({
@@ -150,8 +150,12 @@ describe('HardGates', () => {
         },
       }),
     );
+    expect(out.equity.action).toBe('HOLD');
     expect(out.equity.conviction).toBe(0.5);
+    expect(out.equity.rationale).toContain(HARD_GATE_FLAGS.staleQuote);
+    expect(out.options.coveredCall?.action).toBe('AVOID');
     expect(out.options.coveredCall?.conviction).toBe(0.5);
+    expect(out.options.coveredCall?.rationale).toContain(HARD_GATE_FLAGS.staleQuote);
     expect(out.riskFlags).toContain(HARD_GATE_FLAGS.staleQuote);
   });
 

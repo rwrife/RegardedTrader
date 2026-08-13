@@ -6,7 +6,8 @@
  * Application order matters and is deliberate:
  *   1. `no-options-chain` — strip every options verdict when we have no chain.
  *   2. `naked-shorts-forbidden` — null naked verdicts when caps forbid them.
- *   3. `stale-quote` — clamp every remaining verdict's conviction.
+ *   3. `stale-quote` — downgrade actions (equity→HOLD, options→AVOID)
+ *      and clamp every remaining verdict's conviction.
  *   4. `low-confidence` — force HOLD when aggregate confidence < 0.3.
  *
  * Why this order: stripping verdicts (1, 2) BEFORE computing the aggregate
@@ -24,7 +25,7 @@ import type {
 import type { RecommendationContext, Rule } from './index.js';
 
 /** Bumped whenever the gate logic changes; surfaces in audit/eval tools. */
-export const HARD_GATES_VERSION = '1.0.0';
+export const HARD_GATES_VERSION = '1.1.0';
 
 /** Constants kept explicit so they show up in tests and audits. */
 const LOW_CONFIDENCE_THRESHOLD = 0.3;
@@ -91,12 +92,19 @@ export class HardGates implements Rule {
       flags.push(HARD_GATE_FLAGS.nakedShortsForbidden);
     }
 
-    // 3. Stale quote — clamp conviction across every remaining verdict.
+    // 3. Stale quote — downgrade actions and clamp conviction across every
+    //    remaining verdict.
     if (ctx.quote.stale) {
       next = {
         ...next,
-        equity: clampConviction(next.equity, this.staleConvictionCap),
-        options: clampOptionsConviction(next.options, this.staleConvictionCap),
+        equity: forceHold(
+          clampConviction(next.equity, this.staleConvictionCap),
+          HARD_GATE_FLAGS.staleQuote,
+        ),
+        options: forceAvoidAcrossOptions(
+          clampOptionsConviction(next.options, this.staleConvictionCap),
+          HARD_GATE_FLAGS.staleQuote,
+        ),
       };
       flags.push(HARD_GATE_FLAGS.staleQuote);
     }

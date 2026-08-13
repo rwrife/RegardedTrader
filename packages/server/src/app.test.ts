@@ -1139,7 +1139,7 @@ describe('Recommendation routes + SSE (#50)', () => {
     expect(recomputeJson.symbol).toBe('NVDA');
     expect(recomputeJson.persisted).toBe(true);
     expect(recomputeJson.recommendation.symbol).toBe('NVDA');
-    expect(recomputeJson.recommendation.equity.action).toBe('BUY');
+    expect(recomputeJson.recommendation.equity.action).toBe('HOLD');
 
     const latest = await fetch(`${baseUrl}/recommendations/NVDA/latest`, {
       headers: { Authorization: 'dash-token-50' },
