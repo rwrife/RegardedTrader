@@ -64,6 +64,7 @@ export function QuoteHeader({
               lastUpdatedAt={live.lastUpdatedAt}
               isLoading={live.isLoading}
               error={live.error}
+              marketState={live.quote?.marketState ?? null}
             />
           )}
           {t.earnings.daysUntil !== null && t.earnings.daysUntil <= 14 && (

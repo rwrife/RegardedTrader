@@ -1,5 +1,20 @@
 import React, { useEffect, useState } from 'react';
 
+const REGULAR_CADENCE_MS = 10_000;
+const OFF_HOURS_CADENCE_MS = 60_000;
+const STALE_MULTIPLIER = 2;
+
+function expectedCadenceMs(marketState: string | null | undefined): number {
+  return marketState === 'REGULAR' ? REGULAR_CADENCE_MS : OFF_HOURS_CADENCE_MS;
+}
+
+interface LiveQuoteIndicatorProps {
+  lastUpdatedAt: Date | null;
+  isLoading: boolean;
+  error: string | null;
+  marketState?: string | null;
+}
+
 /**
  * Tiny "updated Ns ago" badge that lives in the price box. Re-renders once
  * a second to keep the label fresh, and translates the well-known "no
@@ -9,11 +24,8 @@ export function LiveQuoteIndicator({
   lastUpdatedAt,
   isLoading,
   error,
-}: {
-  lastUpdatedAt: Date | null;
-  isLoading: boolean;
-  error: string | null;
-}): JSX.Element {
+  marketState,
+}: LiveQuoteIndicatorProps): JSX.Element {
   // Re-render once a second so the "updated Xs ago" label stays fresh even
   // when nothing else in the parent changes.
   const [, setNow] = useState<number>(() => Date.now());
@@ -53,13 +65,26 @@ export function LiveQuoteIndicator({
       </span>
     );
   }
-  const secs = Math.max(0, Math.floor((Date.now() - lastUpdatedAt.getTime()) / 1000));
+  const ageMs = Date.now() - lastUpdatedAt.getTime();
+  const secs = Math.max(0, Math.floor(ageMs / 1000));
+  const staleAfterMs = expectedCadenceMs(marketState) * STALE_MULTIPLIER;
+  const stale = ageMs > staleAfterMs;
   return (
-    <span
-      className={`text-[10px] font-mono tracking-wider ${isLoading ? 'text-ai' : 'text-fg-muted'}`}
-      aria-label={`updated ${secs} seconds ago`}
-    >
-      {isLoading ? '↻ refreshing…' : `updated ${secs}s ago`}
+    <span className="inline-flex items-center gap-1">
+      {stale && (
+        <span
+          data-testid="live-quote-stale-dot"
+          className="inline-block h-1.5 w-1.5 rounded-full bg-warn"
+          aria-label="quote updates stale"
+          title={`stale (> ${Math.floor(staleAfterMs / 1000)}s cadence window)`}
+        />
+      )}
+      <span
+        className={`text-[10px] font-mono tracking-wider ${isLoading ? 'text-ai' : 'text-fg-muted'}`}
+        aria-label={`updated ${secs} seconds ago`}
+      >
+        {isLoading ? 'live · refreshing…' : `live · updated ${secs}s ago`}
+      </span>
     </span>
   );
 }
