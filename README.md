@@ -81,9 +81,13 @@ Per-package guides: [`packages/core/README.md`](./packages/core/README.md), [`pa
 | `npm run build`        | build all workspaces                            |
 | `npm test`             | vitest across workspaces                        |
 | `npm run lint`         | tsc + prettier check                            |
+| `npm run weekly-review:hygiene` | dry-run close candidates for weekly review tracker issues |
 
 For the security model and token lifecycle used by `regard dashboard`, see
 [`docs/security.md`](./docs/security.md).
+
+For weekly tracker close-out hygiene, see
+[`docs/weekly-feature-review.md`](./docs/weekly-feature-review.md).
 
 ## License
 
